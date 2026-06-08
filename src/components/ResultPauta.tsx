@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
 import {
@@ -18,6 +18,8 @@ interface ResultPautaProps {
   aspectRatio: string;
   imageModel: string;
   referenciaImagem?: string | null;
+  frameImages: { inicial?: string; intermediario?: string; final?: string };
+  onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
 }
 
 export default function ResultPauta({
@@ -30,14 +32,18 @@ export default function ResultPauta({
   aspectRatio,
   imageModel,
   referenciaImagem,
+  frameImages,
+  onFrameGenerated,
 }: ResultPautaProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showVisualAccordion, setShowVisualAccordion] = useState(true);
   const [showOperacionalAccordion, setShowOperacionalAccordion] = useState(true);
   const [loadingVariation, setLoadingVariation] = useState(false);
-  const [frameImages, setFrameImages] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
+  const [framePublicUrls, setFramePublicUrls] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
   const [frameErrors, setFrameErrors] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
+  const [generatingGif, setGeneratingGif] = useState(false);
+  const [animFrame, setAnimFrame] = useState(0);
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -56,7 +62,14 @@ export default function ResultPauta({
     }
   };
 
-  const generateFrameImage = async (frameName: 'inicial' | 'intermediario' | 'final') => {
+  // Stable style index derived from pauta.id — same value for all 3 frames of this pauta
+  const styleIndex = pauta.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 5;
+
+  const generateFrameImage = async (
+    frameName: 'inicial' | 'intermediario' | 'final',
+    referenceFrameUrl?: string,
+  ): Promise<string | null> => {
+    if (!pauta.visual) return null;
     const descriptions: Record<string, string> = {
       inicial: pauta.visual.frameInicial,
       intermediario: pauta.visual.frameIntermediario,
@@ -72,33 +85,204 @@ export default function ResultPauta({
           frameDescription: descriptions[frameName],
           aspectRatio,
           marca: pauta.marca,
+          pautaId: pauta.id,
+          styleIndex,
           imageModel,
-          estiloIlustracao: pauta.visual.estiloIlustracao,
-          paleta: pauta.visual.paletaRecomendada,
+          estiloIlustracao: pauta.visual?.estiloIlustracao,
+          paleta: pauta.visual?.paletaRecomendada,
           mecanica: pauta.operacional.mecanicaEscolhida,
           recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
           referenciaImagem: referenciaImagem ?? undefined,
+          headline: pauta.copy.headlineBanner,
+          subheadline: pauta.copy.subHeadlineBanner,
+          referenceFrameUrl,
         }),
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         setFrameErrors(prev => ({ ...prev, [frameName]: (errData as any).error ?? `Erro ${response.status}` }));
-        return;
+        return null;
       }
       const data = await response.json();
       if (data.imageBytes) {
-        setFrameImages(prev => ({
-          ...prev,
-          [frameName]: `data:${data.mimeType};base64,${data.imageBytes}`,
-        }));
+        const dataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
+        onFrameGenerated(pauta.id, frameName, dataUrl);
+        if (data.publicUrl) {
+          setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
+        }
+        return dataUrl;
       } else {
         setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida da API.' }));
+        return null;
       }
     } catch {
       setFrameErrors(prev => ({ ...prev, [frameName]: 'Erro de rede ao gerar imagem.' }));
+      return null;
     } finally {
       setGeneratingFrame(null);
     }
+  };
+
+  const gerarTodosFrames = async () => {
+    setFrameErrors({});
+    const urlF1 = await generateFrameImage('inicial', undefined);
+    const urlF2 = await generateFrameImage('intermediario', urlF1 ?? undefined);
+    await generateFrameImage('final', urlF2 ?? undefined);
+  };
+
+  const generateAllFrames = async () => {
+    setGeneratingGif(true);
+    setFrameErrors({});
+    try {
+      const response = await fetch('/api/generate-gif', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aspectRatio,
+          marca: pauta.marca,
+          pautaId: pauta.id,
+          styleIndex,
+          imageModel,
+          estiloIlustracao: pauta.visual?.estiloIlustracao,
+          paleta: pauta.visual?.paletaRecomendada,
+          mecanica: pauta.operacional.mecanicaEscolhida,
+          recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
+          frameInicial: pauta.visual?.frameInicial,
+          frameIntermediario: pauta.visual?.frameIntermediario,
+          frameFinal: pauta.visual?.frameFinal,
+          referenciaImagem: referenciaImagem ?? undefined,
+        }),
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        const msg = (errData as any).details
+          ? `${(errData as any).error}: ${(errData as any).details}`
+          : ((errData as any).error ?? `Erro ${response.status}`);
+        setFrameErrors({ inicial: msg });
+        return;
+      }
+      const data = await response.json();
+      const newImages: { inicial?: string; intermediario?: string; final?: string } = {};
+      const newUrls: { inicial?: string; intermediario?: string; final?: string } = {};
+      for (const frame of (data.frames ?? []) as Array<{ frameName: string; imageBytes: string; mimeType: string; publicUrl?: string }>) {
+        if (frame.imageBytes) {
+          (newImages as Record<string, string>)[frame.frameName] = `data:${frame.mimeType};base64,${frame.imageBytes}`;
+          if (frame.publicUrl) (newUrls as Record<string, string>)[frame.frameName] = frame.publicUrl;
+        }
+      }
+      for (const [fn, imgData] of Object.entries(newImages)) {
+        onFrameGenerated(pauta.id, fn, imgData as string);
+      }
+      setFramePublicUrls(newUrls);
+    } catch {
+      setFrameErrors({ inicial: 'Erro de rede ao gerar GIF.' });
+    } finally {
+      setGeneratingGif(false);
+    }
+  };
+
+  const GIF_FRAME_ORDER = ['inicial', 'intermediario', 'final'] as const;
+  const loadedGifFrames = GIF_FRAME_ORDER.filter(f => !!frameImages[f]);
+
+  useEffect(() => {
+    if (loadedGifFrames.length < 2) return;
+    setAnimFrame(0);
+    const interval = setInterval(() => {
+      setAnimFrame(i => (i + 1) % loadedGifFrames.length);
+    }, 700);
+    return () => clearInterval(interval);
+  }, [loadedGifFrames.length]);
+
+
+  const downloadFrameComposto = (frameName: string, imageSrc: string) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height * 0.28);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `bold ${Math.round(canvas.width * 0.07)}px serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(pauta.copy.headlineBanner, canvas.width / 2, canvas.height * 0.14);
+      ctx.font = `${Math.round(canvas.width * 0.038)}px sans-serif`;
+      ctx.fillStyle = '#F0F0F0';
+      ctx.fillText(pauta.copy.subHeadlineBanner, canvas.width / 2, canvas.height * 0.22);
+      const btnW = canvas.width * 0.5;
+      const btnH = canvas.height * 0.07;
+      const btnX = (canvas.width - btnW) / 2;
+      const btnY = canvas.height * 0.87;
+      const radius = btnH * 0.25;
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath();
+      ctx.roundRect(btnX, btnY, btnW, btnH, radius);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `bold ${Math.round(canvas.width * 0.04)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(pauta.copy.ctaBotao, canvas.width / 2, btnY + btnH * 0.65);
+      const link = document.createElement('a');
+      const label = frameName === 'inicial' ? 'F1-fechado' : frameName === 'intermediario' ? 'F2-acao' : 'F3-revelacao';
+      link.download = `${pauta.marca}-${label}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    };
+    img.src = imageSrc;
+  };
+
+  const downloadGifAnimado = async () => {
+    const GIF = (await import('gif.js')).default;
+    const gif = new GIF({
+      workers: 2,
+      quality: 8,
+      width: 800,
+      height: 800,
+      workerScript: '/gif.worker.js',
+    });
+    const loadImage = (src: string): Promise<HTMLImageElement> =>
+      new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.src = src;
+      });
+    const frames = [frameImages.inicial!, frameImages.intermediario!, frameImages.final!];
+    for (const src of frames) {
+      const img = await loadImage(src);
+      const canvas = document.createElement('canvas');
+      canvas.width = 800;
+      canvas.height = 800;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, 800, 800);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, 800, 800 * 0.28);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 56px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(pauta.copy.headlineBanner, 400, 112);
+      ctx.font = '30px sans-serif';
+      ctx.fillStyle = '#F0F0F0';
+      ctx.fillText(pauta.copy.subHeadlineBanner, 400, 176);
+      const btnW = 400, btnH = 56, btnX = 200, btnY = 696;
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath();
+      ctx.roundRect(btnX, btnY, btnW, btnH, 14);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 32px sans-serif';
+      ctx.fillText(pauta.copy.ctaBotao, 400, btnY + 38);
+      gif.addFrame(canvas, { delay: 700, copy: true });
+    }
+    gif.on('finished', (blob: Blob) => {
+      const link = document.createElement('a');
+      link.download = `${pauta.marca}-gif-animado.gif`;
+      link.href = URL.createObjectURL(blob);
+      link.click();
+    });
+    gif.render();
   };
 
   const isApice = pauta.marca === 'Apice';
@@ -332,8 +516,9 @@ export default function ResultPauta({
             cta={pauta.copy.ctaBotao}
             mecanicaText={pauta.operacional.mecanicaEscolhida}
             recompensa={pauta.operacional.recompensaEscolhida}
-            paleta={pauta.visual.paletaRecomendada}
-            estiloIlustracao={pauta.visual.estiloIlustracao}
+            paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
+            estiloIlustracao={pauta.visual?.estiloIlustracao}
+            frameImages={frameImages}
           />
         </div>}
 
@@ -357,46 +542,46 @@ export default function ResultPauta({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <strong className="text-slate-500 block">Formato:</strong>
-                  <span>{pauta.visual.formato} (1:1 quadrado ideal)</span>
+                  <span>{pauta.visual?.formato} (1:1 quadrado ideal)</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block">Paleta Cores:</strong>
                   <span className="flex items-center gap-1.5 mt-0.5">
-                    {pauta.visual.paletaRecomendada.cores.map((c, i) => (
-                      <span 
-                        key={i} 
-                        className="w-4 h-4 rounded-full border border-slate-300" 
-                        style={{ backgroundColor: c }} 
-                        title={`${pauta.visual.paletaRecomendada.nome}: ${c}`}
+                    {(pauta.visual?.paletaRecomendada.cores ?? []).map((c, i) => (
+                      <span
+                        key={i}
+                        className="w-4 h-4 rounded-full border border-slate-300"
+                        style={{ backgroundColor: c }}
+                        title={`${pauta.visual?.paletaRecomendada.nome}: ${c}`}
                       />
                     ))}
-                    <span className="text-[9px] font-mono font-bold text-slate-400 capitalize">{pauta.visual.paletaRecomendada.nome}</span>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 capitalize">{pauta.visual?.paletaRecomendada.nome}</span>
                   </span>
                 </div>
               </div>
               <hr className="border-slate-200/40" />
               <div>
                 <strong className="text-slate-500 block">Estilo Ilustração:</strong>
-                <span>{pauta.visual.estiloIlustracao}</span>
+                <span>{pauta.visual?.estiloIlustracao}</span>
               </div>
               <hr className="border-slate-200/40" />
               <div className="flex flex-col gap-1">
                 <strong className="text-slate-500">Fluxo de Frames (GIF no Playbook):</strong>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-500 mt-0.5">
-                  <li><strong>Estado Fechado (Frame F1):</strong> {pauta.visual.frameInicial}</li>
-                  <li><strong>Frame de Ação (Frame F2):</strong> {pauta.visual.frameIntermediario}</li>
-                  <li><strong>Estado Revelado (Frame F3):</strong> {pauta.visual.frameFinal}</li>
+                  <li><strong>Estado Fechado (Frame F1):</strong> {pauta.visual?.frameInicial}</li>
+                  <li><strong>Frame de Ação (Frame F2):</strong> {pauta.visual?.frameIntermediario}</li>
+                  <li><strong>Estado Revelado (Frame F3):</strong> {pauta.visual?.frameFinal}</li>
                 </ul>
               </div>
               <hr className="border-slate-200/40" />
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <strong className="text-slate-500 block">Posicionamento CTA:</strong>
-                  <span>{pauta.visual.posicaoCta}</span>
+                  <span>{pauta.visual?.posicaoCta}</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block">Filtro Tipográfico:</strong>
-                  <span>{pauta.visual.tipografia}</span>
+                  <span>{pauta.visual?.tipografia}</span>
                 </div>
               </div>
               <hr className="border-slate-200/40" />
@@ -405,17 +590,42 @@ export default function ResultPauta({
                   <Image className="w-3.5 h-3.5" />
                   Gerar Imagens dos Frames ({aspectRatio})
                 </strong>
+                {/* Generate all 3 frames — only shown as fallback when errors occurred */}
+                {Object.keys(frameErrors).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={gerarTodosFrames}
+                    disabled={generatingFrame !== null}
+                    className={`text-[11px] font-bold px-4 py-2.5 rounded-lg border flex items-center justify-center gap-1.5 transition-colors cursor-pointer w-full ${
+                      generatingGif
+                        ? 'bg-slate-100 border-slate-300 text-slate-400 cursor-not-allowed'
+                        : isApice
+                          ? 'bg-[#688D65] border-[#52704f] text-white hover:bg-[#52704f]'
+                          : 'bg-[#BF0F26] border-[#990c1e] text-white hover:bg-[#990c1e]'
+                    }`}
+                  >
+                    {generatingGif
+                      ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Gerando GIF... (aguarde ~2 min)</>
+                      : <><Sparkles className="w-3.5 h-3.5" /> Regerar GIF Completo (3 frames)</>
+                    }
+                  </button>
+                )}
+                <div className="flex items-center gap-2 text-[9px] text-slate-400 my-0.5">
+                  <div className="flex-1 h-px bg-slate-200" />
+                  <span>ou gere frame por frame</span>
+                  <div className="flex-1 h-px bg-slate-200" />
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {(['inicial', 'intermediario', 'final'] as const).map((frame) => {
                     const labels = { inicial: 'F1 — Fechado', intermediario: 'F2 — Ação', final: 'F3 — Revelação' };
-                    const isGenerating = generatingFrame === frame;
+                    const isGenerating = generatingFrame === frame || generatingGif;
                     const isDone = !!frameImages[frame];
                     return (
                       <button
                         key={frame}
                         type="button"
                         onClick={() => generateFrameImage(frame)}
-                        disabled={generatingFrame !== null || isDone}
+                        disabled={generatingFrame !== null || generatingGif}
                         className={`text-[10px] font-bold px-3 py-2 rounded-lg border flex items-center gap-1 transition-colors cursor-pointer ${
                           isDone
                             ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
@@ -427,7 +637,7 @@ export default function ResultPauta({
                         }`}
                       >
                         {isGenerating ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Image className="w-3 h-3" />}
-                        {isGenerating ? 'Gerando...' : isDone ? `${labels[frame]} ✓` : labels[frame]}
+                        {isGenerating ? 'Gerando...' : isDone ? `↺ ${labels[frame]}` : labels[frame]}
                       </button>
                     );
                   })}
@@ -437,19 +647,75 @@ export default function ResultPauta({
                     {frame === 'inicial' ? 'F1' : frame === 'intermediario' ? 'F2' : 'F3'}: {err}
                   </p>
                 ))}
-                {Object.entries(frameImages).map(([frame, src]) => (
-                  <div key={frame} className="flex flex-col gap-1 mt-1">
-                    <span className="text-[9px] uppercase font-bold text-slate-400">
-                      {frame === 'inicial' ? 'F1 — Estado Fechado' : frame === 'intermediario' ? 'F2 — Ação' : 'F3 — Revelação'}
-                    </span>
-                    <img
-                      src={src}
-                      alt={`Frame ${frame}`}
-                      className="rounded-lg border border-slate-200 max-w-full"
-                      style={{ aspectRatio: aspectRatio.replace(':', '/') }}
-                    />
+
+                {/* Animated GIF preview — visible when 2+ frames are loaded */}
+                {loadedGifFrames.length >= 2 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] uppercase font-bold text-slate-400">Preview Animado</span>
+                      <span className="text-[8px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                        {loadedGifFrames.length} frames · 700ms
+                      </span>
+                    </div>
+                    <div
+                      className="relative rounded-xl overflow-hidden border-2 shadow-md"
+                      style={{
+                        aspectRatio: aspectRatio.replace(':', '/'),
+                        borderColor: isApice ? '#688D65' : '#BF0F26',
+                      }}
+                    >
+                      {loadedGifFrames.map((f, i) => (
+                        <img
+                          key={f}
+                          src={frameImages[f]}
+                          alt={`GIF frame ${f}`}
+                          className={`absolute inset-0 w-full h-full object-cover ${i === animFrame % loadedGifFrames.length ? '' : 'hidden'}`}
+                        />
+                      ))}
+                      <div className="absolute bottom-1.5 right-1.5 bg-black/50 text-white text-[8px] px-1.5 py-0.5 rounded-full font-bold tracking-wide">
+                        GIF · F{animFrame % loadedGifFrames.length + 1}/{loadedGifFrames.length}
+                      </div>
+                    </div>
                   </div>
-                ))}
+                )}
+
+                {/* Download GIF animado — visível quando os 3 frames estiverem prontos */}
+                {frameImages.inicial && frameImages.intermediario && frameImages.final && (
+                  <button
+                    type="button"
+                    onClick={downloadGifAnimado}
+                    className="w-full py-2.5 rounded-xl font-bold text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Baixar GIF Animado (3 frames)
+                  </button>
+                )}
+
+                {Object.entries(frameImages).map(([frame, src]) => {
+                  const label = frame === 'inicial' ? 'F1 — Estado Fechado' : frame === 'intermediario' ? 'F2 — Ação' : 'F3 — Revelação';
+                  return (
+                    <div key={frame} className="flex flex-col gap-1 mt-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] uppercase font-bold text-slate-400">{label}</span>
+                        <button
+                          type="button"
+                          onClick={() => downloadFrameComposto(frame, src as string)}
+                          className="text-[9px] font-bold flex items-center gap-0.5 text-indigo-500 hover:text-indigo-700 cursor-pointer"
+                          title="Baixar frame composto com headline e CTA"
+                        >
+                          <Download className="w-2.5 h-2.5" />
+                          ⬇ Download
+                        </button>
+                      </div>
+                      <img
+                        src={src}
+                        alt={`Frame ${frame}`}
+                        className="rounded-lg border border-slate-200 max-w-full"
+                        style={{ aspectRatio: aspectRatio.replace(':', '/') }}
+                      />
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -16,6 +16,7 @@ interface BannerSimuladorProps {
   recompensa: string;
   paleta: { nome: string; cores: string[] };
   estiloIlustracao?: string;
+  frameImages?: { inicial?: string; intermediario?: string; final?: string };
 }
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
@@ -685,7 +686,7 @@ function FrameCupom({ frame, isApice, primary, accent, recompensa, estilo }: { f
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function BannerSimulador({
-  brand, headline, subHeadline, cta, mecanicaText, recompensa, paleta, estiloIlustracao,
+  brand, headline, subHeadline, cta, mecanicaText, recompensa, paleta, estiloIlustracao, frameImages,
 }: BannerSimuladorProps) {
   const isApice = brand === 'Apice';
   const [activeFrame, setActiveFrame] = useState<FrameType>('inicial');
@@ -810,19 +811,33 @@ export default function BannerSimulador({
 
             {/* Central mechanic element */}
             <div className="flex-1 w-full flex items-center justify-center relative my-1 z-10">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={`${mecanica}-${activeFrame}`}
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 1.05 }}
-                  transition={{ duration: 0.22 }}
-                  className="w-full flex items-center justify-center"
-                  style={centralWrapStyle}
-                >
-                  {renderElement()}
-                </motion.div>
-              </AnimatePresence>
+              {frameImages?.[activeFrame] ? (
+                <img
+                  src={frameImages[activeFrame]}
+                  alt={`Frame ${activeFrame}`}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    borderRadius: 'inherit',
+                    display: 'block',
+                  }}
+                />
+              ) : (
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={`${mecanica}-${activeFrame}`}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.05 }}
+                    transition={{ duration: 0.22 }}
+                    className="w-full flex items-center justify-center"
+                    style={centralWrapStyle}
+                  >
+                    {renderElement()}
+                  </motion.div>
+                </AnimatePresence>
+              )}
             </div>
 
             {/* CTA button */}

@@ -33,6 +33,17 @@ export default function App() {
   const [direcionamentoIA, setDirecionamentoIA] = useState<string>('');
   const [tipoGeracao, setTipoGeracao] = useState<'texto' | 'imagem' | 'texto_imagem'>('texto_imagem');
   const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
+  const [allFrameImages, setAllFrameImages] = useState<Record<string, { inicial?: string; intermediario?: string; final?: string }>>({});
+
+  const handleFrameGenerated = (pautaId: string, frameName: string, imageData: string) => {
+    setAllFrameImages(prev => ({
+      ...prev,
+      [pautaId]: {
+        ...(prev[pautaId] ?? {}),
+        [frameName]: imageData,
+      },
+    }));
+  };
 
   // Carrega histórico: Supabase primeiro, fallback para localStorage
   useEffect(() => {
@@ -180,7 +191,7 @@ export default function App() {
     }
   };
 
-  const handleApprovePauta = (id: string) => {
+  const handleApprovePauta = async (id: string) => {
     const updated = history.map((item) => {
       if (item.id === id) {
         return { ...item, status: 'aprovado' as const };
@@ -188,6 +199,31 @@ export default function App() {
       return item;
     });
     saveHistory(updated);
+
+    const pautaAprovada = history.find(p => p.id === id);
+    if (!pautaAprovada) return;
+
+    const framesDestaPauta = allFrameImages[id] ?? {};
+
+    try {
+      const response = await fetch('/api/approve-pauta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pauta: pautaAprovada,
+          frameImages: framesDestaPauta,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        console.warn('[approve-pauta] Falha ao salvar no banco:', err);
+      } else {
+        const result = await response.json();
+        console.log('[approve-pauta] Salvo no Supabase com output_id:', result.output_id);
+      }
+    } catch (err) {
+      console.warn('[approve-pauta] Erro de rede ao salvar aprovação:', err);
+    }
   };
 
   const handleUpdatePautaDay = (pautaId: string, newDay: string) => {
@@ -555,6 +591,8 @@ export default function App() {
                       aspectRatio={aspectRatio}
                       imageModel={imageModel}
                       referenciaImagem={referenciaImagem}
+                      frameImages={allFrameImages[pauta.id] ?? {}}
+                      onFrameGenerated={handleFrameGenerated}
                     />
                   ))}
 

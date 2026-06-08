@@ -39,6 +39,7 @@ export interface InputModoA {
 export interface InputModoB {
   marca: Brand;
   boxTituloEmail: string;
+  boxHeadlineBanner?: string;
   boxSubtituloEmail: string;
   boxCta: string;
   boxMecanicaOuEstatico: string;
@@ -98,7 +99,7 @@ export interface PautaGerada {
   modo: 'A' | 'B';
   tipoGeracao: 'texto' | 'imagem' | 'texto_imagem';
   copy: PautaCopy;
-  visual: PautaVisual;
+  visual?: PautaVisual;
   operacional: PautaOperacional;
   previsao: PerformancePrevisao;
   riscos: RiscoAlerta[];

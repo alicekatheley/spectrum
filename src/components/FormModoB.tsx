@@ -41,6 +41,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
 
   // State para cada um dos 5 boxes do Briefing de CRM
   const [boxTituloEmail, setBoxTituloEmail] = useState(preload?.boxTituloEmail ?? "");
+  const [boxHeadlineBanner, setBoxHeadlineBanner] = useState(preload?.boxHeadlineBanner ?? "");
   const [boxSubtituloEmail, setBoxSubtituloEmail] = useState(preload?.boxSubtituloEmail ?? "");
   const [boxCta, setBoxCta] = useState(preload?.boxCta ?? "");
   const [boxMecanicaOuEstatico, setBoxMecanicaOuEstatico] = useState(preload?.boxMecanicaOuEstatico ?? "");
@@ -61,6 +62,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       brand, // marca obrigatória
       marca: brand, // mantendo duplicado para retrocompatibilidade
       boxTituloEmail,
+      boxHeadlineBanner,
       boxSubtituloEmail,
       boxCta,
       boxMecanicaOuEstatico,
@@ -208,6 +210,33 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               </span>
             </div>
           )}
+        </div>
+
+        {/* Box 1B: Headline do Banner */}
+        <div className={`bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-2 relative transition-opacity ${tipoGeracao === 'imagem' ? 'opacity-50 pointer-events-none' : ''}`}>
+          <div className="flex justify-between items-center mb-1">
+            <label htmlFor="box-headline-banner" className="text-xs font-bold uppercase tracking-wider text-slate-600">
+              Box 1B: Headline do Banner
+              <span className="text-[10px] text-slate-400 font-normal normal-case ml-1">(Se vazio, a IA gera)</span>
+            </label>
+            {boxHeadlineBanner && (
+              <button type="button" onClick={() => setBoxHeadlineBanner("")}
+                className="text-slate-400 hover:text-rose-500 p-1 rounded hover:bg-slate-200 transition-colors cursor-pointer">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <input
+            id="box-headline-banner"
+            type="text"
+            value={boxHeadlineBanner}
+            onChange={(e) => setBoxHeadlineBanner(e.target.value)}
+            placeholder="Ex: ESTOURE O BALÃO, ABRA O PRESENTE, PUXE O ADESIVO"
+            className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 transition-all"
+          />
+          <div className="text-[10px] text-slate-400">
+            Texto principal em destaque no topo do banner. Use verbo de ação da mecânica em caixa alta.
+          </div>
         </div>
 
         {/* Box 2: Sub-título do email */}
