@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
 import {
@@ -44,6 +44,7 @@ export default function ResultPauta({
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
   const [generatingGif, setGeneratingGif] = useState(false);
   const [animFrame, setAnimFrame] = useState(0);
+  const autoGenStarted = useRef(false);
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -109,11 +110,12 @@ export default function ResultPauta({
         let finalDataUrl = rawDataUrl;
         try {
           const { composeFrame } = await import('../utils/composeFrame');
+          const inputOriginal = (pauta as any).inputOriginal;
           finalDataUrl = await composeFrame({
             imageDataUrl: rawDataUrl,
-            headline: pauta.copy.headlineBanner,
-            subheadline: pauta.copy.subHeadlineBanner,
-            cta: pauta.copy.ctaBotao,
+            headline: (inputOriginal?.headline || pauta.copy.headlineBanner) as string,
+            subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
+            cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
             marca: pauta.marca as 'Apice' | 'Barbours',
           });
         } catch (composeErr) {
@@ -194,6 +196,26 @@ export default function ResultPauta({
     }
   };
 
+  useEffect(() => {
+    // PROTEÇÃO 1: Só gera se for tipo com imagem
+    const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
+    if (tipoEfetivo === 'texto') return;
+
+    // PROTEÇÃO 2: Só gera se esta pauta NÃO tem nenhum frame ainda
+    const jaTemFrames = frameImages.inicial || frameImages.intermediario || frameImages.final;
+    if (jaTemFrames) return;
+
+    // PROTEÇÃO 3: Ref garante uma única disparo por montagem
+    if (autoGenStarted.current) return;
+    autoGenStarted.current = true;
+
+    const timer = setTimeout(() => {
+      gerarTodosFrames();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [pauta.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const GIF_FRAME_ORDER = ['inicial', 'intermediario', 'final'] as const;
   const loadedGifFrames = GIF_FRAME_ORDER.filter(f => !!frameImages[f]);
 
@@ -248,54 +270,40 @@ export default function ResultPauta({
   };
 
   const downloadGifAnimado = async () => {
-    const GIF = (await import('gif.js')).default;
-    const gif = new GIF({
-      workers: 2,
-      quality: 8,
-      width: 800,
-      height: 800,
-      workerScript: '/gif.worker.js',
-    });
-    const loadImage = (src: string): Promise<HTMLImageElement> =>
-      new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.src = src;
+    try {
+      const GIF = (await import('gif.js')).default;
+      const gif = new GIF({
+        workers: 2,
+        quality: 8,
+        width: 800,
+        height: 800,
+        workerScript: '/gif.worker.js',
       });
-    const frames = [frameImages.inicial!, frameImages.intermediario!, frameImages.final!];
-    for (const src of frames) {
-      const img = await loadImage(src);
-      const canvas = document.createElement('canvas');
-      canvas.width = 800;
-      canvas.height = 800;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, 800, 800);
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
-      ctx.fillRect(0, 0, 800, 800 * 0.28);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 56px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(pauta.copy.headlineBanner, 400, 112);
-      ctx.font = '30px sans-serif';
-      ctx.fillStyle = '#F0F0F0';
-      ctx.fillText(pauta.copy.subHeadlineBanner, 400, 176);
-      const btnW = 400, btnH = 56, btnX = 200, btnY = 696;
-      ctx.fillStyle = '#1a1a1a';
-      ctx.beginPath();
-      ctx.roundRect(btnX, btnY, btnW, btnH, 14);
-      ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 32px sans-serif';
-      ctx.fillText(pauta.copy.ctaBotao, 400, btnY + 38);
-      gif.addFrame(canvas, { delay: 700, copy: true });
+      const loadImage = (src: string): Promise<HTMLImageElement> =>
+        new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.src = src;
+        });
+      for (const src of [frameImages.inicial!, frameImages.intermediario!, frameImages.final!]) {
+        const img = await loadImage(src);
+        const canvas = document.createElement('canvas');
+        canvas.width = 800;
+        canvas.height = 800;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, 800, 800);
+        gif.addFrame(canvas, { delay: 700, copy: true });
+      }
+      gif.on('finished', (blob: Blob) => {
+        const link = document.createElement('a');
+        link.download = `${pauta.marca}-gif-animado.gif`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+      });
+      gif.render();
+    } catch (err) {
+      console.error('[downloadGifAnimado] Erro:', err);
+      alert('Erro ao gerar GIF. Tente novamente.');
     }
-    gif.on('finished', (blob: Blob) => {
-      const link = document.createElement('a');
-      link.download = `${pauta.marca}-gif-animado.gif`;
-      link.href = URL.createObjectURL(blob);
-      link.click();
-    });
-    gif.render();
   };
 
   const isApice = pauta.marca === 'Apice';
@@ -637,7 +645,12 @@ export default function ResultPauta({
                       <button
                         key={frame}
                         type="button"
-                        onClick={() => generateFrameImage(frame)}
+                        onClick={() => generateFrameImage(
+                          frame,
+                          frame === 'intermediario' ? frameImages.inicial :
+                          frame === 'final' ? frameImages.intermediario :
+                          undefined
+                        )}
                         disabled={generatingFrame !== null || generatingGif}
                         className={`text-[10px] font-bold px-3 py-2 rounded-lg border flex items-center gap-1 transition-colors cursor-pointer ${
                           isDone

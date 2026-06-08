@@ -136,12 +136,20 @@ export default function App() {
       });
       const resData = await response.json();
       if (resData.status === "success" && Array.isArray(resData.data)) {
-        const updated = [...resData.data, ...history];
+        const pautasComInput = resData.data.map((p: any) => ({
+          ...p,
+          inputOriginal: {
+            headline: inputB.boxHeadlineBanner || '',
+            subheadline: inputB.boxSubtituloEmail || '',
+            cta: inputB.boxCta || '',
+          },
+        }));
+        const updated = [...pautasComInput, ...history];
         saveHistory(updated);
 
         // Abre o popup com a nova pauta imediatamente
-        if (resData.data[0]) {
-          setActivePreviewPauta(resData.data[0]);
+        if (pautasComInput[0]) {
+          setActivePreviewPauta(pautasComInput[0]);
         }
 
         setDirecionamentoIA('');
