@@ -250,7 +250,7 @@ app.post("/api/generate-image", async (req, res) => {
       const marcaId = crmAiMarcas[marca]?.marcaId ?? (marca === 'Apice' ? 1 : 2);
       supabase.rpc('crm_ai_insert_ia_output', {
         p_marca_id:   marcaId,
-        p_tipo_canal: 'email_gif',
+        p_tipo_canal: 'frame',
         p_analisado:  frameDescription,
         p_prompt:     prompt,
         p_modelo:     imageModel,
@@ -395,7 +395,7 @@ app.post("/api/generate-gif", async (req, res) => {
       });
       supabase.rpc('crm_ai_insert_ia_output', {
         p_marca_id:   marcaId,
-        p_tipo_canal: 'email_gif',
+        p_tipo_canal: 'frame',
         p_analisado:  `GIF batch: inicial, intermediario, final`,
         p_prompt:     frameResults[0] ? gifInitialPrompt : '',
         p_modelo:     imageModel,

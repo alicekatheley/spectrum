@@ -105,12 +105,25 @@ export default function ResultPauta({
       }
       const data = await response.json();
       if (data.imageBytes) {
-        const dataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
-        onFrameGenerated(pauta.id, frameName, dataUrl);
+        const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
+        let finalDataUrl = rawDataUrl;
+        try {
+          const { composeFrame } = await import('../utils/composeFrame');
+          finalDataUrl = await composeFrame({
+            imageDataUrl: rawDataUrl,
+            headline: pauta.copy.headlineBanner,
+            subheadline: pauta.copy.subHeadlineBanner,
+            cta: pauta.copy.ctaBotao,
+            marca: pauta.marca as 'Apice' | 'Barbours',
+          });
+        } catch (composeErr) {
+          console.warn('[composeFrame] Falha na composição, usando imagem pura:', composeErr);
+        }
+        onFrameGenerated(pauta.id, frameName, finalDataUrl);
         if (data.publicUrl) {
           setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
         }
-        return dataUrl;
+        return finalDataUrl;
       } else {
         setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida da API.' }));
         return null;
