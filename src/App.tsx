@@ -642,10 +642,15 @@ export default function App() {
       </div>
 
       {activePreviewPauta && (
-        <PreviewModal 
-          pauta={activePreviewPauta} 
-          onClose={() => setActivePreviewPauta(null)} 
+        <PreviewModal
+          pauta={activePreviewPauta}
+          onClose={() => setActivePreviewPauta(null)}
           onUpdatePauta={handleUpdatePauta}
+          frameImages={allFrameImages[activePreviewPauta.id] ?? {}}
+          onFrameGenerated={handleFrameGenerated}
+          aspectRatio={aspectRatio}
+          imageModel={imageModel}
+          referenciaImagem={referenciaImagem}
         />
       )}
     </div>

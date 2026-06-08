@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { PautaGerada, PautaCopy } from "../types";
 import { X, Download, FileText, Code, Check, Sparkles, Database, Edit3, Clipboard, HelpCircle, AlertTriangle } from "lucide-react";
 import BannerSimulador from "./BannerSimulador";
@@ -8,13 +8,118 @@ interface PreviewModalProps {
   pauta: PautaGerada;
   onClose: () => void;
   onUpdatePauta?: (updated: PautaGerada) => void;
+  frameImages: { inicial?: string; intermediario?: string; final?: string };
+  onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
+  aspectRatio: string;
+  imageModel: string;
+  referenciaImagem?: string | null;
 }
 
-export default function PreviewModal({ pauta, onClose, onUpdatePauta }: PreviewModalProps) {
+export default function PreviewModal({
+  pauta,
+  onClose,
+  onUpdatePauta,
+  frameImages,
+  onFrameGenerated,
+  aspectRatio,
+  imageModel,
+  referenciaImagem,
+}: PreviewModalProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'edit'>('visual');
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [frameErrors, setFrameErrors] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
+  const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
+  const autoGenStarted = useRef(false);
 
   const isApice = pauta.marca === 'Apice';
+
+  const generateFrameImage = async (
+    frameName: 'inicial' | 'intermediario' | 'final',
+    referenceFrameUrl?: string,
+  ): Promise<string | null> => {
+    if (!pauta.visual) return null;
+    const descriptions: Record<string, string> = {
+      inicial: pauta.visual.frameInicial,
+      intermediario: pauta.visual.frameIntermediario,
+      final: pauta.visual.frameFinal,
+    };
+    setGeneratingFrame(frameName);
+    try {
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frameName,
+          frameDescription: descriptions[frameName],
+          aspectRatio,
+          marca: pauta.marca,
+          pautaId: pauta.id,
+          imageModel,
+          estiloIlustracao: pauta.visual?.estiloIlustracao,
+          paleta: pauta.visual?.paletaRecomendada,
+          mecanica: pauta.operacional.mecanicaEscolhida,
+          recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
+          referenciaImagem: referenciaImagem ?? undefined,
+          headline: pauta.copy.headlineBanner,
+          subheadline: pauta.copy.subHeadlineBanner,
+          referenceFrameUrl,
+        }),
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        setFrameErrors(prev => ({ ...prev, [frameName]: (errData as any).error ?? `Erro ${response.status}` }));
+        return null;
+      }
+      const data = await response.json();
+      if (data.imageBytes) {
+        const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
+        let finalDataUrl = rawDataUrl;
+        try {
+          const { composeFrame } = await import('../utils/composeFrame');
+          const inputOriginal = (pauta as any).inputOriginal;
+          finalDataUrl = await composeFrame({
+            imageDataUrl: rawDataUrl,
+            headline: (inputOriginal?.headline || pauta.copy.headlineBanner) as string,
+            subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
+            cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
+            marca: pauta.marca as 'Apice' | 'Barbours',
+          });
+        } catch (composeErr) {
+          console.warn('[composeFrame] Falha na composição:', composeErr);
+        }
+        onFrameGenerated(pauta.id, frameName, finalDataUrl);
+        return finalDataUrl;
+      } else {
+        setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida.' }));
+        return null;
+      }
+    } catch {
+      setFrameErrors(prev => ({ ...prev, [frameName]: 'Erro de rede.' }));
+      return null;
+    } finally {
+      setGeneratingFrame(null);
+    }
+  };
+
+  const gerarTodosFrames = async () => {
+    setFrameErrors({});
+    const urlF1 = await generateFrameImage('inicial', undefined);
+    const urlF2 = await generateFrameImage('intermediario', urlF1 ?? undefined);
+    await generateFrameImage('final', urlF2 ?? undefined);
+  };
+
+  useEffect(() => {
+    const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
+    if (tipoEfetivo === 'texto') return;
+    const jaTemFrames = frameImages.inicial || frameImages.intermediario || frameImages.final;
+    if (jaTemFrames) return;
+    if (autoGenStarted.current) return;
+    autoGenStarted.current = true;
+    const timer = setTimeout(() => {
+      gerarTodosFrames();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [pauta.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // State local para edição em tempo real
   const [editedCopy, setEditedCopy] = useState<PautaCopy>({ ...pauta.copy });
@@ -157,7 +262,44 @@ export default function PreviewModal({ pauta, onClose, onUpdatePauta }: PreviewM
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-1">
                 Visualização do GIF de E-mail CRM
               </span>
-              
+
+              {/* Loading enquanto gera os frames */}
+              {generatingFrame && !frameImages.inicial && (
+                <div className="w-full rounded-2xl border border-slate-700 bg-slate-800 flex flex-col items-center justify-center py-12 mb-4 gap-3">
+                  <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
+                  <span className="text-sm text-slate-400 font-medium">
+                    Gerando frames do GIF... {generatingFrame === 'inicial' ? '1/3' : generatingFrame === 'intermediario' ? '2/3' : '3/3'}
+                  </span>
+                </div>
+              )}
+
+              {/* Frame real do PiApp quando disponível */}
+              {(frameImages.inicial || frameImages.intermediario || frameImages.final) && (
+                <div className="relative w-full rounded-2xl overflow-hidden border border-slate-700 mb-4">
+                  <img
+                    src={frameImages.final ?? frameImages.intermediario ?? frameImages.inicial}
+                    alt="Frame gerado"
+                    className="w-full object-cover"
+                  />
+                  {generatingFrame && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-2xl">
+                      <span className="text-white text-sm font-bold animate-pulse">
+                        Gerando {generatingFrame === 'inicial' ? 'F1' : generatingFrame === 'intermediario' ? 'F2' : 'F3'}...
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Erro de geração */}
+              {Object.keys(frameErrors).length > 0 && (
+                <div className="text-xs text-rose-400 bg-rose-900/20 border border-rose-800 rounded-xl px-3 py-2 mb-2 text-left">
+                  {Object.entries(frameErrors).map(([f, err]) => (
+                    <p key={f}>{f === 'inicial' ? 'F1' : f === 'intermediario' ? 'F2' : 'F3'}: {err}</p>
+                  ))}
+                </div>
+              )}
+
               <BannerSimulador
                 brand={pauta.marca}
                 headline={editedCopy.headlineBanner}
@@ -165,8 +307,9 @@ export default function PreviewModal({ pauta, onClose, onUpdatePauta }: PreviewM
                 cta={editedCopy.ctaBotao}
                 mecanicaText={pauta.operacional.mecanicaEscolhida}
                 recompensa={pauta.operacional.recompensaEscolhida}
-                paleta={pauta.visual.paletaRecomendada}
-                estiloIlustracao={pauta.visual.estiloIlustracao}
+                paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
+                estiloIlustracao={pauta.visual?.estiloIlustracao}
+                frameImages={frameImages}
               />
             </div>
 
