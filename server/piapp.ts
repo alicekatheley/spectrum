@@ -131,7 +131,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline, cta, direcionamento,
+  headline, subheadline, cta, direcionamento, totalFrames,
 }: {
   frameName: string;
   frameDescription: string;
@@ -148,6 +148,7 @@ export function buildImagePrompt({
   subheadline?: string;
   cta?: string;
   direcionamento?: string;
+  totalFrames?: number;
 }): string {
   const frameStateMap: Record<string, string> = {
     inicial:       'pristine and fully closed, perfectly sealed — pure anticipation, nothing revealed',
@@ -173,26 +174,26 @@ export function buildImagePrompt({
     ? ''
     : `${compVariant.replace(/^Composition:\s*/i, '')} ${lightVariant.replace(/^Lighting:\s*/i, '')}`;
 
-  // Bloco de consistência visual — mais rigoroso para F2 e F3
-  const consistencyBlock = frameName === 'inicial'
-    ? `VISUAL ANCHOR — FRAME 1 OF 3: You are establishing the visual DNA for this entire GIF sequence.
-LOCK THESE ELEMENTS permanently — they must be IDENTICAL in all 3 frames:
-- Background: exact solid color, no variation
-- Object: same material, finish, size, and position anchor
-- Lighting: same direction, same intensity, same shadows
-- Style: photorealistic OR 3D illustrated — pick ONE, never mix
-- Color palette: exact same tones across all frames
-The ONLY element that changes across frames is the STATE of the hero object.`
-    : `VISUAL CONSISTENCY — MANDATORY — FRAME ${frameName === 'intermediario' ? '2' : '3'} OF 3:
+  const totalFramesLabel = `frame ${parseInt(frameName.replace('frame_', '')) + 1} of ${totalFrames ?? 3}`;
+
+  const consistencyBlock = frameName === 'frame_0' || frameName === 'inicial'
+    ? `VISUAL ANCHOR — FRAME 1: You are establishing the visual DNA for this entire GIF sequence.
+LOCK THESE ELEMENTS permanently across ALL frames:
+- Background: exact solid color
+- Object: same material, finish, size, position anchor
+- Lighting: same direction and intensity
+- Style: photorealistic OR 3D illustrated OR flat 2D — pick ONE, never mix
+- Text style: same font style, same color, same size across all frames
+The ONLY element that changes is the STATE of the hero object and any animated elements.`
+    : `VISUAL CONSISTENCY — MANDATORY (${totalFramesLabel}):
 The reference image is the PREVIOUS frame of this EXACT GIF. You are continuing the same scene.
-COPY EXACTLY from the reference image:
-- Background color: use the EXACT same color as the reference — not similar, IDENTICAL
-- Object material and finish: same metallic/matte/glossy quality
-- Object scale: same size relative to frame
-- Lighting direction and intensity: match pixel-for-pixel
-- Color palette: no new colors, only what exists in the reference
-- Style: same render style as reference (do not switch between photo and 3D)
-ONLY CHANGE: the state of the hero object (${frameName === 'intermediario' ? 'now mid-action/bursting' : 'now fully open/revealed'})
+COPY EXACTLY from the reference:
+- Background color: IDENTICAL
+- Object material, finish and scale: IDENTICAL
+- Lighting direction and intensity: IDENTICAL
+- Text style and position: IDENTICAL
+- Color palette: no new colors
+ONLY CHANGE: the state/position of animated elements as described in the frame scene above.
 FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
 
   return [
@@ -223,11 +224,13 @@ IMPORTANT: Render the text EXACTLY as written above — correct spelling, correc
     consistencyBlock,
 
     // 6. Zonas de texto
-    `LAYOUT ZONES:
-TOP ZONE (top 28%): Render the HEADLINE text here — large, bold, centered, high contrast against the background.
-MIDDLE ZONE (middle 54%): Hero object only — the main visual mechanic element.
-BOTTOM ZONE (bottom 18%): Render a CTA BUTTON here — pill-shaped or rounded rectangle, filled with the brand color, with the CTA text "${cta ?? 'ABRIR'}" in white bold uppercase centered inside the button. Button width ~50% of frame, vertically centered in this zone.
-SUB-HEADLINE: Place it between the headline and the hero object, smaller font, readable.`,
+    `LAYOUT COMPOSITION:
+- TOP AREA: Place the HEADLINE text prominently here — large, bold, centered, legible
+- MIDDLE AREA: Main hero object/mechanic — this is the visual star of the frame
+- SUB-HEADLINE: Between headline and hero object, smaller font, readable
+- BOTTOM AREA: CTA button — pill shape, brand color background, white bold text "${cta ?? 'ABRIR'}" centered inside
+- All text elements must be rendered INSIDE the image with clean, bold typography
+- Maintain consistent text placement across all frames`,
 
     // 7. Restrições finais
     `RENDER ONLY the headline, sub-headline and CTA button text described above. No other text, watermarks or symbols anywhere else in the image. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,

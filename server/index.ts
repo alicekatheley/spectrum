@@ -156,6 +156,7 @@ app.post("/api/generate-image", async (req, res) => {
       cta,
       referenceFrameUrl,
       direcionamento,
+      totalFrames,
     } = req.body;
 
     if (!frameDescription || typeof frameDescription !== 'string') {
@@ -194,6 +195,7 @@ app.post("/api/generate-image", async (req, res) => {
       subheadline:      subheadline as string | undefined,
       cta:              cta as string | undefined,
       direcionamento:   typeof direcionamento === 'string' && direcionamento.trim() ? direcionamento.trim() : undefined,
+      totalFrames:      typeof totalFrames === 'number' ? totalFrames : undefined,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);
 
