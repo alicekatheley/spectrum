@@ -46,6 +46,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [boxCta, setBoxCta] = useState(preload?.boxCta ?? "");
   const [boxMecanicaOuEstatico, setBoxMecanicaOuEstatico] = useState(preload?.boxMecanicaOuEstatico ?? "");
   const [boxRecompensa, setBoxRecompensa] = useState(preload?.boxRecompensa ?? "");
+  const [estiloVisualTexto, setEstiloVisualTexto] = useState(preload?.estiloVisualTexto ?? '');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -67,6 +68,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       boxCta,
       boxMecanicaOuEstatico,
       boxRecompensa,
+      estiloVisualTexto,
     } as any);
   };
 
@@ -358,6 +360,38 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           />
         </div>
       </div>
+
+      {tipoGeracao !== 'texto' && (
+        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-2">
+          <div className="flex justify-between items-center mb-1">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+              Estilo Visual do Texto
+              <span className="text-[10px] text-slate-400 font-normal normal-case ml-1">
+                (Opcional — descreva fonte, cor e botão)
+              </span>
+            </label>
+            {estiloVisualTexto && (
+              <button
+                type="button"
+                onClick={() => setEstiloVisualTexto('')}
+                className="text-slate-400 hover:text-rose-500 p-1 rounded hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <textarea
+            value={estiloVisualTexto}
+            onChange={(e) => setEstiloVisualTexto(e.target.value)}
+            placeholder="Ex: Fonte serif bold branca com sombra suave. Botão pill na cor verde da marca com texto branco em caixa alta. Sub-headline em branco com opacidade 90%."
+            rows={3}
+            className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 transition-all resize-none"
+          />
+          <div className="text-[10px] text-slate-400">
+            Descreva livremente: cor do texto, família de fonte, peso, tamanho, estilo do botão (pill/retangular/outline), cor do botão, etc.
+          </div>
+        </div>
+      )}
 
       <AspectRatioSelector
         value={aspectRatio}

@@ -44,6 +44,7 @@ export interface InputModoB {
   boxCta: string;
   boxMecanicaOuEstatico: string;
   boxRecompensa: string;
+  estiloVisualTexto?: string;
 }
 
 export interface PautaCopy {

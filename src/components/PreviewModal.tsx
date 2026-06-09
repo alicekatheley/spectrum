@@ -76,6 +76,22 @@ export default function PreviewModal({
         const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
         let finalDataUrl = rawDataUrl;
         try {
+          // Parsear estilo visual se disponível
+          let estiloVisual = undefined;
+          const estiloTexto = (pauta as any).inputOriginal?.estiloVisualTexto;
+          if (estiloTexto) {
+            try {
+              const estiloRes = await fetch('/api/parse-estilo-visual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ estiloVisualTexto: estiloTexto, marca: pauta.marca }),
+              });
+              estiloVisual = await estiloRes.json();
+            } catch {
+              console.warn('[parse-estilo-visual] Falha ao parsear estilo, usando defaults');
+            }
+          }
+
           const { composeFrame } = await import('../utils/composeFrame');
           const inputOriginal = (pauta as any).inputOriginal;
           finalDataUrl = await composeFrame({
@@ -84,6 +100,7 @@ export default function PreviewModal({
             subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
             cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
             marca: pauta.marca as 'Apice' | 'Barbours',
+            estiloVisual,
           });
         } catch (composeErr) {
           console.warn('[composeFrame] Falha na composição:', composeErr);

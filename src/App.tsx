@@ -143,6 +143,7 @@ export default function App() {
             subheadline: inputB.boxSubtituloEmail || '',
             cta: inputB.boxCta || '',
             direcionamento: direcionamentoIA || '',
+            estiloVisualTexto: inputB.estiloVisualTexto || '',
           },
         }));
         const updated = [...pautasComInput, ...history];

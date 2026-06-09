@@ -423,6 +423,78 @@ app.post("/api/generate-gif", async (req, res) => {
   }
 });
 
+app.post("/api/parse-estilo-visual", async (req, res) => {
+  try {
+    const { estiloVisualTexto, marca } = req.body;
+
+    if (!estiloVisualTexto || typeof estiloVisualTexto !== 'string') {
+      return res.json({
+        corTexto: '#FFFFFF',
+        corSubheadline: 'rgba(255,255,255,0.90)',
+        estiloBotao: 'pill',
+        corBotao: marca === 'Apice' ? '#688D65' : '#BF0F26',
+        corTextoBotao: '#FFFFFF',
+        tamanhoHeadline: 'grande',
+        pesoFonte: '900',
+        familiaFonte: 'Georgia, serif',
+      });
+    }
+
+    const prompt = `Você é um parser de estilo visual. O usuário descreveu como quer que o texto apareça em um banner de email marketing. Extraia as informações e retorne APENAS um JSON válido sem markdown, sem explicações.
+
+Descrição do usuário: "${estiloVisualTexto}"
+Marca: ${marca}
+Cor padrão da marca Apice: #688D65 (verde)
+Cor padrão da marca Barbours: #BF0F26 (vermelho)
+
+Retorne EXATAMENTE este JSON (sem backticks, sem markdown):
+{
+  "corTexto": "cor hex do texto principal/headline",
+  "corSubheadline": "cor hex ou rgba do sub-headline (pode ter opacidade)",
+  "estiloBotao": "pill" ou "retangular" ou "outline",
+  "corBotao": "cor hex do fundo do botão",
+  "corTextoBotao": "cor hex do texto dentro do botão",
+  "tamanhoHeadline": "grande" ou "medio" ou "pequeno",
+  "pesoFonte": "400" ou "600" ou "700" ou "900",
+  "familiaFonte": "fonte CSS válida (ex: Georgia, serif ou Arial, sans-serif ou 'Playfair Display', serif)"
+}
+
+Se o usuário não mencionar um campo, use o valor padrão mais adequado para um banner de email marketing de marca de beleza.`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text ?? '{}';
+    const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+    res.json(parsed);
+  } catch (err) {
+    console.error('[parse-estilo-visual] Erro:', err);
+    res.json({
+      corTexto: '#FFFFFF',
+      corSubheadline: 'rgba(255,255,255,0.90)',
+      estiloBotao: 'pill',
+      corBotao: req.body.marca === 'Apice' ? '#688D65' : '#BF0F26',
+      corTextoBotao: '#FFFFFF',
+      tamanhoHeadline: 'grande',
+      pesoFonte: '900',
+      familiaFonte: 'Georgia, serif',
+    });
+  }
+});
+
 app.post("/api/generate-variation", async (req, res) => {
   try {
     const { pauta } = req.body;
