@@ -272,38 +272,56 @@ export default function ResultPauta({
 
   const downloadGifAnimado = async () => {
     try {
-      const GIF = (await import('gif.js')).default;
-      const gif = new GIF({
-        workers: 2,
-        quality: 8,
-        width: 800,
-        height: 800,
-        workerScript: '/gif.worker.js',
-      });
-      const loadImage = (src: string): Promise<HTMLImageElement> =>
-        new Promise((resolve) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.src = src;
-        });
-      for (const src of [frameImages.inicial!, frameImages.intermediario!, frameImages.final!]) {
-        const img = await loadImage(src);
-        const canvas = document.createElement('canvas');
-        canvas.width = 800;
-        canvas.height = 800;
-        canvas.getContext('2d')!.drawImage(img, 0, 0, 800, 800);
-        gif.addFrame(canvas, { delay: 700, copy: true });
+      // Verificar se os 3 frames existem
+      if (!frameImages.inicial || !frameImages.intermediario || !frameImages.final) {
+        alert('Aguarde todos os 3 frames serem gerados antes de baixar o GIF.');
+        return;
       }
-      gif.on('finished', (blob: Blob) => {
-        const link = document.createElement('a');
-        link.download = `${pauta.marca}-gif-animado.gif`;
-        link.href = URL.createObjectURL(blob);
-        link.click();
+
+      // Carregar a biblioteca gifshot dinamicamente
+      // @ts-ignore
+      const gifshot = (await import('https://cdn.jsdelivr.net/npm/gifshot@0.4.5/build/gifshot.min.js')).default;
+
+      const frames = [frameImages.inicial, frameImages.intermediario, frameImages.final];
+
+      gifshot.createGIF({
+        images: frames,
+        gifWidth: 800,
+        gifHeight: 800,
+        interval: 0.7,
+        numFrames: 3,
+        frameDuration: 1,
+        sampleInterval: 10,
+        numWorkers: 2,
+      }, (obj: any) => {
+        if (!obj.error) {
+          const link = document.createElement('a');
+          link.download = `${pauta.marca}-gif-animado.gif`;
+          link.href = obj.image;
+          link.click();
+        } else {
+          console.error('[downloadGifAnimado] gifshot error:', obj.error);
+          alert('Não foi possível gerar o GIF animado. Os frames individuais estão disponíveis para download abaixo.');
+        }
       });
-      gif.render();
+
     } catch (err) {
       console.error('[downloadGifAnimado] Erro:', err);
-      alert('Erro ao gerar GIF. Tente novamente.');
+      // Fallback: baixar frame por frame
+      const frames = [
+        { name: 'F1-fechado', src: frameImages.inicial },
+        { name: 'F2-acao', src: frameImages.intermediario },
+        { name: 'F3-revelacao', src: frameImages.final },
+      ];
+      for (const frame of frames) {
+        if (frame.src) {
+          const link = document.createElement('a');
+          link.download = `${pauta.marca}-${frame.name}.png`;
+          link.href = frame.src;
+          link.click();
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
     }
   };
 
