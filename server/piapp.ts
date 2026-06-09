@@ -154,46 +154,75 @@ export function buildImagePrompt({
     final:         'fully open and triumphant, the reward dramatically revealed and glowing center-stage',
   };
   const frameState = frameStateMap[frameName] ?? frameStateMap['inicial'];
-
-  const hitRef = brandDna.hitFormula.split(/\n|\.\ /)[0].trim().replace(/\.$/, '');
-
+  const hitRef = brandDna.hitFormula.split(/\n|\. /)[0].trim().replace(/\.$/, '');
   const paletaCores = Array.isArray(paleta?.cores) && (paleta!.cores as string[]).length > 0
     ? (paleta!.cores as string[]).join(', ')
     : brandDna.primaryColors.split(',').slice(0, 2).join(',').trim();
-
   const styleDesc = estiloIlustracao ?? brandDna.style;
-
-  const comp  = compVariant.replace(/^Composition:\s*/i, '');
-  const light = lightVariant.replace(/^Lighting:\s*/i,    '');
-
   const rewardPhrase = recompensa
     ? frameName === 'final'
       ? ` The reward — "${recompensa}" — is fully revealed, glowing and celebrated.`
       : ` The reward remains completely hidden inside.`
     : '';
-
   const prohibNote = brandDna.prohibitedColors ? ` ${brandDna.prohibitedColors}` : '';
 
+  // Quando há direcionamento do usuário, NÃO usar compVariant/lightVariant
+  // pois o usuário já especificou composição e iluminação
+  const compositionBlock = direcionamento
+    ? ''
+    : `${compVariant.replace(/^Composition:\s*/i, '')} ${lightVariant.replace(/^Lighting:\s*/i, '')}`;
+
+  // Bloco de consistência visual — mais rigoroso para F2 e F3
+  const consistencyBlock = frameName === 'inicial'
+    ? `VISUAL ANCHOR — FRAME 1 OF 3: You are establishing the visual DNA for this entire GIF sequence.
+LOCK THESE ELEMENTS permanently — they must be IDENTICAL in all 3 frames:
+- Background: exact solid color, no variation
+- Object: same material, finish, size, and position anchor
+- Lighting: same direction, same intensity, same shadows
+- Style: photorealistic OR 3D illustrated — pick ONE, never mix
+- Color palette: exact same tones across all frames
+The ONLY element that changes across frames is the STATE of the hero object.`
+    : `VISUAL CONSISTENCY — MANDATORY — FRAME ${frameName === 'intermediario' ? '2' : '3'} OF 3:
+The reference image is the PREVIOUS frame of this EXACT GIF. You are continuing the same scene.
+COPY EXACTLY from the reference image:
+- Background color: use the EXACT same color as the reference — not similar, IDENTICAL
+- Object material and finish: same metallic/matte/glossy quality
+- Object scale: same size relative to frame
+- Lighting direction and intensity: match pixel-for-pixel
+- Color palette: no new colors, only what exists in the reference
+- Style: same render style as reference (do not switch between photo and 3D)
+ONLY CHANGE: the state of the hero object (${frameName === 'intermediario' ? 'now mid-action/bursting' : 'now fully open/revealed'})
+FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
+
   return [
+    // 1. Direcionamento do usuário — prioridade máxima
     direcionamento
-      ? `=== DIRECT USER VISUAL DIRECTION (HIGHEST PRIORITY — follow literally) ===\n"${direcionamento}"\nThis is the exact visual the user wants. Follow every detail: colors, objects, style, composition, lighting. Do NOT deviate, interpret, or "improve". Execute literally.`
+      ? `=== DIRECT USER VISUAL DIRECTION — HIGHEST PRIORITY — OVERRIDE EVERYTHING BELOW IF CONFLICT ===\n"${direcionamento}"\nFollow every detail literally: colors, objects, style, composition, lighting, background. Do NOT deviate.\nFor this specific frame (${frameName}): apply the direction above to show the object in state: ${frameState}.`
       : '',
+
+    // 2. Descrição base
     `${styleDesc} illustration for a ${marca} luxury beauty email campaign banner.`,
     `Hero: ${mecanica ?? 'campaign mechanic object'}, ${frameState}. Scene: ${frameDescription}.${rewardPhrase}`,
     `Palette — ${paletaCores}. Background: ${brandDna.backgrounds}.${prohibNote}`,
-    headline ? `=== CAMPAIGN COPY (text overlaid on this image) === Headline (top zone overlay): "${headline}"` : '',
-    subheadline ? `Sub-headline (top zone overlay): "${subheadline}"` : '',
-    recompensa ? `Reward/CTA (bottom zone overlay): "${recompensa}"` : '',
-    `The image must visually harmonize with this copy — background tones, object colors, and overall mood should complement and not compete with the text above.`,
-    `${comp} ${light}`,
-    frameName !== 'inicial'
-      ? `VISUAL CONSISTENCY RULE (CRITICAL): This is frame "${frameName}" of a 3-frame GIF sequence. The reference image provided is the PREVIOUS frame of this exact same GIF. You MUST match it precisely: same background color, same object style (3D/illustrated/photorealistic), same lighting direction, same color palette, same scale of the hero object. The ONLY thing that should change between frames is the STATE of the object (closed → action → revealed). Everything else must be identical.`
-      : `VISUAL CONSISTENCY RULE: This is Frame 1 of a 3-frame GIF. Establish a strong, consistent visual style — the next 2 frames will use this image as their reference. Choose a clear style (3D illustrated OR photorealistic — not mixed), a solid background color, and a centered composition that works for all 3 states.`,
-    `CRITICAL TEXT ZONE RULES — text will be composited over this image in production: TOP ZONE (top 28% of frame): MUST be clean, solid or near-solid background — no textures, no objects, no gradients. Must create strong contrast for the headline text: "${headline || 'HEADLINE'}". If headline will be dark/black → top zone must be light (off-white, cream, pale brand color). If headline will be white → top zone must be dark (deep brand color). BOTTOM ZONE (bottom 18% of frame): MUST also be clean for the CTA button overlay. Same background tone as top zone preferred. MIDDLE ZONE (middle 54%): The ONLY area for the hero mechanic object. Center it beautifully. This zone can be vibrant and detailed. CONSISTENCY RULE: All 3 frames of this GIF must use the same background color, same lighting direction, and same object scale. Do NOT vary the composition between frames.`,
-    `All three animation frames must share identical background, object materials, lighting direction, and color scheme — only the mechanic state differs.`,
-    `Visual reference: ${hitRef}.`,
-    `No text, letters, numbers, symbols, watermarks, labels, or UI elements anywhere in the image. Pure illustration asset. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
-  ].join(' ');
+
+    // 3. Copy da campanha
+    headline ? `=== CAMPAIGN COPY (text overlaid — do NOT render text in image) === Headline: "${headline}"` : '',
+    subheadline ? `Sub-headline: "${subheadline}"` : '',
+    recompensa ? `Reward/CTA: "${recompensa}"` : '',
+    `Background and palette must harmonize with copy above — complement, never compete.`,
+
+    // 4. Composição (só quando não há direcionamento)
+    compositionBlock,
+
+    // 5. Consistência entre frames
+    consistencyBlock,
+
+    // 6. Zonas de texto
+    `TEXT ZONES: TOP 28% of frame = completely empty clean background for headline overlay. BOTTOM 18% = completely empty for CTA button. MIDDLE 54% = hero object only.`,
+
+    // 7. Restrições finais
+    `No text, letters, numbers, symbols, watermarks anywhere in the image. Pure illustration asset. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
+  ].filter(Boolean).join('\n\n');
 }
 
 export { VALID_IMAGE_MODELS, DEFAULT_IMAGE_MODEL, COMPOSITION_VARIANTS, LIGHTING_VARIANTS };
