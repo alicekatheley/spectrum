@@ -33,7 +33,7 @@ export default function App() {
   const [direcionamentoIA, setDirecionamentoIA] = useState<string>('');
   const [tipoGeracao, setTipoGeracao] = useState<'texto' | 'imagem' | 'texto_imagem'>('texto_imagem');
   const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
-  const [allFrameImages, setAllFrameImages] = useState<Record<string, { inicial?: string; intermediario?: string; final?: string }>>({});
+  const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>({});
 
   const handleFrameGenerated = (pautaId: string, frameName: string, imageData: string) => {
     setAllFrameImages(prev => ({

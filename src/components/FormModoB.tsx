@@ -47,6 +47,10 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [boxMecanicaOuEstatico, setBoxMecanicaOuEstatico] = useState(preload?.boxMecanicaOuEstatico ?? "");
   const [boxRecompensa, setBoxRecompensa] = useState(preload?.boxRecompensa ?? "");
   const [estiloVisualTexto, setEstiloVisualTexto] = useState(preload?.estiloVisualTexto ?? '');
+  const [quantidadeFrames, setQuantidadeFrames] = useState<number>(
+    preload?.quantidadeFrames ?? 3
+  );
+  const [quantidadeCustom, setQuantidadeCustom] = useState<string>('');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -69,6 +73,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       boxMecanicaOuEstatico,
       boxRecompensa,
       estiloVisualTexto,
+      quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
     } as any);
   };
 
@@ -390,6 +395,55 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           <div className="text-[10px] text-slate-400">
             Descreva livremente: cor do texto, família de fonte, peso, tamanho, estilo do botão (pill/retangular/outline), cor do botão, etc.
           </div>
+        </div>
+      )}
+
+      {tipoGeracao !== 'texto' && (
+        <div className="flex flex-col gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
+          <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Quantidade de Frames do GIF
+          </label>
+          <div className="flex flex-wrap gap-2 items-center">
+            {[3, 5, 10].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => { setQuantidadeFrames(n); setQuantidadeCustom(''); }}
+                className={`px-4 py-2 rounded-xl border-2 text-sm font-bold transition-all cursor-pointer ${
+                  quantidadeFrames === n && !quantidadeCustom
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                {n} frames
+              </button>
+            ))}
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={2}
+                max={20}
+                value={quantidadeCustom}
+                onChange={(e) => {
+                  setQuantidadeCustom(e.target.value);
+                  if (e.target.value) setQuantidadeFrames(0);
+                }}
+                placeholder="Outro"
+                className={`w-20 border-2 rounded-xl px-3 py-2 text-sm font-bold text-center transition-all focus:outline-none ${
+                  quantidadeCustom
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                    : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              />
+              {quantidadeCustom && (
+                <span className="text-xs text-slate-500">frames</span>
+              )}
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-400">
+            Descreva a lógica de cada frame no campo "Direcionamento para a IA" acima.
+            Sem direcionamento, a IA cria frames com progressão automática.
+          </p>
         </div>
       )}
 

@@ -18,7 +18,7 @@ interface ResultPautaProps {
   aspectRatio: string;
   imageModel: string;
   referenciaImagem?: string | null;
-  frameImages: { inicial?: string; intermediario?: string; final?: string };
+  frameImages: Record<string, string>;
   onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
 }
 
@@ -39,8 +39,8 @@ export default function ResultPauta({
   const [showVisualAccordion, setShowVisualAccordion] = useState(true);
   const [showOperacionalAccordion, setShowOperacionalAccordion] = useState(true);
   const [loadingVariation, setLoadingVariation] = useState(false);
-  const [framePublicUrls, setFramePublicUrls] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
-  const [frameErrors, setFrameErrors] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
+  const [framePublicUrls, setFramePublicUrls] = useState<Record<string, string>>({});
+  const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
   const [generatingGif, setGeneratingGif] = useState(false);
   const [animFrame, setAnimFrame] = useState(0);
@@ -67,15 +67,20 @@ export default function ResultPauta({
   const styleIndex = pauta.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 5;
 
   const generateFrameImage = async (
-    frameName: 'inicial' | 'intermediario' | 'final',
+    frameIndex: number,
     referenceFrameUrl?: string,
   ): Promise<string | null> => {
     if (!pauta.visual) return null;
-    const descriptions: Record<string, string> = {
-      inicial: pauta.visual.frameInicial,
-      intermediario: pauta.visual.frameIntermediario,
-      final: pauta.visual.frameFinal,
-    };
+
+    const framesArray = pauta.visual.frames ?? [
+      pauta.visual.frameInicial ?? '',
+      pauta.visual.frameIntermediario ?? '',
+      pauta.visual.frameFinal ?? '',
+    ].filter(Boolean);
+
+    const frameDescription = framesArray[frameIndex] ?? '';
+    const frameName = `frame_${frameIndex}`;
+
     setGeneratingFrame(frameName);
     try {
       const response = await fetch('/api/generate-image', {
@@ -83,7 +88,9 @@ export default function ResultPauta({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           frameName,
-          frameDescription: descriptions[frameName],
+          frameIndex,
+          totalFrames: framesArray.length,
+          frameDescription,
           aspectRatio,
           marca: pauta.marca,
           pautaId: pauta.id,
@@ -115,11 +122,11 @@ export default function ResultPauta({
         }
         return finalDataUrl;
       } else {
-        setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida da API.' }));
+        setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida.' }));
         return null;
       }
     } catch {
-      setFrameErrors(prev => ({ ...prev, [frameName]: 'Erro de rede ao gerar imagem.' }));
+      setFrameErrors(prev => ({ ...prev, [frameName]: 'Erro de rede.' }));
       return null;
     } finally {
       setGeneratingFrame(null);
@@ -128,9 +135,16 @@ export default function ResultPauta({
 
   const gerarTodosFrames = async () => {
     setFrameErrors({});
-    const urlF1 = await generateFrameImage('inicial', undefined);
-    const urlF2 = await generateFrameImage('intermediario', urlF1 ?? undefined);
-    await generateFrameImage('final', urlF2 ?? undefined);
+    const framesArray = pauta.visual?.frames ?? [
+      pauta.visual?.frameInicial ?? '',
+      pauta.visual?.frameIntermediario ?? '',
+      pauta.visual?.frameFinal ?? '',
+    ].filter(Boolean);
+
+    let previousUrl: string | undefined = undefined;
+    for (let i = 0; i < framesArray.length; i++) {
+      previousUrl = await generateFrameImage(i, previousUrl) ?? undefined;
+    }
   };
 
   const generateAllFrames = async () => {
@@ -185,27 +199,27 @@ export default function ResultPauta({
   };
 
   useEffect(() => {
-    // PROTEÇÃO 1: Só gera se for tipo com imagem
     const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
     if (tipoEfetivo === 'texto') return;
-
-    // PROTEÇÃO 2: Só gera se esta pauta NÃO tem nenhum frame ainda
-    const jaTemFrames = frameImages.inicial || frameImages.intermediario || frameImages.final;
+    const framesArray = pauta.visual?.frames ?? [
+      pauta.visual?.frameInicial,
+      pauta.visual?.frameIntermediario,
+      pauta.visual?.frameFinal,
+    ].filter(Boolean);
+    const jaTemFrames = framesArray.some((_, i) => !!frameImages[`frame_${i}`]);
     if (jaTemFrames) return;
-
-    // PROTEÇÃO 3: Ref garante uma única disparo por montagem
     if (autoGenStarted.current) return;
     autoGenStarted.current = true;
-
-    const timer = setTimeout(() => {
-      gerarTodosFrames();
-    }, 500);
-
+    const timer = setTimeout(() => { gerarTodosFrames(); }, 500);
     return () => clearTimeout(timer);
   }, [pauta.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const GIF_FRAME_ORDER = ['inicial', 'intermediario', 'final'] as const;
-  const loadedGifFrames = GIF_FRAME_ORDER.filter(f => !!frameImages[f]);
+  const framesArray = pauta.visual?.frames ?? [
+    pauta.visual?.frameInicial,
+    pauta.visual?.frameIntermediario,
+    pauta.visual?.frameFinal,
+  ].filter(Boolean) as string[];
+  const loadedGifFrames = framesArray.map((_, i) => `frame_${i}`).filter(k => !!frameImages[k]);
 
   useEffect(() => {
     if (loadedGifFrames.length < 2) return;
@@ -257,26 +271,29 @@ export default function ResultPauta({
     img.src = imageSrc;
   };
 
+  const framesGerados = framesArray
+    .map((_, i) => frameImages[`frame_${i}`])
+    .filter(Boolean) as string[];
+  const todosFramesProntos = framesGerados.length === framesArray.length && framesArray.length > 0;
+
   const downloadGifAnimado = async () => {
     try {
-      // Verificar se os 3 frames existem
-      if (!frameImages.inicial || !frameImages.intermediario || !frameImages.final) {
-        alert('Aguarde todos os 3 frames serem gerados antes de baixar o GIF.');
+      if (framesGerados.length === 0) {
+        alert('Aguarde os frames serem gerados antes de baixar o GIF.');
         return;
       }
 
-      // Carregar a biblioteca gifshot dinamicamente
       // @ts-ignore
       const gifshot = (await import('https://cdn.jsdelivr.net/npm/gifshot@0.4.5/build/gifshot.min.js')).default;
 
-      const frames = [frameImages.inicial, frameImages.intermediario, frameImages.final];
+      const frames = framesGerados;
 
       gifshot.createGIF({
         images: frames,
         gifWidth: 800,
         gifHeight: 800,
         interval: 0.7,
-        numFrames: 3,
+        numFrames: frames.length,
         frameDuration: 1,
         sampleInterval: 10,
         numWorkers: 2,
@@ -294,20 +311,12 @@ export default function ResultPauta({
 
     } catch (err) {
       console.error('[downloadGifAnimado] Erro:', err);
-      // Fallback: baixar frame por frame
-      const frames = [
-        { name: 'F1-fechado', src: frameImages.inicial },
-        { name: 'F2-acao', src: frameImages.intermediario },
-        { name: 'F3-revelacao', src: frameImages.final },
-      ];
-      for (const frame of frames) {
-        if (frame.src) {
-          const link = document.createElement('a');
-          link.download = `${pauta.marca}-${frame.name}.png`;
-          link.href = frame.src;
-          link.click();
-          await new Promise(r => setTimeout(r, 300));
-        }
+      for (let i = 0; i < framesGerados.length; i++) {
+        const link = document.createElement('a');
+        link.download = `${pauta.marca}-frame-${i + 1}.png`;
+        link.href = framesGerados[i];
+        link.click();
+        await new Promise(r => setTimeout(r, 300));
       }
     }
   };
@@ -593,11 +602,11 @@ export default function ResultPauta({
               </div>
               <hr className="border-slate-200/40" />
               <div className="flex flex-col gap-1">
-                <strong className="text-slate-500">Fluxo de Frames (GIF no Playbook):</strong>
+                <strong className="text-slate-500">Fluxo de Frames ({framesArray.length} frames):</strong>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-500 mt-0.5">
-                  <li><strong>Estado Fechado (Frame F1):</strong> {pauta.visual?.frameInicial}</li>
-                  <li><strong>Frame de Ação (Frame F2):</strong> {pauta.visual?.frameIntermediario}</li>
-                  <li><strong>Estado Revelado (Frame F3):</strong> {pauta.visual?.frameFinal}</li>
+                  {framesArray.map((desc, i) => (
+                    <li key={i}><strong>F{i + 1}:</strong> {desc}</li>
+                  ))}
                 </ul>
               </div>
               <hr className="border-slate-200/40" />
@@ -643,20 +652,15 @@ export default function ResultPauta({
                   <div className="flex-1 h-px bg-slate-200" />
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {(['inicial', 'intermediario', 'final'] as const).map((frame) => {
-                    const labels = { inicial: 'F1 — Fechado', intermediario: 'F2 — Ação', final: 'F3 — Revelação' };
-                    const isGenerating = generatingFrame === frame || generatingGif;
-                    const isDone = !!frameImages[frame];
+                  {framesArray.map((_, i) => {
+                    const frameName = `frame_${i}`;
+                    const isGenerating = generatingFrame === frameName || generatingGif;
+                    const isDone = !!frameImages[frameName];
                     return (
                       <button
-                        key={frame}
+                        key={frameName}
                         type="button"
-                        onClick={() => generateFrameImage(
-                          frame,
-                          frame === 'intermediario' ? frameImages.inicial :
-                          frame === 'final' ? frameImages.intermediario :
-                          undefined
-                        )}
+                        onClick={() => generateFrameImage(i, i > 0 ? frameImages[`frame_${i - 1}`] : undefined)}
                         disabled={generatingFrame !== null || generatingGif}
                         className={`text-[10px] font-bold px-3 py-2 rounded-lg border flex items-center gap-1 transition-colors cursor-pointer ${
                           isDone
@@ -669,7 +673,7 @@ export default function ResultPauta({
                         }`}
                       >
                         {isGenerating ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Image className="w-3 h-3" />}
-                        {isGenerating ? 'Gerando...' : isDone ? `↺ ${labels[frame]}` : labels[frame]}
+                        {isGenerating ? 'Gerando...' : isDone ? `↺ F${i + 1}` : `F${i + 1}`}
                       </button>
                     );
                   })}
@@ -711,29 +715,30 @@ export default function ResultPauta({
                   </div>
                 )}
 
-                {/* Download GIF animado — visível quando os 3 frames estiverem prontos */}
-                {frameImages.inicial && frameImages.intermediario && frameImages.final && (
+                {todosFramesProntos && (
                   <button
                     type="button"
                     onClick={downloadGifAnimado}
                     className="w-full py-2.5 rounded-xl font-bold text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Baixar GIF Animado (3 frames)
+                    Baixar GIF Animado ({framesGerados.length} frames)
                   </button>
                 )}
 
-                {Object.entries(frameImages).map(([frame, src]) => {
-                  const label = frame === 'inicial' ? 'F1 — Estado Fechado' : frame === 'intermediario' ? 'F2 — Ação' : 'F3 — Revelação';
+                {framesArray.map((_, i) => {
+                  const frameName = `frame_${i}`;
+                  const src = frameImages[frameName];
+                  if (!src) return null;
                   return (
-                    <div key={frame} className="flex flex-col gap-1 mt-1">
+                    <div key={frameName} className="flex flex-col gap-1 mt-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-[9px] uppercase font-bold text-slate-400">{label}</span>
+                        <span className="text-[9px] uppercase font-bold text-slate-400">F{i + 1}</span>
                         <button
                           type="button"
-                          onClick={() => downloadFrameComposto(frame, src as string)}
+                          onClick={() => downloadFrameComposto(frameName, src)}
                           className="text-[9px] font-bold flex items-center gap-0.5 text-indigo-500 hover:text-indigo-700 cursor-pointer"
-                          title="Baixar frame composto com headline e CTA"
+                          title="Baixar frame"
                         >
                           <Download className="w-2.5 h-2.5" />
                           ⬇ Download
@@ -741,7 +746,7 @@ export default function ResultPauta({
                       </div>
                       <img
                         src={src}
-                        alt={`Frame ${frame}`}
+                        alt={`Frame ${i + 1}`}
                         className="rounded-lg border border-slate-200 max-w-full"
                         style={{ aspectRatio: aspectRatio.replace(':', '/') }}
                       />

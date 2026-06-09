@@ -8,7 +8,7 @@ interface PreviewModalProps {
   pauta: PautaGerada;
   onClose: () => void;
   onUpdatePauta?: (updated: PautaGerada) => void;
-  frameImages: { inicial?: string; intermediario?: string; final?: string };
+  frameImages: Record<string, string>;
   onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
   aspectRatio: string;
   imageModel: string;
@@ -27,22 +27,27 @@ export default function PreviewModal({
 }: PreviewModalProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'edit'>('visual');
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [frameErrors, setFrameErrors] = useState<{ inicial?: string; intermediario?: string; final?: string }>({});
+  const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
   const autoGenStarted = useRef(false);
 
   const isApice = pauta.marca === 'Apice';
 
   const generateFrameImage = async (
-    frameName: 'inicial' | 'intermediario' | 'final',
+    frameIndex: number,
     referenceFrameUrl?: string,
   ): Promise<string | null> => {
     if (!pauta.visual) return null;
-    const descriptions: Record<string, string> = {
-      inicial: pauta.visual.frameInicial,
-      intermediario: pauta.visual.frameIntermediario,
-      final: pauta.visual.frameFinal,
-    };
+
+    const framesArray = pauta.visual.frames ?? [
+      pauta.visual.frameInicial ?? '',
+      pauta.visual.frameIntermediario ?? '',
+      pauta.visual.frameFinal ?? '',
+    ].filter(Boolean);
+
+    const frameDescription = framesArray[frameIndex] ?? '';
+    const frameName = `frame_${frameIndex}`;
+
     setGeneratingFrame(frameName);
     try {
       const response = await fetch('/api/generate-image', {
@@ -50,7 +55,9 @@ export default function PreviewModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           frameName,
-          frameDescription: descriptions[frameName],
+          frameIndex,
+          totalFrames: framesArray.length,
+          frameDescription,
           aspectRatio,
           marca: pauta.marca,
           pautaId: pauta.id,
@@ -91,9 +98,16 @@ export default function PreviewModal({
 
   const gerarTodosFrames = async () => {
     setFrameErrors({});
-    const urlF1 = await generateFrameImage('inicial', undefined);
-    const urlF2 = await generateFrameImage('intermediario', urlF1 ?? undefined);
-    await generateFrameImage('final', urlF2 ?? undefined);
+    const framesArray = pauta.visual?.frames ?? [
+      pauta.visual?.frameInicial ?? '',
+      pauta.visual?.frameIntermediario ?? '',
+      pauta.visual?.frameFinal ?? '',
+    ].filter(Boolean);
+
+    let previousUrl: string | undefined = undefined;
+    for (let i = 0; i < framesArray.length; i++) {
+      previousUrl = await generateFrameImage(i, previousUrl) ?? undefined;
+    }
   };
 
   useEffect(() => {
@@ -104,7 +118,12 @@ export default function PreviewModal({
   useEffect(() => {
     const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
     if (tipoEfetivo === 'texto') return;
-    const jaTemFrames = frameImages.inicial || frameImages.intermediario || frameImages.final;
+    const framesArray = pauta.visual?.frames ?? [
+      pauta.visual?.frameInicial,
+      pauta.visual?.frameIntermediario,
+      pauta.visual?.frameFinal,
+    ].filter(Boolean);
+    const jaTemFrames = framesArray.some((_, i) => !!frameImages[`frame_${i}`]);
     if (jaTemFrames) return;
     if (autoGenStarted.current) return;
     autoGenStarted.current = true;
@@ -112,7 +131,7 @@ export default function PreviewModal({
       gerarTodosFrames();
     }, 1000);
     return () => clearTimeout(timer);
-  }, [pauta.id, frameImages.inicial, frameImages.intermediario, frameImages.final]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pauta.id, JSON.stringify(Object.keys(frameImages))]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // State local para edição em tempo real
   const [editedCopy, setEditedCopy] = useState<PautaCopy>({ ...pauta.copy });
@@ -257,38 +276,42 @@ export default function PreviewModal({
               </span>
 
               {/* Loading enquanto gera os frames */}
-              {generatingFrame && !frameImages.inicial && (
+              {generatingFrame && Object.keys(frameImages).length === 0 && (
                 <div className="w-full rounded-2xl border border-slate-700 bg-slate-800 flex flex-col items-center justify-center py-12 mb-4 gap-3">
                   <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
                   <span className="text-sm text-slate-400 font-medium">
-                    Gerando frames do GIF... {generatingFrame === 'inicial' ? '1/3' : generatingFrame === 'intermediario' ? '2/3' : '3/3'}
+                    Gerando frames do GIF... ({generatingFrame})
                   </span>
                 </div>
               )}
 
               {/* Frame real do PiApp quando disponível */}
-              {(frameImages.inicial || frameImages.intermediario || frameImages.final) && (
-                <div className="relative w-full rounded-2xl overflow-hidden border border-slate-700 mb-4">
-                  <img
-                    src={frameImages.final ?? frameImages.intermediario ?? frameImages.inicial}
-                    alt="Frame gerado"
-                    className="w-full object-cover"
-                  />
-                  {generatingFrame && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-2xl">
-                      <span className="text-white text-sm font-bold animate-pulse">
-                        Gerando {generatingFrame === 'inicial' ? 'F1' : generatingFrame === 'intermediario' ? 'F2' : 'F3'}...
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
+              {Object.keys(frameImages).length > 0 && (() => {
+                const keys = Object.keys(frameImages).sort();
+                const lastSrc = frameImages[keys[keys.length - 1]];
+                return (
+                  <div className="relative w-full rounded-2xl overflow-hidden border border-slate-700 mb-4">
+                    <img
+                      src={lastSrc}
+                      alt="Frame gerado"
+                      className="w-full object-cover"
+                    />
+                    {generatingFrame && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-2xl">
+                        <span className="text-white text-sm font-bold animate-pulse">
+                          Gerando {generatingFrame}...
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Erro de geração */}
               {Object.keys(frameErrors).length > 0 && (
                 <div className="text-xs text-rose-400 bg-rose-900/20 border border-rose-800 rounded-xl px-3 py-2 mb-2 text-left">
                   {Object.entries(frameErrors).map(([f, err]) => (
-                    <p key={f}>{f === 'inicial' ? 'F1' : f === 'intermediario' ? 'F2' : 'F3'}: {err}</p>
+                    <p key={f}>{f}: {err}</p>
                   ))}
                 </div>
               )}

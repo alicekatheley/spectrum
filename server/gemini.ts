@@ -104,6 +104,10 @@ Parâmetros recebidos:
 Use o banco histórico da marca para priorizar os Hits históricos que performaram melhor para propor de forma calibrada.`;
   }
 
+  const qtdFrames = typeof (input as any).quantidadeFrames === 'number'
+    ? Math.min(Math.max((input as any).quantidadeFrames, 2), 20)
+    : 3;
+
   return `=== GERAÇÃO MODO B: BRIEFING ASSISTIDO ===${direcBlocoModoB}
 O CRM Manager já possui conceitos parciais de briefing. Sua função é COMPLETAR os boxes vazios e RESPEITAR LITERALMENTE os boxes preenchidos.
 
@@ -123,13 +127,13 @@ Boxes fornecidos pelo usuário:
 
 NOTA: O campo "estiloVisualTexto" existe mas é usado apenas pelo Canvas para compor o texto sobre a imagem — NÃO interfere no conteúdo criativo que você deve gerar. Ignore-o completamente nesta etapa.
 ${refImageData ? '\n=== IMAGEM DE REFERÊNCIA VISUAL ANEXADA ===\nO usuário enviou uma imagem de referência. Analise estilo visual, paleta, composição e mood. Use para enriquecer a descrição dos frames visuais adaptando ao DNA da marca.\n' : ''}
-=== REGRAS DOS FRAMES VISUAIS (frameInicial, frameIntermediario, frameFinal) ===
-Os 3 frames DEVEM descrever EXATAMENTE o objeto/mecânica que o usuário especificou no campo "Mecânica / Conceito do GIF".
-- NÃO troque o objeto por outro "mais interessante"
-- NÃO adicione personagens ou cenários não pedidos
-- Descreva o MESMO objeto evoluindo em 3 estados: fechado → ação → revelação
-- Cada descrição de frame deve ser específica: objeto + cor + estado + posição + fundo + atmosfera
-- Os 3 frames devem ser visualmente consistentes entre si (mesmo objeto, mesma paleta, mesmo estilo)
+=== REGRAS DOS FRAMES VISUAIS ===
+- Gere exatamente ${qtdFrames} frames para este GIF
+- Os frames devem ser visualmente consistentes: mesmo objeto, mesma paleta, mesmo estilo, mesmo fundo
+- Se o direcionamento descrever a lógica de cada frame, siga-a LITERALMENTE
+- Se o direcionamento for genérico ou vazio, crie uma progressão narrativa natural com ${qtdFrames} momentos distintos
+- Cada frame deve ser descrito individualmente com: objeto + cor + estado + posição + fundo + atmosfera
+- NÃO use obrigatoriamente a lógica fechado/ação/revelação — use a narrativa que fizer mais sentido para o conceito
 
 === BOX 4 — MECÂNICA ===
 - Se o usuário preencheu: use como base EXATA e apenas adicione detalhes de produção visual (cores, texturas, iluminação)
@@ -139,7 +143,7 @@ Os 3 frames DEVEM descrever EXATAMENTE o objeto/mecânica que o usuário especif
 Se algum box preenchido violar restrições técnicas (palavra proibida, caps-lock no assunto), corrija apenas o necessário, preserve a ideia central, e registre obrigatoriamente em "riscos".`;
 }
 
-function buildResponseSchema(aspectRatio: string, tipoGeracao: string) {
+function buildResponseSchema(aspectRatio: string, tipoGeracao: string, qtdFrames: number = 3) {
   const includeVisual = tipoGeracao !== 'texto';
 
   const visualSchema = {
@@ -160,13 +164,21 @@ function buildResponseSchema(aspectRatio: string, tipoGeracao: string) {
         required: ["nome", "cores"]
       },
       estiloIlustracao: { type: Type.STRING, description: "Descrição do estilo visual. Ex: Ilustrado 3D ou 2D orgânico com presença humana" },
-      frameInicial: { type: Type.STRING, description: "Aparência inicial instigante fechada do elemento" },
-      frameIntermediario: { type: Type.STRING, description: "Aparência intermediária (ação acontecendo)" },
-      frameFinal: { type: Type.STRING, description: "Revelação clara da recompensa" },
+      frames: {
+        type: Type.ARRAY,
+        description: `Array com exatamente ${qtdFrames} descrições de frames para o GIF. Cada item descreve um frame completo: objeto + estado + cor + posição + fundo + atmosfera.`,
+        items: { type: Type.STRING },
+        minItems: qtdFrames,
+        maxItems: qtdFrames,
+      },
+      quantidadeFrames: {
+        type: Type.NUMBER,
+        description: `Deve ser exatamente ${qtdFrames}`,
+      },
       posicaoCta: { type: Type.STRING, description: "Descrição de onde o botão CTA se posiciona" },
       tipografia: { type: Type.STRING, description: "Indicação estrita de fontes (Apice: Roca e Host Grotesk. Barbours: Sans-serif alto contraste)" }
     },
-    required: ["formato", "paletaRecomendada", "estiloIlustracao", "frameInicial", "frameIntermediario", "frameFinal", "posicaoCta", "tipografia"]
+    required: ["formato", "paletaRecomendada", "estiloIlustracao", "frames", "quantidadeFrames", "posicaoCta", "tipografia"]
   };
 
   const properties: Record<string, any> = {
@@ -281,7 +293,7 @@ Gere um formato JSON contendo um array de ideias de pautas (com o tamanho exato 
     config: {
       systemInstruction,
       responseMimeType: "application/json",
-      responseSchema: buildResponseSchema(aspectRatio, tipoGeracao),
+      responseSchema: buildResponseSchema(aspectRatio, tipoGeracao, modo === 'B' && typeof input.quantidadeFrames === 'number' ? Math.min(Math.max(input.quantidadeFrames, 2), 20) : 3),
     }
   });
 

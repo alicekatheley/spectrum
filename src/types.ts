@@ -45,6 +45,7 @@ export interface InputModoB {
   boxMecanicaOuEstatico: string;
   boxRecompensa: string;
   estiloVisualTexto?: string;
+  quantidadeFrames?: number;
 }
 
 export interface PautaCopy {
@@ -62,9 +63,11 @@ export interface PautaVisual {
     cores: string[]; // HEX codes
   };
   estiloIlustracao: string;
-  frameInicial: string;
-  frameIntermediario: string;
-  frameFinal: string;
+  frameInicial?: string;
+  frameIntermediario?: string;
+  frameFinal?: string;
+  frames?: string[];
+  quantidadeFrames?: number;
   posicaoCta: string;
   tipografia: string;
 }
