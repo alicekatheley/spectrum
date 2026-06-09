@@ -131,7 +131,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline, direcionamento,
+  headline, subheadline, cta, direcionamento,
 }: {
   frameName: string;
   frameDescription: string;
@@ -146,6 +146,7 @@ export function buildImagePrompt({
   lightVariant: string;
   headline?: string;
   subheadline?: string;
+  cta?: string;
   direcionamento?: string;
 }): string {
   const frameStateMap: Record<string, string> = {
@@ -206,8 +207,12 @@ FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
     `Palette — ${paletaCores}. Background: ${brandDna.backgrounds}.${prohibNote}`,
 
     // 3. Copy da campanha
-    headline ? `=== CAMPAIGN COPY (text overlaid — do NOT render text in image) === Headline: "${headline}"` : '',
-    subheadline ? `Sub-headline: "${subheadline}"` : '',
+    headline || subheadline
+      ? `=== CAMPAIGN COPY — RENDER THIS TEXT INSIDE THE IMAGE ===
+HEADLINE (top zone, large bold text): "${headline}"
+SUB-HEADLINE (below headline, smaller text): "${subheadline}"
+IMPORTANT: Render the text EXACTLY as written above — correct spelling, correct accents (ã, ç, é, etc.). Use a clean, bold, legible font. The headline must be large and prominent. The sub-headline must be smaller and readable.`
+      : '',
     recompensa ? `Reward/CTA: "${recompensa}"` : '',
     `Background and palette must harmonize with copy above — complement, never compete.`,
 
@@ -218,10 +223,14 @@ FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
     consistencyBlock,
 
     // 6. Zonas de texto
-    `TEXT ZONES: TOP 28% of frame = completely empty clean background for headline overlay. BOTTOM 18% = completely empty for CTA button. MIDDLE 54% = hero object only.`,
+    `LAYOUT ZONES:
+TOP ZONE (top 28%): Render the HEADLINE text here — large, bold, centered, high contrast against the background.
+MIDDLE ZONE (middle 54%): Hero object only — the main visual mechanic element.
+BOTTOM ZONE (bottom 18%): Render a CTA BUTTON here — pill-shaped or rounded rectangle, filled with the brand color, with the CTA text "${cta ?? 'ABRIR'}" in white bold uppercase centered inside the button. Button width ~50% of frame, vertically centered in this zone.
+SUB-HEADLINE: Place it between the headline and the hero object, smaller font, readable.`,
 
     // 7. Restrições finais
-    `No text, letters, numbers, symbols, watermarks anywhere in the image. Pure illustration asset. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
+    `RENDER ONLY the headline, sub-headline and CTA button text described above. No other text, watermarks or symbols anywhere else in the image. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
   ].filter(Boolean).join('\n\n');
 }
 

@@ -153,6 +153,7 @@ app.post("/api/generate-image", async (req, res) => {
       referenciaImagem: rawRefImage,
       headline,
       subheadline,
+      cta,
       referenceFrameUrl,
       direcionamento,
     } = req.body;
@@ -191,6 +192,7 @@ app.post("/api/generate-image", async (req, res) => {
       lightVariant,
       headline:         headline as string | undefined,
       subheadline:      subheadline as string | undefined,
+      cta:              cta as string | undefined,
       direcionamento:   typeof direcionamento === 'string' && direcionamento.trim() ? direcionamento.trim() : undefined,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);

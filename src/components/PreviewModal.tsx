@@ -62,6 +62,7 @@ export default function PreviewModal({
           referenciaImagem: referenciaImagem ?? undefined,
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
+          cta: pauta.copy.ctaBotao,
           referenceFrameUrl,
           direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
         }),
@@ -73,38 +74,7 @@ export default function PreviewModal({
       }
       const data = await response.json();
       if (data.imageBytes) {
-        const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
-        let finalDataUrl = rawDataUrl;
-        try {
-          // Parsear estilo visual se disponível
-          let estiloVisual = undefined;
-          const estiloTexto = (pauta as any).inputOriginal?.estiloVisualTexto;
-          if (estiloTexto) {
-            try {
-              const estiloRes = await fetch('/api/parse-estilo-visual', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ estiloVisualTexto: estiloTexto, marca: pauta.marca }),
-              });
-              estiloVisual = await estiloRes.json();
-            } catch {
-              console.warn('[parse-estilo-visual] Falha ao parsear estilo, usando defaults');
-            }
-          }
-
-          const { composeFrame } = await import('../utils/composeFrame');
-          const inputOriginal = (pauta as any).inputOriginal;
-          finalDataUrl = await composeFrame({
-            imageDataUrl: rawDataUrl,
-            headline: (inputOriginal?.headline || pauta.copy.headlineBanner) as string,
-            subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
-            cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
-            marca: pauta.marca as 'Apice' | 'Barbours',
-            estiloVisual,
-          });
-        } catch (composeErr) {
-          console.warn('[composeFrame] Falha na composição:', composeErr);
-        }
+        const finalDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
         onFrameGenerated(pauta.id, frameName, finalDataUrl);
         return finalDataUrl;
       } else {
