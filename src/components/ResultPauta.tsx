@@ -97,6 +97,7 @@ export default function ResultPauta({
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
           referenceFrameUrl,
+          direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
         }),
       });
       if (!response.ok) {

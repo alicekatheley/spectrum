@@ -131,7 +131,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline,
+  headline, subheadline, direcionamento,
 }: {
   frameName: string;
   frameDescription: string;
@@ -146,6 +146,7 @@ export function buildImagePrompt({
   lightVariant: string;
   headline?: string;
   subheadline?: string;
+  direcionamento?: string;
 }): string {
   const frameStateMap: Record<string, string> = {
     inicial:       'pristine and fully closed, perfectly sealed — pure anticipation, nothing revealed',
@@ -174,6 +175,9 @@ export function buildImagePrompt({
   const prohibNote = brandDna.prohibitedColors ? ` ${brandDna.prohibitedColors}` : '';
 
   return [
+    direcionamento
+      ? `=== DIRECT USER VISUAL DIRECTION (HIGHEST PRIORITY — follow literally) ===\n"${direcionamento}"\nThis is the exact visual the user wants. Follow every detail: colors, objects, style, composition, lighting. Do NOT deviate, interpret, or "improve". Execute literally.`
+      : '',
     `${styleDesc} illustration for a ${marca} luxury beauty email campaign banner.`,
     `Hero: ${mecanica ?? 'campaign mechanic object'}, ${frameState}. Scene: ${frameDescription}.${rewardPhrase}`,
     `Palette — ${paletaCores}. Background: ${brandDna.backgrounds}.${prohibNote}`,

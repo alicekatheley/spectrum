@@ -63,6 +63,7 @@ export default function PreviewModal({
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
           referenceFrameUrl,
+          direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
         }),
       });
       if (!response.ok) {
@@ -109,6 +110,11 @@ export default function PreviewModal({
   };
 
   useEffect(() => {
+    // Reset do ref quando muda de pauta
+    autoGenStarted.current = false;
+  }, [pauta.id]);
+
+  useEffect(() => {
     const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
     if (tipoEfetivo === 'texto') return;
     const jaTemFrames = frameImages.inicial || frameImages.intermediario || frameImages.final;
@@ -117,9 +123,9 @@ export default function PreviewModal({
     autoGenStarted.current = true;
     const timer = setTimeout(() => {
       gerarTodosFrames();
-    }, 800);
+    }, 1000);
     return () => clearTimeout(timer);
-  }, [pauta.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pauta.id, frameImages.inicial, frameImages.intermediario, frameImages.final]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // State local para edição em tempo real
   const [editedCopy, setEditedCopy] = useState<PautaCopy>({ ...pauta.copy });

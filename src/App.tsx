@@ -142,6 +142,7 @@ export default function App() {
             headline: inputB.boxHeadlineBanner || '',
             subheadline: inputB.boxSubtituloEmail || '',
             cta: inputB.boxCta || '',
+            direcionamento: direcionamentoIA || '',
           },
         }));
         const updated = [...pautasComInput, ...history];
