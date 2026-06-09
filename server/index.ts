@@ -78,9 +78,12 @@ app.post("/api/generate-pauta", async (req, res) => {
 
     const visualHitsBlock = buildVisualHitsBlock(marca);
 
+    const inputSemEstilo = { ...input };
+    delete (inputSemEstilo as any).estiloVisualTexto;
+
     let pautasProps = await generatePautaContent({
       modo,
-      input,
+      input: inputSemEstilo,
       marca,
       aspectRatio,
       tipoGeracao,

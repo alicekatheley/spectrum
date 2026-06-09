@@ -120,6 +120,8 @@ Boxes fornecidos pelo usuário:
 - Verbo do botão CTA (boxCta): "${input.boxCta || 'VAZIO — gere você com verbo único no imperativo'}"
 - Mecânica / Conceito do GIF (boxMecanicaOuEstatico): "${input.boxMecanicaOuEstatico || 'VAZIO — invente uma mecânica original'}"
 - Recompensa central (boxRecompensa): "${input.boxRecompensa || 'VAZIO — gere você baseado no histórico da marca'}"
+
+NOTA: O campo "estiloVisualTexto" existe mas é usado apenas pelo Canvas para compor o texto sobre a imagem — NÃO interfere no conteúdo criativo que você deve gerar. Ignore-o completamente nesta etapa.
 ${refImageData ? '\n=== IMAGEM DE REFERÊNCIA VISUAL ANEXADA ===\nO usuário enviou uma imagem de referência. Analise estilo visual, paleta, composição e mood. Use para enriquecer a descrição dos frames visuais adaptando ao DNA da marca.\n' : ''}
 === REGRAS DOS FRAMES VISUAIS (frameInicial, frameIntermediario, frameFinal) ===
 Os 3 frames DEVEM descrever EXATAMENTE o objeto/mecânica que o usuário especificou no campo "Mecânica / Conceito do GIF".
