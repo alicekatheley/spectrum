@@ -87,6 +87,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
   const [estiloDesign, setEstiloDesign] = useState(preload?.estiloDesign ?? '');
   const [fonteDropdownOpen, setFonteDropdownOpen] = useState(false);
+  const [customW, setCustomW] = useState('');
+  const [customH, setCustomH] = useState('');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -113,6 +115,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       estiloBotaoEscolhido,
       corTextoPrincipal,
       estiloDesign,
+      aspectRatio: customW && customH ? `custom_${customW}x${customH}` : aspectRatio,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
     } as any);
   };
@@ -130,6 +133,29 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   };
 
   const isAssuntoViolandoTermos = containsProhibitedTerm(boxTituloEmail);
+
+  const getAspectRatioWarning = () => {
+    if (!customW || !customH) return null;
+    const w = parseInt(customW);
+    const h = parseInt(customH);
+    if (!w || !h) return null;
+    const ratio = w / h;
+    const standards = [
+      { ratio: 1,     name: '1:1',  tolerance: 0.05 },
+      { ratio: 0.75,  name: '3:4',  tolerance: 0.05 },
+      { ratio: 1.333, name: '4:3',  tolerance: 0.05 },
+      { ratio: 1.778, name: '16:9', tolerance: 0.08 },
+      { ratio: 0.563, name: '9:16', tolerance: 0.05 },
+    ];
+    const closest = standards.reduce((prev, curr) =>
+      Math.abs(curr.ratio - ratio) < Math.abs(prev.ratio - ratio) ? curr : prev
+    );
+    const diff = Math.abs(closest.ratio - ratio);
+    if (diff <= closest.tolerance) return { type: 'ok', message: `✓ Proporção próxima de ${closest.name} — sem distorção` };
+    if (diff <= 0.15) return { type: 'warn', message: `⚠️ Leve distorção possível em relação a ${closest.name}` };
+    return { type: 'error', message: `⚠️ Proporção muito diferente do padrão — imagem pode distorcer. Sugestão: ${closest.ratio < 1 ? Math.round(h * closest.ratio) + '×' + h : w + '×' + Math.round(w / closest.ratio)}px` };
+  };
+  const aspectWarning = getAspectRatioWarning();
 
   return (
     <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-6 shadow-md border border-slate-100 flex flex-col gap-6">
@@ -616,6 +642,56 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
         onChange={onAspectRatioChange}
         brand={brand}
       />
+
+      <div className="flex flex-col gap-2 mt-2">
+        <span className="text-xs font-semibold text-slate-600">
+          Ou defina em pixels:
+        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="number"
+            min={100}
+            max={4000}
+            value={customW}
+            onChange={(e) => setCustomW(e.target.value)}
+            placeholder="Largura"
+            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
+          />
+          <span className="text-slate-400 font-bold">×</span>
+          <input
+            type="number"
+            min={100}
+            max={4000}
+            value={customH}
+            onChange={(e) => setCustomH(e.target.value)}
+            placeholder="Altura"
+            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
+          />
+          <span className="text-xs text-slate-400">px</span>
+          {customW && customH && (
+            <button
+              type="button"
+              onClick={() => { setCustomW(''); setCustomH(''); }}
+              className="text-xs text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
+            >
+              ✕ Limpar
+            </button>
+          )}
+        </div>
+        {aspectWarning && (
+          <p className={`text-[11px] font-medium ${
+            aspectWarning.type === 'ok'   ? 'text-emerald-600' :
+            aspectWarning.type === 'warn' ? 'text-amber-500' : 'text-rose-500'
+          }`}>
+            {aspectWarning.message}
+          </p>
+        )}
+        {customW && customH && (
+          <span className="text-[10px] text-emerald-600 font-semibold">
+            ✓ Usando {customW}×{customH}px — proporções padrão ignoradas
+          </span>
+        )}
+      </div>
 
       {tipoGeracao !== 'texto' && (
         <ImageModelSelector
