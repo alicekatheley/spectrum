@@ -183,9 +183,9 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         return lines;
       };
 
-      // ZONA DE TEXTO SEGURA: máximo 30% do topo (0 a 240px em 800x800)
-      const TEXT_ZONE_MAX_H = SIZE * 0.30;
-      const TEXT_ZONE_TOP = SIZE * 0.035;
+      // ZONA DE TEXTO SEGURA: máximo 38% do topo (0 a 304px em 800x800)
+      const TEXT_ZONE_MAX_H = SIZE * 0.38;
+      const TEXT_ZONE_TOP = SIZE * 0.04;
       const maxW = SIZE * 0.88;
 
       // Calcular tamanhos que cabem juntos na zona
