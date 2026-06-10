@@ -123,42 +123,37 @@ export default function ResultPauta({
 
           // Montar estiloVisual diretamente dos campos — sem depender do parse por IA
           const fonteEscolhida = inputOriginal?.fonteEscolhida || '';
-          const estiloVisual = fonteEscolhida || inputOriginal?.estiloVisualTexto
-            ? await (async () => {
-                if (fonteEscolhida) {
-                  return {
-                    familiaFonte: fonteEscolhida,
-                    corTexto: inputOriginal?.corTextoPrincipal || '#FFFFFF',
-                    estiloBotao: (inputOriginal?.estiloBotaoEscolhido || 'pill') as 'pill' | 'retangular' | 'outline',
-                    corBotao: pauta.marca === 'Apice' ? '#688D65' : '#BF0F26',
-                    corTextoBotao: '#FFFFFF',
-                  };
-                }
-                const estiloTexto = inputOriginal?.estiloVisualTexto;
-                const direcionamento = inputOriginal?.direcionamento;
-                const textoParaParse = estiloTexto || direcionamento;
+          const estiloTexto = inputOriginal?.estiloVisualTexto;
+          const direcionamento = inputOriginal?.direcionamento;
+          const textoParaParse = estiloTexto || direcionamento;
 
-                if (textoParaParse) {
-                  try {
-                    const estiloRes = await fetch('/api/parse-estilo-visual', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        estiloVisualTexto: textoParaParse,
-                        marca: pauta.marca,
-                      }),
-                    });
-                    const result = await estiloRes.json();
-                    console.log('[parse-estilo-visual] Estilo aplicado:', result);
-                    return result;
-                  } catch {
-                    console.warn('[parse-estilo-visual] Falha, usando defaults');
-                    return undefined;
-                  }
-                }
-                return undefined;
-              })()
-            : undefined;
+          let estiloVisual: any = undefined;
+
+          if (textoParaParse) {
+            try {
+              const estiloRes = await fetch('/api/parse-estilo-visual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  estiloVisualTexto: textoParaParse,
+                  marca: pauta.marca,
+                }),
+              });
+              estiloVisual = await estiloRes.json();
+              console.log('[parse-estilo-visual] Estilo extraído:', estiloVisual);
+            } catch {
+              console.warn('[parse-estilo-visual] Falha, usando defaults');
+            }
+          }
+
+          if (fonteEscolhida) {
+            estiloVisual = {
+              ...estiloVisual,
+              familiaFonte: fonteEscolhida,
+              corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
+              estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
+            };
+          }
 
           finalDataUrl = await composeFrame({
             imageDataUrl: rawDataUrl,
