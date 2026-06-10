@@ -27,7 +27,23 @@ const GOOGLE_FONTS_MAP: Record<string, string> = {
   'raleway': 'Raleway',
   'oswald': 'Oswald',
   'merriweather': 'Merriweather',
+  'nunito sans': 'Nunito+Sans',
   'nunito': 'Nunito',
+  'open sans': 'Open+Sans',
+  'open': 'Open+Sans',
+  'source sans': 'Source+Sans+3',
+  'ubuntu': 'Ubuntu',
+  'exo': 'Exo+2',
+  'exo 2': 'Exo+2',
+  'rubik': 'Rubik',
+  'karla': 'Karla',
+  'manrope': 'Manrope',
+  'outfit': 'Outfit',
+  'space grotesk': 'Space+Grotesk',
+  'dm sans': 'DM+Sans',
+  'figtree': 'Figtree',
+  'plus jakarta sans': 'Plus+Jakarta+Sans',
+  'jakarta': 'Plus+Jakarta+Sans',
   'poppins': 'Poppins',
   'dancing script': 'Dancing+Script',
   'lobster': 'Lobster',
@@ -108,6 +124,15 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
   const familiaFonte = await loadFont(familiaFonteRaw, pesoFonte);
   const familiaFonteSub = await loadFont(familiaFonteSubRaw, '600');
 
+  console.log('[composeFrame] Estilo aplicado:', {
+    familiaFonte: familiaFonteRaw,
+    familiaFonteResolvida: familiaFonte,
+    corTexto,
+    estiloBotao,
+    corBotao,
+    tamanhoHeadline: ev.tamanhoHeadline,
+  });
+
   const headlineSizeBase =
     ev.tamanhoHeadline === 'pequeno' ? 52 :
     ev.tamanhoHeadline === 'medio'   ? 62 : 72;
@@ -158,6 +183,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         return lines;
       };
 
+      // ZONA DE TEXTO: topo 32% da imagem (0 a 256px em 800x800)
+      const TEXT_ZONE_BOTTOM = SIZE * 0.32;
+      const TEXT_ZONE_TOP = SIZE * 0.03;
+      const TEXT_ZONE_H = TEXT_ZONE_BOTTOM - TEXT_ZONE_TOP;
+
       // 4. Headline
       ctx.textAlign = 'center';
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
@@ -165,18 +195,39 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       ctx.fillStyle = corTexto;
 
       const maxW = SIZE * 0.88;
+
+      // Calcular tamanho máximo que cabe na zona de texto
       let hSize = headlineSizeBase;
       let hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
-      while (hLines.length > 2 && hSize > 36) {
+      while (hLines.length > 2 && hSize > 32) {
         hSize -= 3;
         hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
       }
 
-      const hLineH = hSize * 1.22;
+      const hLineH = hSize * 1.2;
       const hBlockH = hLines.length * hLineH;
-      const topCenter = SIZE * 0.16;
-      let hY = topCenter - hBlockH / 2 + hSize;
 
+      // Calcular tamanho do sub-headline
+      let sSize = Math.min(32, Math.round(hSize * 0.48));
+      let sLines = wrap(subheadline, maxW * 0.88, `600 ${sSize}px ${familiaFonteSub}`);
+      while (sLines.length > 2 && sSize > 18) {
+        sSize -= 2;
+        sLines = wrap(subheadline, maxW * 0.88, `600 ${sSize}px ${familiaFonteSub}`);
+      }
+      const sLineH = sSize * 1.28;
+      const sBlockH = sLines.length * sLineH;
+
+      // Espaçamento entre headline e sub
+      const gap = SIZE * 0.015;
+
+      // Total de altura do bloco de texto
+      const totalTextH = hBlockH + gap + sBlockH;
+
+      // Centralizar verticalmente dentro da zona de texto
+      const textStartY = TEXT_ZONE_TOP + (TEXT_ZONE_H - totalTextH) / 2;
+
+      // Desenhar headline
+      let hY = textStartY + hSize;
       hLines.forEach(line => {
         ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
         ctx.fillText(line, SIZE / 2, hY);
@@ -186,15 +237,7 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // 5. Sub-headline
       ctx.shadowBlur = 6;
       ctx.fillStyle = corSubheadline;
-      let sSize = 34;
-      let sLines = wrap(subheadline, maxW * 0.88, `600 ${sSize}px ${familiaFonteSub}`);
-      while (sLines.length > 2 && sSize > 20) {
-        sSize -= 2;
-        sLines = wrap(subheadline, maxW * 0.88, `600 ${sSize}px ${familiaFonteSub}`);
-      }
-
-      const sLineH = sSize * 1.3;
-      let sY = hY + SIZE * 0.018;
+      let sY = hY + gap + sSize * 0.85;
       sLines.forEach(line => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
         ctx.fillText(line, SIZE / 2, sY);
