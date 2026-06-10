@@ -214,8 +214,6 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
 
       const hLineH = hSize * 1.2;
       const sLineH = sSize * 1.28;
-      const gap = SIZE * 0.010;
-
       // 4. Headline
       ctx.textAlign = 'center';
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
@@ -229,10 +227,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         hY += hLineH;
       });
 
-      // 5. Sub-headline — logo abaixo do headline
+      // 5. Sub-headline — colado imediatamente abaixo do headline
       ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
-      let sY = hY + gap + sSize * 0.9;
+      const gap = 6; // 6px fixos — quase colado
+      let sY = hY + gap + sSize;
       sLines.forEach(line => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
         ctx.fillText(line, SIZE / 2, sY);
