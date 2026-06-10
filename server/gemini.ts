@@ -166,10 +166,8 @@ function buildResponseSchema(aspectRatio: string, tipoGeracao: string, qtdFrames
       estiloIlustracao: { type: Type.STRING, description: "Descrição do estilo visual. Ex: Ilustrado 3D ou 2D orgânico com presença humana" },
       frames: {
         type: Type.ARRAY,
-        description: `Array com exatamente ${qtdFrames} descrições de frames para o GIF. Cada item descreve um frame completo: objeto + estado + cor + posição + fundo + atmosfera.`,
+        description: `Array com EXATAMENTE ${qtdFrames} descrições de frames para o GIF — nem mais, nem menos. Cada item descreve um frame completo: objeto + estado + cor + posição + fundo + atmosfera.`,
         items: { type: Type.STRING },
-        minItems: qtdFrames,
-        maxItems: qtdFrames,
       },
       quantidadeFrames: {
         type: Type.NUMBER,
