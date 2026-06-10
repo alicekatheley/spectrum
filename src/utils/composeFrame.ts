@@ -183,55 +183,48 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         return lines;
       };
 
-      // ZONA DE TEXTO SEGURA: máximo 38% do topo (0 a 304px em 800x800)
-      const TEXT_ZONE_MAX_H = SIZE * 0.38;
-      const TEXT_ZONE_TOP = SIZE * 0.04;
+      // ZONA DE TEXTO: headline + sub agrupados no topo, máximo 38%
+      const ZONA_MAX_PX = SIZE * 0.38; // 304px — espaço generoso acima do elemento visual
+      const ZONA_TOP_PX = SIZE * 0.035; // começa a 28px do topo
       const maxW = SIZE * 0.88;
 
-      // Calcular tamanhos que cabem juntos na zona
+      // Calcular tamanhos que cabem juntos na zona de 38%
       let hSize = headlineSizeBase;
       let sSize = Math.round(hSize * 0.46);
-
       let hLines: string[] = [];
       let sLines: string[] = [];
 
-      // Reduzir até tudo caber em 30%
       for (let attempt = 0; attempt < 20; attempt++) {
         hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
         sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
-
-        const hBlockH = hLines.length * (hSize * 1.2);
-        const sBlockH = sLines.length * (sSize * 1.28);
-        const gap = SIZE * 0.010;
-        const totalH = hBlockH + gap + sBlockH;
-
-        if (totalH <= TEXT_ZONE_MAX_H) break;
-
-        // Reduzir proporcionalmente
-        hSize = Math.max(hSize - 3, 28);
-        sSize = Math.max(Math.round(hSize * 0.46), 16);
+        const hBlockH = hLines.length * (hSize * 1.18);
+        const sBlockH = sLines.length * (sSize * 1.25);
+        const totalH = hBlockH + 6 + sBlockH;
+        if (ZONA_TOP_PX + totalH <= ZONA_MAX_PX) break;
+        hSize = Math.max(hSize - 3, 24);
+        sSize = Math.max(Math.round(hSize * 0.46), 14);
       }
 
-      const hLineH = hSize * 1.2;
-      const sLineH = sSize * 1.28;
-      // 4. Headline
+      const hLineH = hSize * 1.18;
+      const sLineH = sSize * 1.25;
+
+      // 4. Headline — começa no topo da zona
       ctx.textAlign = 'center';
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
       ctx.shadowBlur = 14;
       ctx.fillStyle = corTexto;
 
-      let hY = TEXT_ZONE_TOP + hSize;
+      let hY = ZONA_TOP_PX + hSize;
       hLines.forEach(line => {
         ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
         ctx.fillText(line, SIZE / 2, hY);
         hY += hLineH;
       });
 
-      // 5. Sub-headline — colado imediatamente abaixo do headline
+      // 5. Sub-headline — 6px fixos abaixo do headline, sem exceção
       ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
-      const gap = 6; // 6px fixos — quase colado
-      let sY = hY + gap + sSize;
+      let sY = hY + 6 + sSize;
       sLines.forEach(line => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
         ctx.fillText(line, SIZE / 2, sY);
