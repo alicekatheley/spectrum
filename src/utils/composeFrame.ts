@@ -199,7 +199,7 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
         const hBlockH = hLines.length * (hSize * 1.18);
         const sBlockH = sLines.length * (sSize * 1.25);
-        const totalH = hBlockH + 6 + sBlockH;
+        const totalH = hBlockH + 12 + sBlockH;
         if (ZONA_TOP_PX + totalH <= ZONA_MAX_PX) break;
         hSize = Math.max(hSize - 3, 24);
         sSize = Math.max(Math.round(hSize * 0.46), 14);
@@ -224,7 +224,7 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // 5. Sub-headline — 6px abaixo da ÚLTIMA linha do headline
       ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
-      let sY = hY + 6 + sSize;
+      let sY = hY + 12 + sSize;
       sLines.forEach(line => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
         ctx.fillText(line, SIZE / 2, sY);

@@ -550,16 +550,19 @@ Marca: ${marca}
 Cor padrão da marca Apice: #688D65 (verde)
 Cor padrão da marca Barbours: #BF0F26 (vermelho)
 
+IMPORTANTE: O usuário pode mencionar a cor do botão de forma natural (ex: 'botão preto', 'CTA button black', 'black rectangular CTA button'). Extraia a cor exata em hex. Se não mencionar cor do botão, use a cor padrão da marca.
+
 Retorne EXATAMENTE este JSON (sem backticks, sem markdown):
 {
   "corTexto": "cor hex do texto principal/headline",
-  "corSubheadline": "cor hex ou rgba do sub-headline (pode ter opacidade)",
-  "estiloBotao": "pill" ou "retangular" ou "outline",
-  "corBotao": "cor hex do fundo do botão",
-  "corTextoBotao": "cor hex do texto dentro do botão",
-  "tamanhoHeadline": "grande" ou "medio" ou "pequeno",
-  "pesoFonte": "400" ou "600" ou "700" ou "900",
-  "familiaFonte": "fonte CSS válida (ex: Georgia, serif ou Arial, sans-serif ou 'Playfair Display', serif)"
+  "corSubheadline": "cor hex ou rgba do sub-headline",
+  "estiloBotao": "pill ou retangular ou outline",
+  "corBotao": "cor hex do fundo do botão — se o usuário mencionar 'preto' use #000000, 'branco' use #FFFFFF, 'vermelho' use #BF0F26, 'verde' use #1A8A4A, etc.",
+  "corTextoBotao": "cor hex do texto dentro do botão — contraste com corBotao",
+  "tamanhoHeadline": "grande ou medio ou pequeno",
+  "pesoFonte": "400 ou 600 ou 700 ou 900",
+  "familiaFonte": "fonte CSS válida",
+  "familiaFonteSubheadline": "fonte CSS válida para sub-headline"
 }
 
 Se o usuário não mencionar um campo, use o valor padrão mais adequado para um banner de email marketing de marca de beleza.`;
