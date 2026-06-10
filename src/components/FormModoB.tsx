@@ -54,6 +54,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [fonteEscolhida, setFonteEscolhida] = useState(preload?.fonteEscolhida ?? '');
   const [estiloBotaoEscolhido, setEstiloBotaoEscolhido] = useState(preload?.estiloBotaoEscolhido ?? 'pill');
   const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
+  const [estiloDesign, setEstiloDesign] = useState(preload?.estiloDesign ?? '');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -79,6 +80,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       fonteEscolhida,
       estiloBotaoEscolhido,
       corTextoPrincipal,
+      estiloDesign,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
     } as any);
   };
@@ -371,6 +373,41 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           />
         </div>
       </div>
+
+      {tipoGeracao !== 'texto' && (
+        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-3">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Estilo de Design da Imagem
+          </span>
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { value: '', label: 'Padrão' },
+              { value: '3D Realista', label: '3D Realista' },
+              { value: '3D Cartoon', label: '3D Cartoon' },
+              { value: '2D Cartoon', label: '2D Cartoon' },
+              { value: 'Fotográfico', label: 'Fotográfico' },
+              { value: 'Ilustrado', label: 'Ilustrado' },
+              { value: 'Minimalista', label: 'Minimalista' },
+              { value: 'Aquarela', label: 'Aquarela' },
+              { value: 'Neon/Bold', label: 'Neon/Bold' },
+            ].map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setEstiloDesign(value)}
+                className={`py-2 px-1 rounded-lg text-xs font-semibold border transition-all ${
+                  estiloDesign === value
+                    ? 'border-transparent text-white'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-slate-400'
+                }`}
+                style={estiloDesign === value ? { backgroundColor: brandColor } : {}}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tipoGeracao !== 'texto' && (
         <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-4">

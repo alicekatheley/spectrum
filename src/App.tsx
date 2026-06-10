@@ -147,6 +147,7 @@ export default function App() {
             fonteEscolhida: (inputB as any).fonteEscolhida || '',
             estiloBotaoEscolhido: (inputB as any).estiloBotaoEscolhido || 'pill',
             corTextoPrincipal: (inputB as any).corTextoPrincipal || '#FFFFFF',
+            estiloDesign: (inputB as any).estiloDesign || '',
           },
         }));
         const updated = [...pautasComInput, ...history];

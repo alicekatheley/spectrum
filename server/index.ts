@@ -80,6 +80,7 @@ app.post("/api/generate-pauta", async (req, res) => {
 
     const inputSemEstilo = { ...input };
     delete (inputSemEstilo as any).estiloVisualTexto;
+    const estiloDesignUsuario = (input as any).estiloDesign || '';
 
     let pautasProps = await generatePautaContent({
       modo,
@@ -93,6 +94,7 @@ app.post("/api/generate-pauta", async (req, res) => {
       visualHitsBlock,
       crmAiEstilos: getCrmAiEstilos(),
       mecanicasCatalog: getMecanicasCatalog(),
+      estiloIlustracao: estiloDesignUsuario ? resolveEstiloDesign(estiloDesignUsuario) : undefined,
     });
 
     pautasProps = pautasProps.map((p: any, index: number) => {
@@ -183,6 +185,20 @@ Extract:
   }
 });
 
+function resolveEstiloDesign(estilo: string): string {
+  const map: Record<string, string> = {
+    '3D Realista': 'photorealistic 3D render, soft studio lighting, high detail, cinematic quality',
+    '3D Cartoon': '3D cartoon render, smooth surfaces, vibrant colors, playful and friendly style',
+    '2D Cartoon': '2D flat cartoon illustration, bold outlines, clean shapes, bright palette',
+    'Fotográfico': 'professional product photography, natural lighting, clean background, editorial style',
+    'Ilustrado': 'hand-crafted editorial illustration, artistic brush strokes, warm and expressive style',
+    'Minimalista': 'minimalist design, clean white space, simple geometric shapes, elegant composition',
+    'Aquarela': 'soft watercolor painting style, translucent washes, delicate textures, artistic feel',
+    'Neon/Bold': 'bold neon colors, high contrast, electric glow effects, energetic and vibrant style',
+  };
+  return map[estilo] ?? estilo;
+}
+
 app.post("/api/generate-image", async (req, res) => {
   try {
     if (!PIAPP_API_KEY) {
@@ -198,6 +214,7 @@ app.post("/api/generate-image", async (req, res) => {
       styleIndex: rawStyleIndex,
       imageModel: rawModel,
       estiloIlustracao,
+      estiloDesignUsuario,
       paleta,
       mecanica,
       recompensa,
@@ -279,7 +296,7 @@ Extract:
       frameDescription: frameDescription as string,
       marca:            marca as string,
       brandDna,
-      estiloIlustracao: estiloIlustracao as string | undefined,
+      estiloIlustracao: estiloDesignUsuario ? resolveEstiloDesign(estiloDesignUsuario as string) : estiloIlustracao as string | undefined,
       paleta:           paleta as { cores?: string[] } | undefined,
       mecanica:         mecanica as string | undefined,
       recompensa:       recompensa as string | undefined,

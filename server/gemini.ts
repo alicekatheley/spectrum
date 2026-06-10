@@ -81,6 +81,7 @@ function buildPromptModo(
   refImageData: { mimeType: string; data: string } | null,
   mecanicasCatalog: string[],
   aspectRatio: string,
+  estiloIlustracao?: string,
 ): string {
   const direcBlocoModoA = direcStr
     ? `\n\n=== ⚠️ INSTRUÇÃO DIRETA DO USUÁRIO — PRIORIDADE MÁXIMA, ACIMA DE TUDO ===\n"${direcStr}"\n\nEsta instrução tem PRIORIDADE ABSOLUTA sobre qualquer padrão do histórico, regra do Playbook ou preferência de marca. Siga-a literalmente. Se ela conflitar com o histórico de Hits, ignore o histórico e siga a instrução. Se ela conflitar com padrões visuais da marca, siga a instrução e registre o conflito em "riscos". O usuário sabe o que quer — sua função é executar, não reinterpretar.\n`
@@ -140,7 +141,7 @@ ${refImageData ? '\n=== IMAGEM DE REFERÊNCIA VISUAL ANEXADA ===\nO usuário env
 - Se o usuário deixou vazio: invente uma mecânica original que funcione como GIF de 3 frames
 - Mecânicas no catálogo (referência, não limitante): ${mecanicasCatalog.join(', ')}
 
-Se algum box preenchido violar restrições técnicas (palavra proibida, caps-lock no assunto), corrija apenas o necessário, preserve a ideia central, e registre obrigatoriamente em "riscos".`;
+Se algum box preenchido violar restrições técnicas (palavra proibida, caps-lock no assunto), corrija apenas o necessário, preserve a ideia central, e registre obrigatoriamente em "riscos".${estiloIlustracao ? `\n\n=== ESTILO DE DESIGN SELECIONADO PELO USUÁRIO (OBRIGATÓRIO) ===\n"${estiloIlustracao}"\nEste estilo DEVE ser usado nos frames visuais. O campo estiloIlustracao no JSON de resposta DEVE ser exatamente: "${estiloIlustracao}"\n` : ''}`;
 }
 
 function buildResponseSchema(aspectRatio: string, tipoGeracao: string, qtdFrames: number = 3) {
@@ -264,15 +265,16 @@ export async function generatePautaContent(params: {
   visualHitsBlock: string;
   crmAiEstilos: string[];
   mecanicasCatalog: string[];
+  estiloIlustracao?: string;
 }): Promise<any[]> {
-  const { modo, input, marca, aspectRatio, tipoGeracao, direcStr, refImageData, databaseDisparos, visualHitsBlock, crmAiEstilos, mecanicasCatalog } = params;
+  const { modo, input, marca, aspectRatio, tipoGeracao, direcStr, refImageData, databaseDisparos, visualHitsBlock, crmAiEstilos, mecanicasCatalog, estiloIlustracao } = params;
 
   const contextDb = databaseDisparos.filter((d: any) => d.marca === marca);
   const dbFormatted = JSON.stringify(contextDb, null, 2);
 
   const playbookMarca = buildPlaybook(marca);
   const systemInstruction = buildSystemInstruction(marca, aspectRatio, crmAiEstilos, visualHitsBlock, playbookMarca, tipoGeracao);
-  const promptModo = buildPromptModo(modo, input, marca, direcStr, refImageData, mecanicasCatalog, aspectRatio);
+  const promptModo = buildPromptModo(modo, input, marca, direcStr, refImageData, mecanicasCatalog, aspectRatio, estiloIlustracao);
 
   const instructionsPrompt = `${promptModo}
 

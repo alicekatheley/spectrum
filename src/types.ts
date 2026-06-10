@@ -49,6 +49,7 @@ export interface InputModoB {
   estiloBotaoEscolhido?: string;
   corTextoPrincipal?: string;
   quantidadeFrames?: number;
+  estiloDesign?: string;
 }
 
 export interface PautaCopy {
