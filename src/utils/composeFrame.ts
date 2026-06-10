@@ -215,13 +215,13 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       ctx.fillStyle = corTexto;
 
       let hY = ZONA_TOP_PX + hSize;
-      hLines.forEach(line => {
+      hLines.forEach((line, i) => {
         ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
         ctx.fillText(line, SIZE / 2, hY);
-        hY += hLineH;
+        if (i < hLines.length - 1) hY += hLineH;
       });
 
-      // 5. Sub-headline — 6px fixos abaixo do headline, sem exceção
+      // 5. Sub-headline — 6px abaixo da ÚLTIMA linha do headline
       ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
       let sY = hY + 6 + sSize;
