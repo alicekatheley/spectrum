@@ -690,7 +690,15 @@ export default function BannerSimulador({
 }: BannerSimuladorProps) {
   const isApice = brand === 'Apice';
   const [activeFrame, setActiveFrame] = useState<FrameType>('inicial');
+  const [activeFrameIndex, setActiveFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  const realFrameCount = frameImages
+    ? Object.keys(frameImages).filter(k => k.startsWith('frame_')).length
+    : 0;
+
+  const indexToFrameType = (i: number): FrameType =>
+    i === 0 ? 'inicial' : i === 1 ? 'intermediario' : 'final';
 
   const primaryColor = paleta?.cores?.[0] || (isApice ? '#688D65' : '#BF0F26');
   const accentColor  = paleta?.cores?.[1] || (isApice ? '#D553A5' : '#AA834B');
@@ -700,12 +708,17 @@ export default function BannerSimulador({
   useEffect(() => {
     let iv: NodeJS.Timeout;
     if (isPlaying) {
+      const totalFrames = realFrameCount > 0 ? realFrameCount : 3;
       iv = setInterval(() => {
-        setActiveFrame(p => p === 'inicial' ? 'intermediario' : p === 'intermediario' ? 'final' : 'inicial');
-      }, 2200);
+        setActiveFrameIndex(prev => {
+          const next = (prev + 1) % totalFrames;
+          setActiveFrame(indexToFrameType(next));
+          return next;
+        });
+      }, 700);
     }
     return () => clearInterval(iv);
-  }, [isPlaying]);
+  }, [isPlaying, realFrameCount]);
 
   const bannerBg = getBannerBg(mecanica, primaryColor, accentColor, estilo);
 
@@ -811,10 +824,10 @@ export default function BannerSimulador({
 
             {/* Central mechanic element */}
             <div className="flex-1 w-full flex items-center justify-center relative my-1 z-10">
-              {(frameImages?.[`frame_${['inicial','intermediario','final'].indexOf(activeFrame)}`] ?? frameImages?.[activeFrame])
+              {(frameImages?.[`frame_${activeFrameIndex}`] ?? frameImages?.['frame_0'])
                 ? (
                   <img
-                    src={frameImages[`frame_${['inicial','intermediario','final'].indexOf(activeFrame)}`] ?? frameImages[activeFrame]!}
+                    src={(frameImages?.[`frame_${activeFrameIndex}`] ?? frameImages?.['frame_0'])!}
                     alt={`Frame ${activeFrame}`}
                     style={{
                       width: '100%',
@@ -903,15 +916,29 @@ export default function BannerSimulador({
       {/* Frame controls */}
       <div className="flex flex-col sm:flex-row justify-between items-center bg-slate-900 p-3 rounded-2xl border border-slate-800 gap-3 max-w-[430px] mx-auto w-full">
         <div className="flex gap-1">
-          {(['inicial', 'intermediario', 'final'] as const).map((f, i) => (
-            <button key={f}
-              onClick={() => { setActiveFrame(f); setIsPlaying(false); }}
-              className={`px-3 py-1.5 text-[10px] uppercase font-extrabold tracking-wider rounded-lg transition-all cursor-pointer ${
-                activeFrame === f
-                  ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-              }`}>
-              {['F1: Fechado', 'F2: Ação', 'F3: Revelação'][i]}
+          {(realFrameCount > 0
+            ? Array.from({ length: realFrameCount }, (_, i) => i)
+            : [0, 1, 2]
+          ).map(i => (
+            <button
+              key={i}
+              onClick={() => {
+                setActiveFrameIndex(i);
+                setActiveFrame(indexToFrameType(i));
+                setIsPlaying(false);
+              }}
+              className={`flex-1 flex flex-col items-center py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                activeFrameIndex === i
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              <span>F{i + 1}</span>
+              {realFrameCount === 0 && (
+                <span className="text-[8px] opacity-70">
+                  {i === 0 ? 'FECHADO' : i === 1 ? 'AÇÃO' : 'REVELAÇÃO'}
+                </span>
+              )}
             </button>
           ))}
         </div>
