@@ -15,7 +15,8 @@ function fromDb(row: Record<string, unknown>): PautaGerada {
     riscos: (row.riscos as PautaGerada['riscos']) || [],
     status: row.status as PautaGerada['status'],
     dataCriacao: (row.data_criacao ?? row.dataCriacao) as string,
-  };
+    inputOriginal: row.input_original ?? undefined,
+  } as any;
 }
 
 // Maps a PautaGerada to a DB row (snake_case columns)
@@ -32,6 +33,7 @@ function toDb(p: PautaGerada) {
     riscos: p.riscos,
     status: p.status,
     data_criacao: p.dataCriacao,
+    input_original: (p as any).inputOriginal ?? null,
   };
 }
 

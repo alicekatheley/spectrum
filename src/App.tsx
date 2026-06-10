@@ -33,16 +33,42 @@ export default function App() {
   const [direcionamentoIA, setDirecionamentoIA] = useState<string>('');
   const [tipoGeracao, setTipoGeracao] = useState<'texto' | 'imagem' | 'texto_imagem'>('texto_imagem');
   const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
-  const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>({});
+  const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>(() => {
+    try {
+      const stored = localStorage.getItem('crm_frame_images');
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
 
   const handleFrameGenerated = (pautaId: string, frameName: string, imageData: string) => {
-    setAllFrameImages(prev => ({
-      ...prev,
-      [pautaId]: {
-        ...(prev[pautaId] ?? {}),
-        [frameName]: imageData,
-      },
-    }));
+    setAllFrameImages(prev => {
+      const updated = {
+        ...prev,
+        [pautaId]: {
+          ...(prev[pautaId] ?? {}),
+          [frameName]: imageData,
+        },
+      };
+      try {
+        localStorage.setItem('crm_frame_images', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('[frameImages] localStorage cheio, limpando frames antigos...');
+        const keys = Object.keys(updated);
+        if (keys.length > 5) {
+          const toKeep = keys.slice(-5);
+          const trimmed = Object.fromEntries(toKeep.map(k => [k, updated[k]]));
+          try {
+            localStorage.setItem('crm_frame_images', JSON.stringify(trimmed));
+            return trimmed;
+          } catch {
+            return updated;
+          }
+        }
+      }
+      return updated;
+    });
   };
 
   // Carrega histórico: Supabase primeiro, fallback para localStorage
