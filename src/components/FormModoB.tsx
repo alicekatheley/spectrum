@@ -6,6 +6,37 @@ import ImageModelSelector from "./ImageModelSelector";
 import DirecionamentoIAField from "./DirecionamentoIAField";
 import TipoGeracaoSelector from "./TipoGeracaoSelector";
 
+function FontOption({
+  nome, label, fontFamily, selected, onSelect
+}: {
+  key?: React.Key; nome: string; label: string; fontFamily: string;
+  selected: boolean; onSelect: () => void;
+}) {
+  React.useEffect(() => {
+    if (!nome || ['inherit', 'serif', 'sans-serif', 'cursive'].includes(nome)) return;
+    const linkId = `gfont-preview-${nome.replace(/\s/g, '-')}`;
+    if (document.getElementById(linkId)) return;
+    const link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?family=${nome.replace(/\s/g, '+')}:wght@700&display=swap`;
+    document.head.appendChild(link);
+  }, [nome]);
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full px-4 py-2.5 text-left text-base transition-colors cursor-pointer ${
+        selected ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
+      }`}
+      style={{ fontFamily, fontSize: '16px' }}
+    >
+      {label}
+    </button>
+  );
+}
+
 interface FormModoBProps {
   brand: Brand;
   onSubmit: (input: InputModoB) => void;
@@ -55,6 +86,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [estiloBotaoEscolhido, setEstiloBotaoEscolhido] = useState(preload?.estiloBotaoEscolhido ?? 'pill');
   const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
   const [estiloDesign, setEstiloDesign] = useState(preload?.estiloDesign ?? '');
+  const [fonteDropdownOpen, setFonteDropdownOpen] = useState(false);
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -418,48 +450,51 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           {/* Fonte */}
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-slate-600">Fonte do Título</label>
-            <select
-              value={fonteEscolhida}
-              onChange={(e) => setFonteEscolhida(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
-            >
-              <option value="">Padrão da marca</option>
-              <optgroup label="Elegantes / Serif">
-                <option value="Playfair Display">Playfair Display</option>
-                <option value="Merriweather">Merriweather</option>
-                <option value="Abril Fatface">Abril Fatface</option>
-                <option value="Lora">Lora</option>
-              </optgroup>
-              <optgroup label="Modernas / Sans-serif">
-                <option value="Montserrat">Montserrat</option>
-                <option value="Nunito Sans">Nunito Sans</option>
-                <option value="Poppins">Poppins</option>
-                <option value="Raleway">Raleway</option>
-                <option value="Oswald">Oswald</option>
-                <option value="Inter">Inter</option>
-                <option value="DM Sans">DM Sans</option>
-              </optgroup>
-              <optgroup label="Impactantes / Display">
-                <option value="Bebas Neue">Bebas Neue</option>
-                <option value="Teko">Teko</option>
-                <option value="Fjalla One">Fjalla One</option>
-                <option value="Barlow">Barlow</option>
-                <option value="Black Han Sans">Black Han Sans</option>
-              </optgroup>
-              <optgroup label="Divertidas / Cartoon">
-                <option value="Bangers">Bangers</option>
-                <option value="Fredoka One">Fredoka One</option>
-                <option value="Boogaloo">Boogaloo</option>
-                <option value="Pacifico">Pacifico</option>
-                <option value="Righteous">Righteous</option>
-              </optgroup>
-              <optgroup label="Cursivas / Handwritten">
-                <option value="Dancing Script">Dancing Script</option>
-                <option value="Caveat">Caveat</option>
-                <option value="Satisfy">Satisfy</option>
-                <option value="Permanent Marker">Permanent Marker</option>
-              </optgroup>
-            </select>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setFonteDropdownOpen(!fonteDropdownOpen)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
+              >
+                <span style={{ fontFamily: fonteEscolhida ? `"${fonteEscolhida}", sans-serif` : 'inherit' }}>
+                  {fonteEscolhida || 'Padrão da marca'}
+                </span>
+                <svg className={`w-4 h-4 text-slate-400 transition-transform ${fonteDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {fonteDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-72 overflow-y-auto">
+                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" selected={fonteEscolhida === ''} onSelect={() => { setFonteEscolhida(''); setFonteDropdownOpen(false); }} />
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Elegantes / Serif</div>
+                  {['Playfair Display', 'Merriweather', 'Abril Fatface', 'Lora'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
+                  {['Montserrat', 'Nunito Sans', 'Poppins', 'Raleway', 'Oswald', 'Inter', 'DM Sans'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Impactantes / Display</div>
+                  {['Bebas Neue', 'Teko', 'Fjalla One', 'Barlow', 'Black Han Sans'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Divertidas / Cartoon</div>
+                  {['Bangers', 'Fredoka One', 'Boogaloo', 'Pacifico', 'Righteous'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Cursivas / Handwritten</div>
+                  {['Dancing Script', 'Caveat', 'Satisfy', 'Permanent Marker'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Cor do texto */}
