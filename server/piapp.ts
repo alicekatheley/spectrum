@@ -177,25 +177,41 @@ export function buildImagePrompt({
   const totalFramesLabel = `frame ${parseInt(frameName.replace('frame_', '')) + 1} of ${totalFrames ?? 3}`;
 
   const consistencyBlock = frameName === 'frame_0' || frameName === 'inicial'
-    ? `VISUAL ANCHOR — FRAME 1: You are establishing the visual DNA for this entire GIF sequence.
-LOCK THESE ELEMENTS permanently across ALL frames:
-- Background: exact solid color
-- Object: same material, finish, size, position anchor
-- Lighting: same direction and intensity
-- Style: photorealistic OR 3D illustrated OR flat 2D — pick ONE, never mix
-- TEXT STYLE (LOCK FOR ALL FRAMES): exact same font family, font weight, font size, letter spacing, text color, and text shadow/outline. The headline, sub-headline and CTA button must look PIXEL-IDENTICAL across all frames — same size, same position, same style. Do NOT vary text appearance between frames under any circumstances.
-- CTA BUTTON (LOCK FOR ALL FRAMES): exact same button width, height, border-radius, background color, text size and text color across all frames.
-The ONLY element that changes is the STATE of the hero object and any animated elements.`
-    : `VISUAL CONSISTENCY — MANDATORY (${totalFramesLabel}):
-The reference image is the PREVIOUS frame of this EXACT GIF. You are continuing the same scene.
-COPY EXACTLY from the reference:
-- Background color: IDENTICAL
-- Object material, finish and scale: IDENTICAL
-- Lighting direction and intensity: IDENTICAL
-- TEXT: IDENTICAL font, size, weight, color, position and style as reference frame — copy pixel-for-pixel. The headline must occupy the exact same area. Sub-headline same size and position. CTA button exact same dimensions, color and text.
-- Color palette: no new colors
-ONLY CHANGE: the state/position of animated elements as described in the frame scene above.
-FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
+    ? `FRAME 1 — ESTABLISH FIXED LAYOUT:
+You are creating the MASTER FRAME that all other frames must copy exactly.
+Define and lock these elements permanently:
+
+TEXT LAYOUT (must be pixel-identical in all frames):
+- HEADLINE: top-aligned, full width, large bold uppercase font, same size filling ~90% of the top area width
+- SUB-HEADLINE: immediately below headline, same font weight and color scheme, centered
+- CTA BUTTON: bottom center, fixed width (~55% of frame), fixed height, same border-radius, same colors
+
+IMPORTANT: Choose specific values now and stick to them:
+- Headline font size: pick one size that fits the text in 1-2 lines and keep it
+- Button: pick pill OR rectangle — do not change between frames
+- Text colors: pick exact colors now — do not vary in subsequent frames
+
+The hero object (ribbon/scissors/etc) occupies the MIDDLE area only.`
+
+    : `FRAME ${parseInt(frameName.replace('frame_', '')) + 1} — COPY MASTER FRAME EXACTLY:
+
+The reference image is Frame 1 — the MASTER FRAME. You must reproduce it with ONE change only.
+
+COPY THESE ELEMENTS PIXEL-FOR-PIXEL from the reference:
+✓ Headline: exact same font size, weight, color, position, line breaks
+✓ Sub-headline: exact same font size, weight, color, position, line breaks
+✓ CTA button: exact same width, height, border-radius, background color, text size, text color, position
+✓ Background color: identical
+✓ Overall composition and margins: identical
+
+ONLY CHANGE: the position/state of the animated hero element (${
+  frameName === 'frame_1' || frameName === 'intermediario'
+    ? 'mid-action state'
+    : 'final/revealed state'
+})
+
+If you change ANYTHING about the text layout, font size, button size or colors compared to the reference image, that is a CRITICAL ERROR.
+The viewer will see these as an animation — any text movement or size change creates a distracting flicker.`;
 
   return [
     // 1. Direcionamento do usuário — prioridade máxima
