@@ -183,11 +183,6 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         return lines;
       };
 
-      // ZONA DE TEXTO: topo 32% da imagem (0 a 256px em 800x800)
-      const TEXT_ZONE_BOTTOM = SIZE * 0.32;
-      const TEXT_ZONE_TOP = SIZE * 0.03;
-      const TEXT_ZONE_H = TEXT_ZONE_BOTTOM - TEXT_ZONE_TOP;
-
       // 4. Headline
       ctx.textAlign = 'center';
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
@@ -205,7 +200,6 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       }
 
       const hLineH = hSize * 1.2;
-      const hBlockH = hLines.length * hLineH;
 
       // Calcular tamanho do sub-headline
       let sSize = Math.min(32, Math.round(hSize * 0.48));
@@ -215,29 +209,23 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         sLines = wrap(subheadline, maxW * 0.88, `600 ${sSize}px ${familiaFonteSub}`);
       }
       const sLineH = sSize * 1.28;
-      const sBlockH = sLines.length * sLineH;
 
-      // Espaçamento entre headline e sub
-      const gap = SIZE * 0.015;
+      // ZONA DE TEXTO: topo 30% — headline e sub colados juntos no topo
+      const TEXT_ZONE_TOP = SIZE * 0.04;
 
-      // Total de altura do bloco de texto
-      const totalTextH = hBlockH + gap + sBlockH;
-
-      // Centralizar verticalmente dentro da zona de texto
-      const textStartY = TEXT_ZONE_TOP + (TEXT_ZONE_H - totalTextH) / 2;
-
-      // Desenhar headline
-      let hY = textStartY + hSize;
+      // Headline começa no topo da zona
+      let hY = TEXT_ZONE_TOP + hSize;
       hLines.forEach(line => {
         ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
         ctx.fillText(line, SIZE / 2, hY);
         hY += hLineH;
       });
 
-      // 5. Sub-headline
+      // Sub-headline logo abaixo do headline sem espaço extra
       ctx.shadowBlur = 6;
       ctx.fillStyle = corSubheadline;
-      let sY = hY + gap + sSize * 0.85;
+      const gap = SIZE * 0.012;
+      let sY = hY + gap + sSize;
       sLines.forEach(line => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
         ctx.fillText(line, SIZE / 2, sY);

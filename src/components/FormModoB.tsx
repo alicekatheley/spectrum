@@ -51,6 +51,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
     preload?.quantidadeFrames ?? 3
   );
   const [quantidadeCustom, setQuantidadeCustom] = useState<string>('');
+  const [fonteEscolhida, setFonteEscolhida] = useState(preload?.fonteEscolhida ?? '');
+  const [estiloBotaoEscolhido, setEstiloBotaoEscolhido] = useState(preload?.estiloBotaoEscolhido ?? 'pill');
+  const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -73,6 +76,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       boxMecanicaOuEstatico,
       boxRecompensa,
       estiloVisualTexto,
+      fonteEscolhida,
+      estiloBotaoEscolhido,
+      corTextoPrincipal,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
     } as any);
   };
@@ -367,33 +373,119 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       </div>
 
       {tipoGeracao !== 'texto' && (
-        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-2">
-          <div className="flex justify-between items-center mb-1">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
-              Estilo Visual do Texto
-              <span className="text-[10px] text-slate-400 font-normal normal-case ml-1">
-                (Opcional — descreva fonte, cor e botão)
-              </span>
-            </label>
-            {estiloVisualTexto && (
-              <button
-                type="button"
-                onClick={() => setEstiloVisualTexto('')}
-                className="text-slate-400 hover:text-rose-500 p-1 rounded hover:bg-slate-200 transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
+        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-4">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Estilo Visual do Texto
+          </span>
+
+          {/* Fonte */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Fonte do Título</label>
+            <select
+              value={fonteEscolhida}
+              onChange={(e) => setFonteEscolhida(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
+            >
+              <option value="">Padrão da marca</option>
+              <optgroup label="Elegantes / Serif">
+                <option value="Playfair Display">Playfair Display</option>
+                <option value="Merriweather">Merriweather</option>
+                <option value="Abril Fatface">Abril Fatface</option>
+                <option value="Lora">Lora</option>
+              </optgroup>
+              <optgroup label="Modernas / Sans-serif">
+                <option value="Montserrat">Montserrat</option>
+                <option value="Nunito Sans">Nunito Sans</option>
+                <option value="Poppins">Poppins</option>
+                <option value="Raleway">Raleway</option>
+                <option value="Oswald">Oswald</option>
+                <option value="Inter">Inter</option>
+                <option value="DM Sans">DM Sans</option>
+              </optgroup>
+              <optgroup label="Impactantes / Display">
+                <option value="Bebas Neue">Bebas Neue</option>
+                <option value="Teko">Teko</option>
+                <option value="Fjalla One">Fjalla One</option>
+                <option value="Barlow">Barlow</option>
+                <option value="Black Han Sans">Black Han Sans</option>
+              </optgroup>
+              <optgroup label="Divertidas / Cartoon">
+                <option value="Bangers">Bangers</option>
+                <option value="Fredoka One">Fredoka One</option>
+                <option value="Boogaloo">Boogaloo</option>
+                <option value="Pacifico">Pacifico</option>
+                <option value="Righteous">Righteous</option>
+              </optgroup>
+              <optgroup label="Cursivas / Handwritten">
+                <option value="Dancing Script">Dancing Script</option>
+                <option value="Caveat">Caveat</option>
+                <option value="Satisfy">Satisfy</option>
+                <option value="Permanent Marker">Permanent Marker</option>
+              </optgroup>
+            </select>
           </div>
-          <textarea
-            value={estiloVisualTexto}
-            onChange={(e) => setEstiloVisualTexto(e.target.value)}
-            placeholder="Ex: Fonte serif bold branca com sombra suave. Botão pill na cor verde da marca com texto branco em caixa alta. Sub-headline em branco com opacidade 90%."
-            rows={3}
-            className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 transition-all resize-none"
-          />
-          <div className="text-[10px] text-slate-400">
-            Descreva livremente: cor do texto, família de fonte, peso, tamanho, estilo do botão (pill/retangular/outline), cor do botão, etc.
+
+          {/* Cor do texto */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Cor do Texto</label>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: 'Branco', value: '#FFFFFF' },
+                { label: 'Preto', value: '#000000' },
+                { label: 'Cor da marca', value: brand === 'Apice' ? '#688D65' : '#BF0F26' },
+                { label: 'Amarelo', value: '#FFD700' },
+              ].map(({ label, value }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setCorTextoPrincipal(value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
+                    corTextoPrincipal === value
+                      ? 'border-slate-600 bg-slate-100'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <span
+                    className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block"
+                    style={{ backgroundColor: value }}
+                  />
+                  {label}
+                </button>
+              ))}
+              <input
+                type="color"
+                value={corTextoPrincipal}
+                onChange={(e) => setCorTextoPrincipal(e.target.value)}
+                className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
+                title="Cor personalizada"
+              />
+            </div>
+          </div>
+
+          {/* Estilo do botão */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Estilo do Botão CTA</label>
+            <div className="flex gap-2">
+              {[
+                { id: 'pill', label: 'Pill', desc: '●' },
+                { id: 'retangular', label: 'Retangular', desc: '■' },
+                { id: 'outline', label: 'Outline', desc: '○' },
+              ].map(({ id, label, desc }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setEstiloBotaoEscolhido(id)}
+                  className={`flex-1 flex flex-col items-center py-2 rounded-xl border-2 text-xs font-bold transition-all cursor-pointer ${
+                    estiloBotaoEscolhido === id
+                      ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="text-lg">{desc}</span>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

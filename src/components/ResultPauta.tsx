@@ -118,22 +118,38 @@ export default function ResultPauta({
         const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
         let finalDataUrl = rawDataUrl;
         try {
-          let estiloVisual = undefined;
-          const estiloTexto = (pauta as any).inputOriginal?.estiloVisualTexto;
-          if (estiloTexto) {
-            try {
-              const estiloRes = await fetch('/api/parse-estilo-visual', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ estiloVisualTexto: estiloTexto, marca: pauta.marca }),
-              });
-              estiloVisual = await estiloRes.json();
-            } catch {
-              console.warn('[parse-estilo-visual] Falha, usando defaults');
-            }
-          }
           const { composeFrame } = await import('../utils/composeFrame');
           const inputOriginal = (pauta as any).inputOriginal;
+
+          // Montar estiloVisual diretamente dos campos — sem depender do parse por IA
+          const fonteEscolhida = inputOriginal?.fonteEscolhida || '';
+          const estiloVisual = fonteEscolhida || inputOriginal?.estiloVisualTexto
+            ? await (async () => {
+                if (fonteEscolhida) {
+                  return {
+                    familiaFonte: fonteEscolhida,
+                    corTexto: inputOriginal?.corTextoPrincipal || '#FFFFFF',
+                    estiloBotao: (inputOriginal?.estiloBotaoEscolhido || 'pill') as 'pill' | 'retangular' | 'outline',
+                    corBotao: pauta.marca === 'Apice' ? '#688D65' : '#BF0F26',
+                    corTextoBotao: '#FFFFFF',
+                  };
+                }
+                try {
+                  const estiloRes = await fetch('/api/parse-estilo-visual', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      estiloVisualTexto: inputOriginal?.estiloVisualTexto,
+                      marca: pauta.marca,
+                    }),
+                  });
+                  return await estiloRes.json();
+                } catch {
+                  return undefined;
+                }
+              })()
+            : undefined;
+
           finalDataUrl = await composeFrame({
             imageDataUrl: rawDataUrl,
             headline: (inputOriginal?.headline || pauta.copy.headlineBanner) as string,

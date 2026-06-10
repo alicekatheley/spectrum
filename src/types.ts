@@ -45,6 +45,9 @@ export interface InputModoB {
   boxMecanicaOuEstatico: string;
   boxRecompensa: string;
   estiloVisualTexto?: string;
+  fonteEscolhida?: string;
+  estiloBotaoEscolhido?: string;
+  corTextoPrincipal?: string;
   quantidadeFrames?: number;
 }
 

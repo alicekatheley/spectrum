@@ -143,7 +143,10 @@ export default function App() {
             subheadline: inputB.boxSubtituloEmail || '',
             cta: inputB.boxCta || '',
             direcionamento: direcionamentoIA || '',
-            estiloVisualTexto: inputB.estiloVisualTexto || '',
+            estiloVisualTexto: (inputB as any).estiloVisualTexto || '',
+            fonteEscolhida: (inputB as any).fonteEscolhida || '',
+            estiloBotaoEscolhido: (inputB as any).estiloBotaoEscolhido || 'pill',
+            corTextoPrincipal: (inputB as any).corTextoPrincipal || '#FFFFFF',
           },
         }));
         const updated = [...pautasComInput, ...history];
