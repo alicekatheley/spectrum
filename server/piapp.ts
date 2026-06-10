@@ -183,7 +183,8 @@ LOCK THESE ELEMENTS permanently across ALL frames:
 - Object: same material, finish, size, position anchor
 - Lighting: same direction and intensity
 - Style: photorealistic OR 3D illustrated OR flat 2D — pick ONE, never mix
-- Text style: same font style, same color, same size across all frames
+- TEXT STYLE (LOCK FOR ALL FRAMES): exact same font family, font weight, font size, letter spacing, text color, and text shadow/outline. The headline, sub-headline and CTA button must look PIXEL-IDENTICAL across all frames — same size, same position, same style. Do NOT vary text appearance between frames under any circumstances.
+- CTA BUTTON (LOCK FOR ALL FRAMES): exact same button width, height, border-radius, background color, text size and text color across all frames.
 The ONLY element that changes is the STATE of the hero object and any animated elements.`
     : `VISUAL CONSISTENCY — MANDATORY (${totalFramesLabel}):
 The reference image is the PREVIOUS frame of this EXACT GIF. You are continuing the same scene.
@@ -191,7 +192,7 @@ COPY EXACTLY from the reference:
 - Background color: IDENTICAL
 - Object material, finish and scale: IDENTICAL
 - Lighting direction and intensity: IDENTICAL
-- Text style and position: IDENTICAL
+- TEXT: IDENTICAL font, size, weight, color, position and style as reference frame — copy pixel-for-pixel. The headline must occupy the exact same area. Sub-headline same size and position. CTA button exact same dimensions, color and text.
 - Color palette: no new colors
 ONLY CHANGE: the state/position of animated elements as described in the frame scene above.
 FAILURE TO MATCH THE REFERENCE IMAGE EXACTLY IS AN ERROR.`;
@@ -230,7 +231,8 @@ IMPORTANT: Render the text EXACTLY as written above — correct spelling, correc
 - SUB-HEADLINE: Between headline and hero object, smaller font, readable
 - BOTTOM AREA: CTA button — pill shape, brand color background, white bold text "${cta ?? 'ABRIR'}" centered inside
 - All text elements must be rendered INSIDE the image with clean, bold typography
-- Maintain consistent text placement across all frames`,
+- CRITICAL: Maintain PIXEL-PERFECT consistency of all text across frames — same font, same size, same color, same position, same weight. The viewer will see these frames as an animation — any variation in text will create a jarring flicker effect. Text must be absolutely static and identical in every frame.
+- CTA button must have identical dimensions, border-radius, color and label in every frame.`,
 
     // 7. Restrições finais
     `RENDER ONLY the headline, sub-headline and CTA button text described above. No other text, watermarks or symbols anywhere else in the image. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
