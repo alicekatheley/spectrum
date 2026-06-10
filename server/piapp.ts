@@ -252,10 +252,10 @@ The viewer will see these as an animation — any text movement or size change c
 
     // 3. Copy da campanha
     headline || subheadline
-      ? `=== CAMPAIGN COPY — RENDER THIS TEXT INSIDE THE IMAGE ===
-HEADLINE (top zone, large bold text): "${headline}"
-SUB-HEADLINE (below headline, smaller text): "${subheadline}"
-IMPORTANT: Render the text EXACTLY as written above — correct spelling, correct accents (ã, ç, é, etc.). Use a clean, bold, legible font. The headline must be large and prominent. The sub-headline must be smaller and readable.`
+      ? `=== CAMPAIGN COPY (for color harmony reference only — DO NOT render text) ===
+Headline text that will be overlaid: "${headline}"
+Sub-headline text that will be overlaid: "${subheadline}"
+Use this copy ONLY to choose harmonious background colors and palette. Do NOT render any text in the image.`
       : '',
     recompensa ? `Reward/CTA: "${recompensa}"` : '',
     `Background and palette must harmonize with copy above — complement, never compete.`,
@@ -267,17 +267,13 @@ IMPORTANT: Render the text EXACTLY as written above — correct spelling, correc
     consistencyBlock,
 
     // 6. Zonas de texto
-    `LAYOUT COMPOSITION:
-- TOP AREA: Place the HEADLINE text prominently here — large, bold, centered, legible
-- MIDDLE AREA: Main hero object/mechanic — this is the visual star of the frame
-- SUB-HEADLINE: Between headline and hero object, smaller font, readable
-- BOTTOM AREA: CTA button — pill shape, brand color background, white bold text "${cta ?? 'ABRIR'}" centered inside
-- All text elements must be rendered INSIDE the image with clean, bold typography
-- CRITICAL: Maintain PIXEL-PERFECT consistency of all text across frames — same font, same size, same color, same position, same weight. The viewer will see these frames as an animation — any variation in text will create a jarring flicker effect. Text must be absolutely static and identical in every frame.
-- CTA button must have identical dimensions, border-radius, color and label in every frame.`,
+    `COMPOSITION ZONES:
+- TOP ZONE (top 30%): Leave COMPLETELY EMPTY — clean solid background only. Text will be overlaid here in post-production. NO objects, textures, gradients or decorations in this zone.
+- MIDDLE ZONE (middle 50%): Hero object only — centered beautifully.
+- BOTTOM ZONE (bottom 20%): Leave COMPLETELY EMPTY — clean solid background only. CTA button will be overlaid here. NO objects in this zone.`,
 
     // 7. Restrições finais
-    `RENDER ONLY the headline, sub-headline and CTA button text described above. No other text, watermarks or symbols anywhere else in the image. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
+    `NO TEXT anywhere in the image — no letters, numbers, symbols, watermarks or UI elements. Pure illustration asset only. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
   ].filter(Boolean).join('\n\n');
 }
 
