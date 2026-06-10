@@ -236,7 +236,24 @@ app.post("/api/generate-image", async (req, res) => {
       return res.status(400).json({ error: "marca inválida. Use 'Apice' ou 'Barbours'." });
     }
 
-    const aspectRatio = VALID_IMAGE_RATIOS.includes(rawRatio) ? rawRatio : '1:1';
+    const isCustomPixels = typeof rawRatio === 'string' && (rawRatio as string).startsWith('custom_');
+    let aspectRatio = '1:1';
+    let customWidth = 0;
+    let customHeight = 0;
+
+    if (isCustomPixels) {
+      const [w, h] = (rawRatio as string).replace('custom_', '').split('x').map(Number);
+      if (w >= 100 && w <= 4000 && h >= 100 && h <= 4000) {
+        customWidth = w;
+        customHeight = h;
+        const { pixelsToAspectRatio } = await import('./piapp.ts');
+        aspectRatio = pixelsToAspectRatio(rawRatio as string);
+        console.log(`[generate-image] Pixels ${w}x${h} → aspect_ratio ${aspectRatio}`);
+      }
+    } else if (VALID_IMAGE_RATIOS.includes(rawRatio)) {
+      aspectRatio = rawRatio;
+    }
+
     const imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
 
     const mechanicSeed = (mecanica || frameDescription || '').split('').reduce(
@@ -341,6 +358,26 @@ Extract:
       referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
     );
 
+    let finalImageBytes = result.imageBytes;
+    let finalMimeType = result.mimeType;
+
+    if (customWidth > 0 && customHeight > 0) {
+      try {
+        // @ts-ignore — sharp types not exposed via package.json exports field
+        const sharp = (await import('sharp')).default;
+        const inputBuffer = Buffer.from(result.imageBytes, 'base64');
+        const resizedBuffer = await sharp(inputBuffer)
+          .resize(customWidth, customHeight, { fit: 'fill', kernel: 'lanczos3' })
+          .png()
+          .toBuffer();
+        finalImageBytes = resizedBuffer.toString('base64');
+        finalMimeType = 'image/png';
+        console.log(`[generate-image] Imagem redimensionada para ${customWidth}x${customHeight}px`);
+      } catch (resizeErr: any) {
+        console.warn('[generate-image] Falha ao redimensionar, usando original:', resizeErr.message);
+      }
+    }
+
     let publicUrl: string | null = null;
     if (supabase && typeof pautaId === 'string' && pautaId) {
       try {
@@ -391,7 +428,7 @@ Extract:
       });
     }
 
-    res.json({ ...result, publicUrl });
+    res.json({ imageBytes: finalImageBytes, mimeType: finalMimeType, publicUrl });
   } catch (err: any) {
     console.error("[generate-image] Erro:", err);
     res.status(500).json({ error: "Falha ao gerar imagem com PiApp.", details: err.message });

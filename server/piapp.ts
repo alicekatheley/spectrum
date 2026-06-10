@@ -50,6 +50,31 @@ export async function uploadReferenceToPiApp(base64DataUrl: string): Promise<str
   return public_url;
 }
 
+export function pixelsToAspectRatio(customRatio: string): string {
+  if (!customRatio.startsWith('custom_')) return customRatio;
+  const [w, h] = customRatio.replace('custom_', '').split('x').map(Number);
+  if (!w || !h) return '1:1';
+
+  const ratio = w / h;
+
+  const options: { ratio: number; value: string }[] = [
+    { ratio: 1,     value: '1:1'  },
+    { ratio: 0.75,  value: '3:4'  },
+    { ratio: 1.333, value: '4:3'  },
+    { ratio: 1.778, value: '16:9' },
+    { ratio: 0.563, value: '9:16' },
+  ];
+
+  let closest = options[0];
+  let minDiff = Math.abs(ratio - options[0].ratio);
+  for (const opt of options) {
+    const diff = Math.abs(ratio - opt.ratio);
+    if (diff < minDiff) { minDiff = diff; closest = opt; }
+  }
+
+  return closest.value;
+}
+
 export async function generateImageViaPiApp(
   prompt: string,
   aspectRatio: string,
