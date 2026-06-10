@@ -131,7 +131,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline, cta, direcionamento, totalFrames,
+  headline, subheadline, cta, direcionamento, totalFrames, frameMetadata,
 }: {
   frameName: string;
   frameDescription: string;
@@ -149,6 +149,25 @@ export function buildImagePrompt({
   cta?: string;
   direcionamento?: string;
   totalFrames?: number;
+  frameMetadata?: {
+    backgroundColor?: string;
+    headlineFontSize?: string;
+    headlineFontWeight?: string;
+    headlineColor?: string;
+    headlineTopPosition?: string;
+    headlineIsItalic?: boolean;
+    subheadlineFontSize?: string;
+    subheadlineColor?: string;
+    subheadlineTopPosition?: string;
+    buttonWidth?: string;
+    buttonHeight?: string;
+    buttonBottomPosition?: string;
+    buttonBackgroundColor?: string;
+    buttonTextColor?: string;
+    buttonBorderRadius?: string;
+    buttonFontSize?: string;
+    accentColors?: string[];
+  };
 }): string {
   const frameStateMap: Record<string, string> = {
     inicial:       'pristine and fully closed, perfectly sealed — pure anticipation, nothing revealed',
@@ -196,7 +215,14 @@ The hero object (ribbon/scissors/etc) occupies the MIDDLE area only.`
     : `FRAME ${parseInt(frameName.replace('frame_', '')) + 1} — COPY MASTER FRAME EXACTLY:
 
 The reference image is Frame 1 — the MASTER FRAME. You must reproduce it with ONE change only.
-
+${frameMetadata ? `
+EXTRACTED MEASUREMENTS FROM MASTER FRAME (use these EXACT values):
+- Background color: ${frameMetadata.backgroundColor ?? 'match reference'}
+- Headline: font-size ${frameMetadata.headlineFontSize ?? 'match reference'}px, weight ${frameMetadata.headlineFontWeight ?? 'bold'}, color ${frameMetadata.headlineColor ?? 'match reference'}, italic: ${frameMetadata.headlineIsItalic ? 'YES' : 'NO'}, top position: ${frameMetadata.headlineTopPosition ?? 'match reference'}px from top
+- Sub-headline: font-size ${frameMetadata.subheadlineFontSize ?? 'match reference'}px, color ${frameMetadata.subheadlineColor ?? 'match reference'}, top position: ${frameMetadata.subheadlineTopPosition ?? 'match reference'}px from top
+- Button: ${frameMetadata.buttonWidth ?? 'match reference'}px wide × ${frameMetadata.buttonHeight ?? 'match reference'}px tall, ${frameMetadata.buttonBorderRadius ?? 'match reference'} shape, background ${frameMetadata.buttonBackgroundColor ?? 'match reference'}, text color ${frameMetadata.buttonTextColor ?? 'match reference'}, font-size ${frameMetadata.buttonFontSize ?? 'match reference'}px, bottom position: ${frameMetadata.buttonBottomPosition ?? 'match reference'}px from bottom
+${frameMetadata.accentColors?.length ? `- Accent colors: ${frameMetadata.accentColors.join(', ')}` : ''}
+These are EXACT pixel measurements. Do NOT deviate from them.` : ''}
 COPY THESE ELEMENTS PIXEL-FOR-PIXEL from the reference:
 ✓ Headline: exact same font size, weight, color, position, line breaks
 ✓ Sub-headline: exact same font size, weight, color, position, line breaks

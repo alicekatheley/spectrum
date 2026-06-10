@@ -15,7 +15,7 @@ import {
   getBrandDna, buildImagePrompt, uploadReferenceToPiApp, generateImageViaPiApp,
 } from "./piapp.ts";
 import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique } from "./validators.ts";
-import { generatePautaContent, generateVariationContent } from "./gemini.ts";
+import { generatePautaContent, generateVariationContent, ai as geminiAi } from "./gemini.ts";
 
 export const app = express();
 const PORT = 3000;
@@ -131,6 +131,58 @@ app.post("/api/generate-pauta", async (req, res) => {
   }
 });
 
+app.post("/api/analyze-frame", async (req, res) => {
+  try {
+    const { imageDataUrl } = req.body;
+    if (!imageDataUrl || typeof imageDataUrl !== 'string') {
+      return res.status(400).json({ error: "imageDataUrl é obrigatório." });
+    }
+
+    const base64Data = imageDataUrl.split(',')[1];
+    const mimeType = imageDataUrl.split(';')[0].split(':')[1] || 'image/png';
+
+    const analysisPrompt = `Analyze this email marketing banner image and extract the following visual measurements. Be as precise as possible. Return ONLY a valid JSON object with no markdown, no explanation.
+
+The image is 800x800 pixels (even if displayed differently).
+
+Extract:
+{
+  "backgroundColor": "exact hex color of the main background (e.g. #1A7A3C)",
+  "headlineFontSize": "estimated font size in pixels (e.g. 94)",
+  "headlineFontWeight": "bold or extra-bold or black",
+  "headlineColor": "exact hex color of headline text",
+  "headlineTopPosition": "distance from top of image to headline text start in pixels",
+  "headlineIsItalic": true or false,
+  "subheadlineFontSize": "estimated font size in pixels",
+  "subheadlineColor": "exact hex color of sub-headline text",
+  "subheadlineTopPosition": "distance from top of image to sub-headline in pixels",
+  "buttonWidth": "button width in pixels",
+  "buttonHeight": "button height in pixels",
+  "buttonBottomPosition": "distance from bottom of image to button center in pixels",
+  "buttonBackgroundColor": "exact hex color of button background",
+  "buttonTextColor": "exact hex color of button text",
+  "buttonBorderRadius": "pill (if very rounded) or rectangle (if squared) or slight (if slightly rounded)",
+  "buttonFontSize": "estimated font size of button text in pixels",
+  "accentColors": ["any accent colors used in the text or highlights, as hex array"]
+}`;
+
+    const analysisResult = await geminiAi.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [{ role: 'user', parts: [{ text: analysisPrompt }, { inlineData: { mimeType, data: base64Data } }] }],
+    });
+
+    const text = (analysisResult.text ?? '').replace(/```json|```/g, '').trim();
+    const metadata = JSON.parse(text);
+
+    console.log('[analyze-frame] Metadados extraídos:', JSON.stringify(metadata, null, 2));
+    res.json(metadata);
+
+  } catch (err: any) {
+    console.error('[analyze-frame] Erro:', err.message);
+    res.status(500).json({ error: 'Falha ao analisar frame.', details: err.message });
+  }
+});
+
 app.post("/api/generate-image", async (req, res) => {
   try {
     if (!PIAPP_API_KEY) {
@@ -179,6 +231,49 @@ app.post("/api/generate-image", async (req, res) => {
     const compVariant = COMPOSITION_VARIANTS[styleIndex];
     const lightVariant = LIGHTING_VARIANTS[mechanicSeed % LIGHTING_VARIANTS.length];
 
+    // Extrair metadados visuais do frame anterior para injetar valores exatos no prompt de frames subsequentes
+    let frameMetadata: Record<string, any> | undefined = undefined;
+    if (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:')
+        && frameName !== 'frame_0' && frameName !== 'inicial') {
+      try {
+        const base64Ref = referenceFrameUrl.split(',')[1];
+        const mimeRef = referenceFrameUrl.split(';')[0].split(':')[1] || 'image/png';
+        const metaPrompt = `Analyze this email marketing banner image and extract the following visual measurements. Be as precise as possible. Return ONLY a valid JSON object with no markdown, no explanation.
+
+The image is 800x800 pixels (even if displayed differently).
+
+Extract:
+{
+  "backgroundColor": "exact hex color of the main background (e.g. #1A7A3C)",
+  "headlineFontSize": "estimated font size in pixels (e.g. 94)",
+  "headlineFontWeight": "bold or extra-bold or black",
+  "headlineColor": "exact hex color of headline text",
+  "headlineTopPosition": "distance from top of image to headline text start in pixels",
+  "headlineIsItalic": true or false,
+  "subheadlineFontSize": "estimated font size in pixels",
+  "subheadlineColor": "exact hex color of sub-headline text",
+  "subheadlineTopPosition": "distance from top of image to sub-headline in pixels",
+  "buttonWidth": "button width in pixels",
+  "buttonHeight": "button height in pixels",
+  "buttonBottomPosition": "distance from bottom of image to button center in pixels",
+  "buttonBackgroundColor": "exact hex color of button background",
+  "buttonTextColor": "exact hex color of button text",
+  "buttonBorderRadius": "pill (if very rounded) or rectangle (if squared) or slight (if slightly rounded)",
+  "buttonFontSize": "estimated font size of button text in pixels",
+  "accentColors": ["any accent colors used in the text or highlights, as hex array"]
+}`;
+        const metaResult = await geminiAi.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: [{ role: 'user', parts: [{ text: metaPrompt }, { inlineData: { mimeType: mimeRef, data: base64Ref } }] }],
+        });
+        const metaText = (metaResult.text ?? '').replace(/```json|```/g, '').trim();
+        frameMetadata = JSON.parse(metaText);
+        console.log(`[generate-image] Metadados extraídos do frame anterior para ${frameName}:`, JSON.stringify(frameMetadata, null, 2));
+      } catch (metaErr: any) {
+        console.warn('[generate-image] Falha ao extrair metadados do frame anterior (ignorando):', metaErr.message);
+      }
+    }
+
     const prompt = buildImagePrompt({
       frameName:        frameName as string,
       frameDescription: frameDescription as string,
@@ -196,6 +291,7 @@ app.post("/api/generate-image", async (req, res) => {
       cta:              cta as string | undefined,
       direcionamento:   typeof direcionamento === 'string' && direcionamento.trim() ? direcionamento.trim() : undefined,
       totalFrames:      typeof totalFrames === 'number' ? totalFrames : undefined,
+      frameMetadata,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);
 
