@@ -134,19 +134,29 @@ export default function ResultPauta({
                     corTextoBotao: '#FFFFFF',
                   };
                 }
-                try {
-                  const estiloRes = await fetch('/api/parse-estilo-visual', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      estiloVisualTexto: inputOriginal?.estiloVisualTexto,
-                      marca: pauta.marca,
-                    }),
-                  });
-                  return await estiloRes.json();
-                } catch {
-                  return undefined;
+                const estiloTexto = inputOriginal?.estiloVisualTexto;
+                const direcionamento = inputOriginal?.direcionamento;
+                const textoParaParse = estiloTexto || direcionamento;
+
+                if (textoParaParse) {
+                  try {
+                    const estiloRes = await fetch('/api/parse-estilo-visual', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        estiloVisualTexto: textoParaParse,
+                        marca: pauta.marca,
+                      }),
+                    });
+                    const result = await estiloRes.json();
+                    console.log('[parse-estilo-visual] Estilo aplicado:', result);
+                    return result;
+                  } catch {
+                    console.warn('[parse-estilo-visual] Falha, usando defaults');
+                    return undefined;
+                  }
                 }
+                return undefined;
               })()
             : undefined;
 
