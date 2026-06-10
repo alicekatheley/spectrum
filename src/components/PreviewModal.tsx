@@ -29,7 +29,23 @@ export default function PreviewModal({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
+  const [activePreviewIndex, setActivePreviewIndex] = useState(0);
   const autoGenStarted = useRef(false);
+
+  useEffect(() => {
+    setActivePreviewIndex(0);
+  }, [pauta.id]);
+
+  useEffect(() => {
+    if (Object.keys(frameImages).length < 2) return;
+    const iv = setInterval(() => {
+      setActivePreviewIndex(prev => {
+        const total = Object.keys(frameImages).length;
+        return (prev + 1) % total;
+      });
+    }, 700);
+    return () => clearInterval(iv);
+  }, [Object.keys(frameImages).length]);
 
   const isApice = pauta.marca === 'Apice';
 
@@ -325,38 +341,6 @@ export default function PreviewModal({
                 Visualização do GIF de E-mail CRM
               </span>
 
-              {/* Loading enquanto gera os frames */}
-              {generatingFrame && Object.keys(frameImages).length === 0 && (
-                <div className="w-full rounded-2xl border border-slate-700 bg-slate-800 flex flex-col items-center justify-center py-12 mb-4 gap-3">
-                  <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
-                  <span className="text-sm text-slate-400 font-medium">
-                    Gerando frames do GIF... ({generatingFrame})
-                  </span>
-                </div>
-              )}
-
-              {/* Frame real do PiApp quando disponível */}
-              {Object.keys(frameImages).length > 0 && (() => {
-                const keys = Object.keys(frameImages).sort();
-                const lastSrc = frameImages[keys[keys.length - 1]];
-                return (
-                  <div className="relative w-full rounded-2xl overflow-hidden border border-slate-700 mb-4">
-                    <img
-                      src={lastSrc}
-                      alt="Frame gerado"
-                      className="w-full object-cover"
-                    />
-                    {generatingFrame && (
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center rounded-2xl">
-                        <span className="text-white text-sm font-bold animate-pulse">
-                          Gerando {generatingFrame}...
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
               {/* Erro de geração */}
               {Object.keys(frameErrors).length > 0 && (
                 <div className="text-xs text-rose-400 bg-rose-900/20 border border-rose-800 rounded-xl px-3 py-2 mb-2 text-left">
@@ -366,17 +350,61 @@ export default function PreviewModal({
                 </div>
               )}
 
-              <BannerSimulador
-                brand={pauta.marca}
-                headline={editedCopy.headlineBanner}
-                subHeadline={editedCopy.subHeadlineBanner}
-                cta={editedCopy.ctaBotao}
-                mecanicaText={pauta.operacional.mecanicaEscolhida}
-                recompensa={pauta.operacional.recompensaEscolhida}
-                paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
-                estiloIlustracao={pauta.visual?.estiloIlustracao}
-                frameImages={frameImages}
-              />
+              {/* Visualização do GIF */}
+              {Object.keys(frameImages).length > 0 ? (
+                <div className="relative w-full rounded-2xl overflow-hidden border border-slate-700 mb-2">
+                  <img
+                    src={frameImages[`frame_${activePreviewIndex}`] ?? frameImages[Object.keys(frameImages).sort()[0]]}
+                    alt="Frame gerado"
+                    className="w-full object-cover rounded-2xl"
+                  />
+                  {generatingFrame && (
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-2xl">
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="w-8 h-8 border-4 border-slate-400 border-t-emerald-400 rounded-full animate-spin" />
+                        <span className="text-white text-sm font-bold animate-pulse">
+                          Gerando frame {generatingFrame}...
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {Object.keys(frameImages).length > 1 && (
+                    <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
+                      {Object.keys(frameImages).sort().map((key, i) => (
+                        <button
+                          key={key}
+                          onClick={() => setActivePreviewIndex(i)}
+                          className={`w-2 h-2 rounded-full transition-all cursor-pointer ${
+                            activePreviewIndex === i ? 'bg-white scale-125' : 'bg-white/40 hover:bg-white/70'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {generatingFrame && (
+                    <div className="w-full rounded-2xl border border-slate-700 bg-slate-800 flex flex-col items-center justify-center py-12 mb-4 gap-3">
+                      <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
+                      <span className="text-sm text-slate-400 font-medium">
+                        Gerando frames do GIF... ({generatingFrame})
+                      </span>
+                    </div>
+                  )}
+                  <BannerSimulador
+                    brand={pauta.marca}
+                    headline={editedCopy.headlineBanner}
+                    subHeadline={editedCopy.subHeadlineBanner}
+                    cta={editedCopy.ctaBotao}
+                    mecanicaText={pauta.operacional.mecanicaEscolhida}
+                    recompensa={pauta.operacional.recompensaEscolhida}
+                    paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
+                    estiloIlustracao={pauta.visual?.estiloIlustracao}
+                    frameImages={{}}
+                  />
+                </>
+              )}
             </div>
 
             {/* Coluna Direita: Informações Gerais dependendo da Tab selecionada */}
