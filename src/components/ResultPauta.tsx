@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
+import GifViewer from "./GifViewer";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
   HelpCircle, AlertTriangle, Sparkles, Wand2, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image
@@ -595,17 +596,21 @@ export default function ResultPauta({
             <span>Visual Playbook — Banner Autenticado</span>
             <span className="text-[10px] text-slate-400 italic">Simulação GIF Integrada</span>
           </h5>
-          <BannerSimulador
-            brand={pauta.marca}
-            headline={pauta.copy.headlineBanner}
-            subHeadline={pauta.copy.subHeadlineBanner}
-            cta={pauta.copy.ctaBotao}
-            mecanicaText={pauta.operacional.mecanicaEscolhida}
-            recompensa={pauta.operacional.recompensaEscolhida}
-            paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
-            estiloIlustracao={pauta.visual?.estiloIlustracao}
-            frameImages={frameImages}
-          />
+          {Object.keys(frameImages).length > 0 ? (
+            <GifViewer frameImages={frameImages} />
+          ) : (
+            <BannerSimulador
+              brand={pauta.marca}
+              headline={pauta.copy.headlineBanner}
+              subHeadline={pauta.copy.subHeadlineBanner}
+              cta={pauta.copy.ctaBotao}
+              mecanicaText={pauta.operacional.mecanicaEscolhida}
+              recompensa={pauta.operacional.recompensaEscolhida}
+              paleta={pauta.visual?.paletaRecomendada ?? { nome: '', cores: [] }}
+              estiloIlustracao={pauta.visual?.estiloIlustracao}
+              frameImages={{}}
+            />
+          )}
         </div>}
 
       </div>
