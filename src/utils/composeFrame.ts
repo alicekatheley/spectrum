@@ -113,13 +113,13 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
   const ev = opts.estiloVisual ?? {};
 
   const corTexto = ev.corTexto ?? '#FFFFFF';
-  const corSubheadline = ev.corSubheadline ?? 'rgba(255,255,255,0.92)';
+  const corSubheadline = ev?.corSubheadline || opts.estiloVisual?.corSubheadline || 'rgba(255,255,255,0.90)';
   const estiloBotao = ev.estiloBotao ?? 'pill';
   const corBotao = ev.corBotao ?? (isApice ? '#688D65' : '#BF0F26');
   const corTextoBotao = ev.corTextoBotao ?? '#FFFFFF';
   const pesoFonte = ev.pesoFonte ?? '900';
   const familiaFonteRaw = ev.familiaFonte ?? (isApice ? 'Playfair Display' : 'Oswald');
-  const familiaFonteSubRaw = ev.familiaFonteSubheadline ?? 'Montserrat';
+  const familiaFonteSubRaw = ev?.familiaFonteSubheadline || opts.estiloVisual?.familiaFonte || (isApice ? 'Montserrat' : 'Inter');
 
   const familiaFonte = await loadFont(familiaFonteRaw, pesoFonte);
   const familiaFonteSub = await loadFont(familiaFonteSubRaw, '600');

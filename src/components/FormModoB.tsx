@@ -7,9 +7,10 @@ import DirecionamentoIAField from "./DirecionamentoIAField";
 import TipoGeracaoSelector from "./TipoGeracaoSelector";
 
 function FontOption({
-  nome, label, fontFamily, selected, onSelect
+  nome, label, fontFamily, fontWeight = 700, selected, onSelect
 }: {
   key?: React.Key; nome: string; label: string; fontFamily: string;
+  fontWeight?: number;
   selected: boolean; onSelect: () => void;
 }) {
   React.useEffect(() => {
@@ -30,7 +31,7 @@ function FontOption({
       className={`w-full px-4 py-2.5 text-left text-base transition-colors cursor-pointer ${
         selected ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
       }`}
-      style={{ fontFamily, fontSize: '16px' }}
+      style={{ fontFamily, fontSize: '16px', fontWeight }}
     >
       {label}
     </button>
@@ -87,6 +88,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
   const [estiloDesign, setEstiloDesign] = useState(preload?.estiloDesign ?? '');
   const [fonteDropdownOpen, setFonteDropdownOpen] = useState(false);
+  const [fonteSubtitulo, setFonteSubtitulo] = useState(preload?.fonteSubtitulo ?? '');
+  const [corSubtitulo, setCorSubtitulo] = useState(preload?.corSubtitulo ?? 'rgba(255,255,255,0.90)');
+  const [fonteSubtituloDropdownOpen, setFonteSubtituloDropdownOpen] = useState(false);
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
 
@@ -114,6 +118,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       fonteEscolhida,
       estiloBotaoEscolhido,
       corTextoPrincipal,
+      fonteSubtitulo,
+      corSubtitulo,
       estiloDesign,
       aspectRatio: customW && customH ? `custom_${customW}x${customH}` : aspectRatio,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
@@ -554,6 +560,89 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                 type="color"
                 value={corTextoPrincipal}
                 onChange={(e) => setCorTextoPrincipal(e.target.value)}
+                className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
+                title="Cor personalizada"
+              />
+            </div>
+          </div>
+
+          {/* Separador */}
+          <div className="border-t border-slate-200 pt-3">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Subtítulo</span>
+          </div>
+
+          {/* Fonte do Subtítulo */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Fonte do Subtítulo</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setFonteSubtituloDropdownOpen(!fonteSubtituloDropdownOpen)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
+              >
+                <span style={{ fontFamily: fonteSubtitulo ? `"${fonteSubtitulo}", sans-serif` : 'inherit', fontWeight: 400 }}>
+                  {fonteSubtitulo || 'Padrão da marca'}
+                </span>
+                <svg className={`w-4 h-4 text-slate-400 transition-transform ${fonteSubtituloDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {fonteSubtituloDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-64 overflow-y-auto">
+                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" fontWeight={400} selected={fonteSubtitulo === ''} onSelect={() => { setFonteSubtitulo(''); setFonteSubtituloDropdownOpen(false); }} />
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
+                  {['Montserrat', 'Nunito Sans', 'Poppins', 'Raleway', 'Inter', 'DM Sans', 'Lato', 'Open Sans'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Elegantes / Serif</div>
+                  {['Playfair Display', 'Merriweather', 'Lora', 'Cormorant Garamond'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", serif`} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
+                  ))}
+
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Leves / Light</div>
+                  {['Comfortaa', 'Quicksand', 'Nunito', 'Karla', 'Figtree'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={300} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Cor do Subtítulo */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Cor do Subtítulo</label>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: 'Branco', value: 'rgba(255,255,255,0.90)' },
+                { label: 'Branco puro', value: '#FFFFFF' },
+                { label: 'Preto', value: '#000000' },
+                { label: 'Cor da marca', value: brand === 'Apice' ? '#688D65' : '#BF0F26' },
+                { label: 'Amarelo', value: '#FFD700' },
+              ].map(({ label, value }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setCorSubtitulo(value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
+                    corSubtitulo === value
+                      ? 'border-slate-600 bg-slate-100'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <span
+                    className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block"
+                    style={{ backgroundColor: value.startsWith('rgba') ? 'rgba(255,255,255,0.90)' : value }}
+                  />
+                  {label}
+                </button>
+              ))}
+              <input
+                type="color"
+                value={corSubtitulo.startsWith('rgba') ? '#FFFFFF' : corSubtitulo}
+                onChange={(e) => setCorSubtitulo(e.target.value)}
                 className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
                 title="Cor personalizada"
               />

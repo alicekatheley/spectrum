@@ -271,6 +271,8 @@ export default function App() {
             fonteEscolhida: (inputB as any).fonteEscolhida || '',
             estiloBotaoEscolhido: (inputB as any).estiloBotaoEscolhido || 'pill',
             corTextoPrincipal: (inputB as any).corTextoPrincipal || '#FFFFFF',
+            fonteSubtitulo: (inputB as any).fonteSubtitulo || '',
+            corSubtitulo: (inputB as any).corSubtitulo || 'rgba(255,255,255,0.90)',
             estiloDesign: (inputB as any).estiloDesign || '',
           },
         }));

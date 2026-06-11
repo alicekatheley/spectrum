@@ -143,7 +143,11 @@ export default function PreviewModal({
             subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
             cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
             marca: pauta.marca as 'Apice' | 'Barbours',
-            estiloVisual,
+            estiloVisual: {
+              ...estiloVisual,
+              familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
+              corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
+            },
           });
         } catch (composeErr) {
           console.warn('[composeFrame] Falha, usando imagem pura:', composeErr);
