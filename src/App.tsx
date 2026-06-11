@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Brand, PautaGerada, InputModoA, InputModoB } from "./types";
 import { getPautas, upsertPautas, clearPautas } from "./lib/pautas-service";
 import Header from "./components/Header";
@@ -35,12 +35,22 @@ export default function App() {
   const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
   const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>(() => {
     try {
-      const stored = localStorage.getItem('crm_frame_urls');
-      return stored ? JSON.parse(stored) : {};
+      const urls: Record<string, Record<string, string>> = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
+      const b64: Record<string, Record<string, string>> = JSON.parse(localStorage.getItem('crm_frame_b64') || '{}');
+      // b64 como base, URLs públicas sobrepõem (preferência)
+      const merged: Record<string, Record<string, string>> = {};
+      for (const [id, frames] of Object.entries(b64)) {
+        merged[id] = { ...frames };
+      }
+      for (const [id, frames] of Object.entries(urls)) {
+        merged[id] = { ...(merged[id] ?? {}), ...frames };
+      }
+      return merged;
     } catch {
       return {};
     }
   });
+  const reconstructedRef = useRef<Set<string>>(new Set());
 
   const handleFrameGenerated = async (
     pautaId: string,
@@ -58,6 +68,15 @@ export default function App() {
       },
     }));
 
+    // Registra pautaId como tendo frames (usado para reconstituição no reload)
+    try {
+      const knownPautas: string[] = JSON.parse(localStorage.getItem('crm_frame_pautas') || '[]');
+      if (!knownPautas.includes(pautaId)) {
+        knownPautas.push(pautaId);
+        localStorage.setItem('crm_frame_pautas', JSON.stringify(knownPautas));
+      }
+    } catch { /* ignore */ }
+
     if (publicUrl) {
       try {
         const stored = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
@@ -67,6 +86,17 @@ export default function App() {
         console.log(`[handleFrameGenerated] URL persistida: ${publicUrl}`);
       } catch (err) {
         console.warn('[handleFrameGenerated] Falha ao salvar URL:', err);
+      }
+    } else {
+      // Fallback: persiste base64 para sobreviver ao reload quando upload falhou
+      try {
+        const stored = JSON.parse(localStorage.getItem('crm_frame_b64') || '{}');
+        stored[pautaId] = stored[pautaId] ?? {};
+        stored[pautaId][frameName] = imageData;
+        localStorage.setItem('crm_frame_b64', JSON.stringify(stored));
+        console.log(`[handleFrameGenerated] base64 persistido como fallback: ${pautaId}/${frameName}`);
+      } catch (err) {
+        console.warn('[handleFrameGenerated] Falha ao salvar base64:', err);
       }
     }
   };
@@ -101,6 +131,74 @@ export default function App() {
     };
     init();
   }, []);
+
+  // Reconstrói URLs do Supabase Storage para pautas cujos frames sumiram do localStorage
+  useEffect(() => {
+    if (history.length === 0) return;
+    const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
+    if (!SUPABASE_URL) return;
+
+    const knownPautas: string[] = (() => {
+      try { return JSON.parse(localStorage.getItem('crm_frame_pautas') || '[]'); }
+      catch { return []; }
+    })();
+    if (knownPautas.length === 0) return;
+
+    const storedUrls: Record<string, Record<string, string>> = (() => {
+      try { return JSON.parse(localStorage.getItem('crm_frame_urls') || '{}'); }
+      catch { return {}; }
+    })();
+
+    const toReconstruct = history.filter(p =>
+      knownPautas.includes(p.id) &&
+      !storedUrls[p.id] &&
+      !reconstructedRef.current.has(p.id)
+    );
+    if (toReconstruct.length === 0) return;
+
+    const reconstruct = async () => {
+      const urlUpdates: Record<string, Record<string, string>> = {};
+      const frameKeys = ['frame_0', 'frame_1', 'frame_2'];
+
+      for (const pauta of toReconstruct) {
+        reconstructedRef.current.add(pauta.id);
+        const safeMarca = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const found: Record<string, string> = {};
+
+        for (const frameName of frameKeys) {
+          const safeFrame = frameName.replace(/[^a-z0-9]/g, '');
+          const url = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${safeFrame}.png`;
+          try {
+            const resp = await fetch(url, { method: 'HEAD' });
+            if (resp.ok) found[frameName] = url;
+          } catch { /* network error */ }
+        }
+
+        if (Object.keys(found).length > 0) urlUpdates[pauta.id] = found;
+      }
+
+      if (Object.keys(urlUpdates).length === 0) return;
+
+      setAllFrameImages(prev => {
+        const next = { ...prev };
+        for (const [id, frames] of Object.entries(urlUpdates)) {
+          next[id] = { ...(next[id] ?? {}), ...frames };
+        }
+        return next;
+      });
+
+      try {
+        const stored = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
+        for (const [id, frames] of Object.entries(urlUpdates)) {
+          stored[id] = { ...(stored[id] ?? {}), ...frames };
+        }
+        localStorage.setItem('crm_frame_urls', JSON.stringify(stored));
+        console.log(`[reconstruct] URLs recuperadas para ${Object.keys(urlUpdates).length} pauta(s)`);
+      } catch { /* ignore */ }
+    };
+
+    reconstruct();
+  }, [history]);
 
   // Persiste histórico no localStorage (imediato) e no Supabase (async)
   const saveHistory = (newHistory: PautaGerada[]) => {
