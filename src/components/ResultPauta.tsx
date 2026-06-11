@@ -20,7 +20,7 @@ interface ResultPautaProps {
   imageModel: string;
   referenciaImagem?: string | null;
   frameImages: Record<string, string>;
-  onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
+  onFrameGenerated: (pautaId: string, frameName: string, imageData: string, publicUrl?: string) => void;
 }
 
 export default function ResultPauta({
@@ -167,7 +167,7 @@ export default function ResultPauta({
         } catch (composeErr) {
           console.warn('[composeFrame] Falha, usando imagem pura:', composeErr);
         }
-        onFrameGenerated(pauta.id, frameName, finalDataUrl);
+        onFrameGenerated(pauta.id, frameName, finalDataUrl, data.publicUrl ?? undefined);
         if (data.publicUrl) {
           setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
         }

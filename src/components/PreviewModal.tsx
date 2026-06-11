@@ -9,7 +9,7 @@ interface PreviewModalProps {
   onClose: () => void;
   onUpdatePauta?: (updated: PautaGerada) => void;
   frameImages: Record<string, string>;
-  onFrameGenerated: (pautaId: string, frameName: string, imageData: string) => void;
+  onFrameGenerated: (pautaId: string, frameName: string, imageData: string, publicUrl?: string) => void;
   aspectRatio: string;
   imageModel: string;
   referenciaImagem?: string | null;
@@ -148,7 +148,7 @@ export default function PreviewModal({
         } catch (composeErr) {
           console.warn('[composeFrame] Falha, usando imagem pura:', composeErr);
         }
-        onFrameGenerated(pauta.id, frameName, finalDataUrl);
+        onFrameGenerated(pauta.id, frameName, finalDataUrl, data.publicUrl ?? undefined);
         return finalDataUrl;
       } else {
         setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida.' }));
