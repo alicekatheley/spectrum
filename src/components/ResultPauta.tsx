@@ -353,7 +353,7 @@ export default function ResultPauta({
 
       // Usar gifshot para montar o GIF
       // @ts-ignore
-      const gifshot = (await import('https://cdn.jsdelivr.net/npm/gifshot@0.4.5/build/gifshot.min.js')).default;
+      const gifshot = (await import('gifshot')).default ?? (await import('gifshot'));
 
       gifshot.createGIF({
         images: framesBase64,
