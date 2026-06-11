@@ -3,8 +3,11 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Notebook\\\\spectrum\" -Force)",
       "Bash(Select-Object Mode, Name)",
-      "Bash(Format-Table -AutoSize)"
+      "Bash(Format-Table -AutoSize)",
+      "mcp__visualize__read_me"
     ]
   },
-  "enabledMcpjsonServers": ["supabase"]
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }
