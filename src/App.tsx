@@ -35,40 +35,53 @@ export default function App() {
   const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
   const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>(() => {
     try {
-      const stored = localStorage.getItem('crm_frame_images');
+      const stored = localStorage.getItem('crm_frame_urls');
       return stored ? JSON.parse(stored) : {};
     } catch {
       return {};
     }
   });
 
-  const handleFrameGenerated = (pautaId: string, frameName: string, imageData: string) => {
-    setAllFrameImages(prev => {
-      const updated = {
-        ...prev,
-        [pautaId]: {
-          ...(prev[pautaId] ?? {}),
-          [frameName]: imageData,
-        },
-      };
-      try {
-        localStorage.setItem('crm_frame_images', JSON.stringify(updated));
-      } catch (e) {
-        console.warn('[frameImages] localStorage cheio, limpando frames antigos...');
-        const keys = Object.keys(updated);
-        if (keys.length > 5) {
-          const toKeep = keys.slice(-5);
-          const trimmed = Object.fromEntries(toKeep.map(k => [k, updated[k]]));
-          try {
-            localStorage.setItem('crm_frame_images', JSON.stringify(trimmed));
-            return trimmed;
-          } catch {
-            return updated;
-          }
-        }
+  const handleFrameGenerated = async (
+    pautaId: string,
+    frameName: string,
+    imageData: string,
+  ) => {
+    // 1. Atualizar estado local imediatamente com base64 (para exibição)
+    setAllFrameImages(prev => ({
+      ...prev,
+      [pautaId]: {
+        ...(prev[pautaId] ?? {}),
+        [frameName]: imageData,
+      },
+    }));
+
+    // 2. Salvar no Supabase Storage e armazenar URL pública no localStorage
+    try {
+      const res = await fetch('/api/save-frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pautaId, frameName, imageDataUrl: imageData }),
+      });
+      if (res.ok) {
+        const { publicUrl } = await res.json();
+        const stored = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
+        stored[pautaId] = stored[pautaId] ?? {};
+        stored[pautaId][frameName] = publicUrl;
+        localStorage.setItem('crm_frame_urls', JSON.stringify(stored));
+        // Substituir base64 pela URL pública no estado
+        setAllFrameImages(prev => ({
+          ...prev,
+          [pautaId]: {
+            ...(prev[pautaId] ?? {}),
+            [frameName]: publicUrl,
+          },
+        }));
+        console.log(`[handleFrameGenerated] URL salva: ${publicUrl}`);
       }
-      return updated;
-    });
+    } catch (err) {
+      console.warn('[handleFrameGenerated] Falha ao salvar no Storage:', err);
+    }
   };
 
   // Carrega histórico: Supabase primeiro, fallback para localStorage

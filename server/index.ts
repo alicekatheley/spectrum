@@ -670,6 +670,46 @@ app.post("/api/generate-variation", async (req, res) => {
   }
 });
 
+app.post("/api/save-frame", async (req, res) => {
+  try {
+    const { pautaId, frameName, imageDataUrl } = req.body;
+    if (!pautaId || !frameName || !imageDataUrl) {
+      return res.status(400).json({ error: "Campos obrigatórios faltando." });
+    }
+
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase não configurado." });
+    }
+
+    const base64Data = imageDataUrl.split(',')[1];
+    const mimeType = imageDataUrl.split(';')[0].split(':')[1] || 'image/png';
+    const buffer = Buffer.from(base64Data, 'base64');
+    const fileName = `frames/${pautaId}/${frameName}.png`;
+
+    const { error } = await supabase
+      .storage
+      .from('campaign-images')
+      .upload(fileName, buffer, { contentType: mimeType, upsert: true });
+
+    if (error) {
+      console.error('[save-frame] Erro no upload:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    const { data: urlData } = supabase
+      .storage
+      .from('campaign-images')
+      .getPublicUrl(fileName);
+
+    console.log(`[save-frame] Frame salvo: ${urlData.publicUrl}`);
+    res.json({ publicUrl: urlData.publicUrl });
+
+  } catch (err: any) {
+    console.error('[save-frame] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/approve-pauta", async (req, res) => {
   try {
     if (!supabaseCrmAi) {
