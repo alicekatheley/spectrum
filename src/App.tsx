@@ -66,7 +66,7 @@ export default function App() {
         localStorage.setItem('crm_frame_urls', JSON.stringify(stored));
         console.log(`[handleFrameGenerated] URL persistida: ${publicUrl}`);
       } catch (err) {
-        console.warn('[handleFrameGenerated] Falha ao salvar URL no localStorage:', err);
+        console.warn('[handleFrameGenerated] Falha ao salvar URL:', err);
       }
     }
   };
