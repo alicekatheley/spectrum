@@ -334,17 +334,33 @@ export default function ResultPauta({
         return;
       }
 
+      // Converter todas as imagens para base64 (necessário para CORS)
+      const toBase64 = async (src: string): Promise<string> => {
+        if (src.startsWith('data:')) return src; // já é base64
+        // Buscar URL externa e converter
+        const response = await fetch(src);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      };
+
+      // Converter todos os frames para base64
+      const framesBase64 = await Promise.all(framesGerados.map(toBase64));
+
+      // Usar gifshot para montar o GIF
       // @ts-ignore
       const gifshot = (await import('https://cdn.jsdelivr.net/npm/gifshot@0.4.5/build/gifshot.min.js')).default;
 
-      const frames = framesGerados;
-
       gifshot.createGIF({
-        images: frames,
-        gifWidth: 800,
-        gifHeight: 800,
+        images: framesBase64,
+        gifWidth: 600,
+        gifHeight: 600,
         interval: 0.7,
-        numFrames: frames.length,
+        numFrames: framesBase64.length,
         frameDuration: 1,
         sampleInterval: 10,
         numWorkers: 2,
@@ -356,19 +372,19 @@ export default function ResultPauta({
           link.click();
         } else {
           console.error('[downloadGifAnimado] gifshot error:', obj.error);
-          alert('Não foi possível gerar o GIF animado. Os frames individuais estão disponíveis para download abaixo.');
+          // Fallback: baixar frames individuais
+          framesBase64.forEach((src, i) => {
+            const link = document.createElement('a');
+            link.download = `${pauta.marca}-frame-${i + 1}.png`;
+            link.href = src;
+            link.click();
+          });
         }
       });
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('[downloadGifAnimado] Erro:', err);
-      for (let i = 0; i < framesGerados.length; i++) {
-        const link = document.createElement('a');
-        link.download = `${pauta.marca}-frame-${i + 1}.png`;
-        link.href = framesGerados[i];
-        link.click();
-        await new Promise(r => setTimeout(r, 300));
-      }
+      alert('Erro ao gerar GIF: ' + err.message);
     }
   };
 
