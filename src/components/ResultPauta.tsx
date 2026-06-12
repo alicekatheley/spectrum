@@ -153,7 +153,13 @@ export default function ResultPauta({
               familiaFonte: fonteEscolhida,
               corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
               estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
+              corBotao: estiloVisual?.corBotao, // preservar cor do botão extraída do parse
             };
+          }
+
+          // Garantir que a cor do botão nunca seja undefined — fallback para a cor da marca
+          if (estiloVisual && !estiloVisual.corBotao) {
+            estiloVisual.corBotao = pauta.marca === 'Apice' ? '#688D65' : '#BF0F26';
           }
 
           finalDataUrl = await composeFrame({
