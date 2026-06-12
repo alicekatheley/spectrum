@@ -13,6 +13,7 @@ interface PreviewModalProps {
   aspectRatio: string;
   imageModel: string;
   referenciaImagem?: string | null;
+  referenciasImagem?: string[];
 }
 
 export default function PreviewModal({
@@ -24,6 +25,7 @@ export default function PreviewModal({
   aspectRatio,
   imageModel,
   referenciaImagem,
+  referenciasImagem,
 }: PreviewModalProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'edit'>('visual');
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -83,6 +85,7 @@ export default function PreviewModal({
           mecanica: pauta.operacional.mecanicaEscolhida,
           recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
           referenciaImagem: referenciaImagem ?? undefined,
+          referenciasImagem: referenciasImagem ?? [],
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
           cta: pauta.copy.ctaBotao,

@@ -32,7 +32,7 @@ export default function App() {
   const [imageModel, setImageModel] = useState<string>(DEFAULT_IMAGE_MODEL);
   const [direcionamentoIA, setDirecionamentoIA] = useState<string>('');
   const [tipoGeracao, setTipoGeracao] = useState<'texto' | 'imagem' | 'texto_imagem'>('texto_imagem');
-  const [referenciaImagem, setReferenciaImagem] = useState<string | null>(null);
+  const [referenciasImagem, setReferenciasImagem] = useState<string[]>([]);
   const [allFrameImages, setAllFrameImages] = useState<Record<string, Record<string, string>>>(() => {
     try {
       const urls: Record<string, Record<string, string>> = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
@@ -256,7 +256,7 @@ export default function App() {
       const response = await fetch("/api/generate-pauta", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "B", input: inputB, aspectRatio, direcionamentoIA, tipoGeracao, referenciaImagem }),
+        body: JSON.stringify({ modo: "B", input: inputB, aspectRatio, direcionamentoIA, tipoGeracao, referenciasImagem }),
       });
       const resData = await response.json();
       if (resData.status === "success" && Array.isArray(resData.data)) {
@@ -682,8 +682,8 @@ export default function App() {
                     onDirecionamentoChange={setDirecionamentoIA}
                     tipoGeracao={tipoGeracao}
                     onTipoGeracaoChange={setTipoGeracao}
-                    referenciaImagem={referenciaImagem}
-                    onReferenciaImagemChange={setReferenciaImagem}
+                    referenciasImagem={referenciasImagem}
+                    onReferenciasImagemChange={setReferenciasImagem}
                   />
                 )}
               </div>
@@ -732,7 +732,8 @@ export default function App() {
                       onOpenPreview={setActivePreviewPauta}
                       aspectRatio={aspectRatio}
                       imageModel={imageModel}
-                      referenciaImagem={referenciaImagem}
+                      referenciaImagem={referenciasImagem[0] ?? undefined}
+                      referenciasImagem={referenciasImagem}
                       frameImages={allFrameImages[pauta.id] ?? {}}
                       onFrameGenerated={handleFrameGenerated}
                     />
@@ -784,7 +785,8 @@ export default function App() {
           onFrameGenerated={handleFrameGenerated}
           aspectRatio={aspectRatio}
           imageModel={imageModel}
-          referenciaImagem={referenciaImagem}
+          referenciaImagem={referenciasImagem[0] ?? undefined}
+          referenciasImagem={referenciasImagem}
         />
       )}
     </div>

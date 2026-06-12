@@ -52,24 +52,13 @@ interface FormModoBProps {
   onDirecionamentoChange: (v: string) => void;
   tipoGeracao: 'texto' | 'imagem' | 'texto_imagem';
   onTipoGeracaoChange: (v: 'texto' | 'imagem' | 'texto_imagem') => void;
-  referenciaImagem: string | null;
-  onReferenciaImagemChange: (v: string | null) => void;
+  referenciasImagem: string[];
+  onReferenciasImagemChange: (v: string[]) => void;
 }
 
-export default function FormModoB({ brand, onSubmit, loading, preload, aspectRatio, onAspectRatioChange, imageModel, onImageModelChange, direcionamentoIA, onDirecionamentoChange, tipoGeracao, onTipoGeracaoChange, referenciaImagem, onReferenciaImagemChange }: FormModoBProps) {
+export default function FormModoB({ brand, onSubmit, loading, preload, aspectRatio, onAspectRatioChange, imageModel, onImageModelChange, direcionamentoIA, onDirecionamentoChange, tipoGeracao, onTipoGeracaoChange, referenciasImagem, onReferenciasImagemChange }: FormModoBProps) {
   const isApice = brand === 'Apice';
   const brandColor = isApice ? '#688D65' : '#BF0F26';
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => onReferenciaImagemChange(reader.result as string);
-    reader.readAsDataURL(file);
-    // Reset input so same file can be re-selected
-    e.target.value = '';
-  };
 
   // State para cada um dos 5 boxes do Briefing de CRM
   const [boxTituloEmail, setBoxTituloEmail] = useState(preload?.boxTituloEmail ?? "");
@@ -194,53 +183,83 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       />
 
       {/* Campo de Referência Visual */}
-      <div className="flex flex-col gap-2">
-        <span className="text-sm font-semibold text-slate-700">
-          Referência Visual <span className="text-xs font-normal text-slate-400">(Opcional — ajuda a IA a entender o estilo)</span>
-        </span>
-        {referenciaImagem ? (
-          <div className="relative w-full rounded-xl overflow-hidden border-2 border-slate-200 group">
-            <img
-              src={referenciaImagem}
-              alt="Referência visual"
-              className="w-full max-h-48 object-cover"
-            />
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-semibold text-slate-700">
+            Referência Visual
+            <span className="text-xs text-slate-400 font-normal ml-1">
+              (Opcional — até 4 imagens)
+            </span>
+          </label>
+          {referenciasImagem.length > 0 && (
             <button
               type="button"
-              onClick={() => onReferenciaImagemChange(null)}
-              className="absolute top-2 right-2 bg-slate-900/70 hover:bg-rose-600 text-white rounded-full p-1.5 transition-colors cursor-pointer"
-              title="Remover imagem"
+              onClick={() => onReferenciasImagemChange([])}
+              className="text-xs text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
             >
-              <X className="w-3.5 h-3.5" />
+              ✕ Limpar todas
             </button>
-            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-900/60 to-transparent px-3 py-2">
-              <span className="text-[10px] text-white font-semibold">Referência carregada ✓</span>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full border-2 border-dashed border-slate-200 hover:border-slate-300 rounded-xl p-5 flex flex-col items-center gap-2 transition-all cursor-pointer hover:bg-slate-50 group"
-            style={{ borderColor: 'transparent' }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = brandColor + '60')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}
-          >
-            <div className="border-2 border-dashed border-slate-200 group-hover:border-slate-300 rounded-xl p-5 w-full flex flex-col items-center gap-2 transition-all"
-              style={{}}>
-              <ImagePlus className="w-6 h-6 text-slate-300 group-hover:text-slate-400 transition-colors" />
-              <span className="text-xs text-slate-400 font-medium">Clique para anexar uma imagem de referência</span>
-              <span className="text-[10px] text-slate-300">JPG, PNG ou WEBP</span>
-            </div>
-          </button>
-        )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={handleImageUpload}
-          className="hidden"
-        />
+          )}
+        </div>
+
+        {/* Grid de referências */}
+        <div className="grid grid-cols-2 gap-2">
+          {Array.from({ length: 4 }).map((_, i) => {
+            const src = referenciasImagem[i];
+            return (
+              <div key={i} className="relative">
+                {src ? (
+                  <div className="relative rounded-xl overflow-hidden border-2 border-emerald-400 aspect-square">
+                    <img src={src} alt={`Ref ${i + 1}`} className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = [...referenciasImagem];
+                        updated.splice(i, 1);
+                        onReferenciasImagemChange(updated);
+                      }}
+                      className="absolute top-1 right-1 bg-black/60 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs transition-colors cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                    <span className="absolute bottom-1 left-1 bg-black/50 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                      REF {i + 1}
+                    </span>
+                  </div>
+                ) : referenciasImagem.length === i ? (
+                  <label className="flex flex-col items-center justify-center w-full aspect-square rounded-xl border-2 border-dashed border-slate-200 hover:border-slate-400 bg-slate-50 hover:bg-slate-100 transition-all cursor-pointer gap-1">
+                    <span className="text-slate-400 text-xl">+</span>
+                    <span className="text-[10px] text-slate-400 font-medium">Adicionar</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const result = ev.target?.result as string;
+                          onReferenciasImagemChange([...referenciasImagem, result]);
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                ) : (
+                  <div className="w-full aspect-square rounded-xl border-2 border-dashed border-slate-100 bg-slate-50 flex items-center justify-center">
+                    <span className="text-slate-200 text-xl">{i + 1}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="text-[10px] text-slate-400">
+          Adicione até 4 imagens de referência. A IA usará o estilo visual de todas elas.
+        </p>
       </div>
 
       <div className="flex flex-col gap-5">

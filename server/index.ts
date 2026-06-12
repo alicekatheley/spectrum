@@ -35,7 +35,12 @@ app.get("/api/mecanicas", (req, res) => {
 // Endpoint principal para geração de pautas por inteligência artificial
 app.post("/api/generate-pauta", async (req, res) => {
   try {
-    const { modo, input, aspectRatio: rawAspectRatio, direcionamentoIA, tipoGeracao: rawTipoGeracao, referenciaImagem } = req.body;
+    const { modo, input, aspectRatio: rawAspectRatio, direcionamentoIA, tipoGeracao: rawTipoGeracao, referenciaImagem, referenciasImagem } = req.body;
+
+    // Suporte a múltiplas referências — usa array se disponível, senão single
+    const todasReferencias: string[] = Array.isArray(referenciasImagem) && referenciasImagem.length > 0
+      ? referenciasImagem.slice(0, 4)
+      : (referenciaImagem ? [referenciaImagem] : []);
     let direcStr = typeof direcionamentoIA === 'string' ? direcionamentoIA.trim().replace(/[\r\n]+/g, ' ') : '';
     let direcHasInjection = false;
     if (direcStr) {
@@ -220,6 +225,7 @@ app.post("/api/generate-image", async (req, res) => {
       recompensa,
       frameReferencia: rawFrameRef,
       referenciaImagem: rawRefImage,
+      referenciasImagem: rawRefImages,
       headline,
       subheadline,
       cta,
@@ -331,14 +337,20 @@ Extract:
 
     const referenceImageUrls: string[] = [];
 
-    // 1. Imagem de referência do usuário
-    if (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:')) {
-      try {
-        const url = await uploadReferenceToPiApp(rawRefImage);
-        referenceImageUrls.push(url);
-        console.log('[generate-image] Referência do usuário enviada ao PiApp:', url);
-      } catch (err: any) {
-        console.warn('[generate-image] Upload de referência do usuário falhou (ignorando):', err.message);
+    // 1. Imagens de referência do usuário (suporte a múltiplas)
+    const refImages: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
+      ? rawRefImages.slice(0, 4)
+      : (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:') ? [rawRefImage] : []);
+
+    for (const refImg of refImages) {
+      if (typeof refImg === 'string' && refImg.startsWith('data:')) {
+        try {
+          const url = await uploadReferenceToPiApp(refImg);
+          referenceImageUrls.push(url);
+          console.log('[generate-image] Referência enviada ao PiApp:', url);
+        } catch (uploadErr: any) {
+          console.warn('[generate-image] Upload de referência falhou (ignorando):', uploadErr.message);
+        }
       }
     }
 

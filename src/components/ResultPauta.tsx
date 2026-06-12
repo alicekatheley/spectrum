@@ -19,6 +19,7 @@ interface ResultPautaProps {
   aspectRatio: string;
   imageModel: string;
   referenciaImagem?: string | null;
+  referenciasImagem?: string[];
   frameImages: Record<string, string>;
   onFrameGenerated: (pautaId: string, frameName: string, imageData: string, publicUrl?: string) => void;
 }
@@ -33,6 +34,7 @@ export default function ResultPauta({
   aspectRatio,
   imageModel,
   referenciaImagem,
+  referenciasImagem,
   frameImages,
   onFrameGenerated,
 }: ResultPautaProps) {
@@ -102,6 +104,7 @@ export default function ResultPauta({
           mecanica: pauta.operacional.mecanicaEscolhida,
           recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
           referenciaImagem: referenciaImagem ?? undefined,
+          referenciasImagem: referenciasImagem ?? [],
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
           cta: pauta.copy.ctaBotao,
@@ -231,6 +234,7 @@ export default function ResultPauta({
           frameIntermediario: pauta.visual?.frameIntermediario,
           frameFinal: pauta.visual?.frameFinal,
           referenciaImagem: referenciaImagem ?? undefined,
+          referenciasImagem: referenciasImagem ?? [],
         }),
       });
       if (!response.ok) {
