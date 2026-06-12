@@ -14,6 +14,7 @@ export interface ComposeFrameOptions {
     pesoFonte?: string;
     familiaFonte?: string;
     familiaFonteSubheadline?: string;
+    familiaFonteBotao?: string;
   };
 }
 
@@ -121,8 +122,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
   const familiaFonteRaw = ev.familiaFonte ?? (isApice ? 'Playfair Display' : 'Oswald');
   const familiaFonteSubRaw = ev?.familiaFonteSubheadline || opts.estiloVisual?.familiaFonte || (isApice ? 'Montserrat' : 'Inter');
 
+  const familiaFonteBotaoRaw = ev?.familiaFonteBotao || familiaFonteSubRaw;
+
   const familiaFonte = await loadFont(familiaFonteRaw, pesoFonte);
   const familiaFonteSub = await loadFont(familiaFonteSubRaw, '600');
+  const familiaFonteBotao = await loadFont(familiaFonteBotaoRaw, '800');
 
   console.log('[composeFrame] Estilo aplicado:', {
     familiaFonte: familiaFonteRaw,
@@ -266,7 +270,7 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       }
 
       const ctaSize = 34;
-      ctx.font = `800 ${ctaSize}px ${familiaFonteSub}`;
+      ctx.font = `800 ${ctaSize}px ${familiaFonteBotao}`;
       ctx.fillStyle = corTextoBotao;
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;

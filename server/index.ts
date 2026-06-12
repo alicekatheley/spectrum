@@ -616,7 +616,8 @@ Retorne EXATAMENTE este JSON (sem backticks, sem markdown):
   "tamanhoHeadline": "grande ou medio ou pequeno",
   "pesoFonte": "400 ou 600 ou 700 ou 900",
   "familiaFonte": "fonte CSS válida",
-  "familiaFonteSubheadline": "fonte CSS válida para sub-headline"
+  "familiaFonteSubheadline": "fonte CSS válida para sub-headline",
+  "familiaFonteBotao": "fonte CSS válida para o texto do botão CTA — se não mencionar, use a mesma fonte do subtítulo"
 }
 
 Se o usuário não mencionar um campo, use o valor padrão mais adequado para um banner de email marketing de marca de beleza.`;

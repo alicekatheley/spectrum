@@ -172,6 +172,7 @@ export default function ResultPauta({
               ...estiloVisual,
               familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
               corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
+              familiaFonteBotao: estiloVisual?.familiaFonteBotao, // extraído do parse
             },
           });
         } catch (composeErr) {

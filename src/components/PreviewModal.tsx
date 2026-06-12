@@ -153,6 +153,7 @@ export default function PreviewModal({
               ...estiloVisual,
               familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
               corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
+              familiaFonteBotao: estiloVisual?.familiaFonteBotao, // extraído do parse
             },
           });
         } catch (composeErr) {
