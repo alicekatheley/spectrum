@@ -50,6 +50,8 @@ export interface InputModoB {
   corTextoPrincipal?: string;
   fonteSubtitulo?: string;
   corSubtitulo?: string;
+  corBotaoEscolhida?: string;
+  fonteBotao?: string;
   quantidadeFrames?: number;
   estiloDesign?: string;
 }

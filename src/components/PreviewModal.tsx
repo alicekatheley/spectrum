@@ -128,13 +128,14 @@ export default function PreviewModal({
             }
           }
 
-          if (fonteEscolhida) {
+          if (fonteEscolhida || inputOriginal?.corBotaoEscolhida || inputOriginal?.fonteBotao) {
             estiloVisual = {
               ...estiloVisual,
-              familiaFonte: fonteEscolhida,
+              familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
               corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
               estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
-              corBotao: estiloVisual?.corBotao, // preservar cor do botão extraída do parse
+              corBotao: inputOriginal?.corBotaoEscolhida || estiloVisual?.corBotao,
+              familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
             };
           }
 
@@ -153,7 +154,7 @@ export default function PreviewModal({
               ...estiloVisual,
               familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
               corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
-              familiaFonteBotao: estiloVisual?.familiaFonteBotao, // extraído do parse
+              familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
             },
           });
         } catch (composeErr) {

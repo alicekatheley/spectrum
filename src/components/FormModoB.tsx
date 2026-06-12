@@ -91,6 +91,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [fonteSubtitulo, setFonteSubtitulo] = useState(preload?.fonteSubtitulo ?? '');
   const [corSubtitulo, setCorSubtitulo] = useState(preload?.corSubtitulo ?? 'rgba(255,255,255,0.90)');
   const [fonteSubtituloDropdownOpen, setFonteSubtituloDropdownOpen] = useState(false);
+  const [corBotaoEscolhida, setCorBotaoEscolhida] = useState(preload?.corBotaoEscolhida ?? '');
+  const [fonteBotao, setFonteBotao] = useState(preload?.fonteBotao ?? '');
+  const [fonteBotaoDropdownOpen, setFonteBotaoDropdownOpen] = useState(false);
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
 
@@ -120,6 +123,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       corTextoPrincipal,
       fonteSubtitulo,
       corSubtitulo,
+      corBotaoEscolhida,
+      fonteBotao,
       estiloDesign,
       aspectRatio: customW && customH ? `custom_${customW}x${customH}` : aspectRatio,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
@@ -672,6 +677,82 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                   {label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Cor do Botão */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Cor do Botão</label>
+            <div className="flex gap-2 flex-wrap items-center">
+              {[
+                { label: 'Cor da marca', value: '' },
+                { label: 'Preto', value: '#000000' },
+                { label: 'Branco', value: '#FFFFFF' },
+                { label: 'Verde', value: '#1A8A4A' },
+                { label: 'Vermelho', value: '#BF0F26' },
+                { label: 'Azul', value: '#1A6BB5' },
+              ].map(({ label, value }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setCorBotaoEscolhida(value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
+                    corBotaoEscolhida === value
+                      ? 'border-slate-600 bg-slate-100'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <span
+                    className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block"
+                    style={{ backgroundColor: value || (brand === 'Apice' ? '#688D65' : '#BF0F26') }}
+                  />
+                  {label}
+                </button>
+              ))}
+              <input
+                type="color"
+                value={corBotaoEscolhida || (brand === 'Apice' ? '#688D65' : '#BF0F26')}
+                onChange={(e) => setCorBotaoEscolhida(e.target.value)}
+                className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
+                title="Cor personalizada"
+              />
+            </div>
+          </div>
+
+          {/* Fonte do Botão */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Fonte do Botão</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setFonteBotaoDropdownOpen(!fonteBotaoDropdownOpen)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
+              >
+                <span style={{ fontFamily: fonteBotao ? `"${fonteBotao}", sans-serif` : 'inherit', fontWeight: 800 }}>
+                  {fonteBotao || 'Padrão da marca'}
+                </span>
+                <svg className={`w-4 h-4 text-slate-400 transition-transform ${fonteBotaoDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {fonteBotaoDropdownOpen && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto">
+                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" fontWeight={800} selected={fonteBotao === ''} onSelect={() => { setFonteBotao(''); setFonteBotaoDropdownOpen(false); }} />
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Impactantes / Display</div>
+                  {['Bebas Neue', 'Oswald', 'Teko', 'Barlow', 'Black Han Sans', 'Fjalla One'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
+                  ))}
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
+                  {['Montserrat', 'Poppins', 'Inter', 'Raleway', 'Nunito Sans'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
+                  ))}
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Divertidas / Cartoon</div>
+                  {['Bangers', 'Fredoka One', 'Righteous', 'Boogaloo'].map(f => (
+                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
