@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Brand, PautaGerada, InputModoA, InputModoB } from "./types";
 import { getPautas, upsertPautas, clearPautas } from "./lib/pautas-service";
+import { supabase, isEmailAllowed } from "./lib/supabase";
+import LoginPage from "./components/LoginPage";
 import Header from "./components/Header";
 import FormModoA from "./components/FormModoA";
 import FormModoB from "./components/FormModoB";
@@ -12,6 +14,10 @@ import WeeklyPlanner from "./components/WeeklyPlanner";
 import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, ChevronDown } from "lucide-react";
 
 export default function App() {
+  const [session, setSession] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [accessDenied, setAccessDenied] = useState(false);
+
   const [currentBrand, setCurrentBrand] = useState<Brand>('Apice');
   const [currentMode, setCurrentMode] = useState<'A' | 'B'>('A');
   const [mainTab, setMainTab] = useState<'geracao' | 'historico'>('geracao');
@@ -100,6 +106,48 @@ export default function App() {
       }
     }
   };
+
+  // Auth: verifica sessão e escuta mudanças
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        const email = session.user?.email ?? '';
+        if (!isEmailAllowed(email)) {
+          supabase!.auth.signOut();
+          setAccessDenied(true);
+          setSession(null);
+        } else {
+          setSession(session);
+          setAccessDenied(false);
+        }
+      }
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        const email = session.user?.email ?? '';
+        if (!isEmailAllowed(email)) {
+          supabase!.auth.signOut();
+          setAccessDenied(true);
+          setSession(null);
+        } else {
+          setSession(session);
+          setAccessDenied(false);
+        }
+      } else {
+        setSession(null);
+      }
+      setAuthLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Carrega histórico: Supabase primeiro, fallback para localStorage
   useEffect(() => {
@@ -453,12 +501,54 @@ export default function App() {
     return matchBrand && matchStatus && matchModo && matchTipo;
   });
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (accessDenied) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-10 max-w-md w-full flex flex-col items-center gap-6 text-center">
+          <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center">
+            <span className="text-rose-600 text-3xl">✕</span>
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">Acesso negado</h2>
+            <p className="text-sm text-slate-500">
+              Este app é restrito a emails da organização.<br />
+              Use um email @gocase.com.br, @gogroup.com.br ou @gobeaute.com.br
+            </p>
+          </div>
+          <button
+            onClick={() => { setAccessDenied(false); }}
+            className="px-6 py-2.5 bg-slate-800 text-white rounded-xl font-semibold hover:bg-slate-700 transition-colors cursor-pointer"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (supabase && !session) {
+    return <LoginPage />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-150 py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
       <div className="max-w-7xl mx-auto flex flex-col gap-8">
         
         {/* Top Header & Brand Selector */}
-        <Header currentBrand={currentBrand} setCurrentBrand={setCurrentBrand} />
+        <Header
+          currentBrand={currentBrand}
+          setCurrentBrand={setCurrentBrand}
+          userEmail={session?.user?.email}
+          onLogout={() => supabase?.auth.signOut()}
+        />
 
         {/* Abas Principais de Navegação */}
         <div id="main-tabs-container" className="flex border-b border-slate-800 gap-1 sm:gap-2 mb-4 relative z-10 p-1 bg-slate-900/40 rounded-2xl">

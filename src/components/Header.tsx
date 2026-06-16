@@ -5,9 +5,11 @@ import { useState } from "react";
 interface HeaderProps {
   currentBrand: Brand;
   setCurrentBrand: (brand: Brand) => void;
+  userEmail?: string;
+  onLogout?: () => void;
 }
 
-export default function Header({ currentBrand, setCurrentBrand }: HeaderProps) {
+export default function Header({ currentBrand, setCurrentBrand, userEmail, onLogout }: HeaderProps) {
   const [showPlaybook, setShowPlaybook] = useState(false);
 
   return (
@@ -67,6 +69,17 @@ export default function Header({ currentBrand, setCurrentBrand }: HeaderProps) {
             <BookOpen className="w-4 h-4" />
             {showPlaybook ? 'Fechar Resumo Tático' : 'Ver Perfil tático'}
           </button>
+
+          {userEmail && onLogout && (
+            <button
+              onClick={onLogout}
+              className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer flex items-center gap-1.5 bg-slate-800/50 hover:bg-slate-800 px-3 py-2 rounded-xl border border-slate-700/40"
+              title="Sair"
+            >
+              <span className="max-w-[140px] truncate">{userEmail}</span>
+              <span>→</span>
+            </button>
+          )}
         </div>
       </div>
 
