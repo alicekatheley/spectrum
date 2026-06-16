@@ -9,7 +9,7 @@ if (!url || !key) {
 
 export const supabase = url && key ? createClient(url, key) : null;
 
-export const ALLOWED_DOMAINS = ['gocase.com.br', 'gogroup.com.br', 'gobeaute.com.br'];
+export const ALLOWED_DOMAINS = ['gocase.com', 'gogroup.com', 'gobeaute.com'];
 
 export function isEmailAllowed(email: string): boolean {
   return ALLOWED_DOMAINS.some(domain => email.toLowerCase().endsWith(`@${domain}`));

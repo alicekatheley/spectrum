@@ -520,7 +520,7 @@ export default function App() {
             <h2 className="text-xl font-bold text-slate-800 mb-2">Acesso negado</h2>
             <p className="text-sm text-slate-500">
               Este app é restrito a emails da organização.<br />
-              Use um email @gocase.com.br, @gogroup.com.br ou @gobeaute.com.br
+              Use um email @gocase.com, @gogroup.com ou @gobeaute.com
             </p>
           </div>
           <button

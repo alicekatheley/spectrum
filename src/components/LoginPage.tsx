@@ -71,7 +71,7 @@ export default function LoginPage() {
         {/* Aviso de acesso */}
         <p className="text-xs text-slate-400 text-center">
           Acesso restrito a emails<br />
-          @gocase.com.br · @gogroup.com.br · @gobeaute.com.br
+          @gocase.com · @gogroup.com · @gobeaute.com
         </p>
       </div>
     </div>
