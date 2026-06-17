@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Brand, InputModoB } from "../types";
 import { Sparkles, Trash2, ShieldAlert, Eye, RefreshCw, ImagePlus, X } from "lucide-react";
 import AspectRatioSelector from "./AspectRatioSelector";
@@ -6,21 +6,58 @@ import ImageModelSelector from "./ImageModelSelector";
 import DirecionamentoIAField from "./DirecionamentoIAField";
 import TipoGeracaoSelector from "./TipoGeracaoSelector";
 
+const FONTES_CATALOGO: Record<string, string[]> = {
+  'Elegantes / Serif': [
+    'Playfair Display', 'Merriweather', 'Abril Fatface', 'Lora',
+    'Cormorant Garamond', 'EB Garamond', 'Libre Baskerville',
+    'Crimson Text', 'Spectral', 'Vollkorn', 'Cardo', 'Domine',
+  ],
+  'Modernas / Sans-serif': [
+    'Montserrat', 'Nunito Sans', 'Poppins', 'Raleway', 'Oswald',
+    'Inter', 'DM Sans', 'Lato', 'Open Sans', 'Roboto', 'Source Sans 3',
+    'Barlow', 'Exo 2', 'Rubik', 'Karla', 'Manrope', 'Outfit',
+    'Space Grotesk', 'Figtree', 'Plus Jakarta Sans', 'Syne',
+    'Urbanist', 'Jost', 'Lexend', 'Nunito',
+  ],
+  'Impactantes / Display': [
+    'Bebas Neue', 'Teko', 'Fjalla One', 'Black Han Sans',
+    'Barlow Condensed', 'Anton', 'Squada One',
+    'Russo One', 'Arvo', 'Chakra Petch', 'Saira Condensed',
+    'Kanit', 'Prompt', 'Rajdhani', 'Yanone Kaffeesatz',
+  ],
+  'Divertidas / Cartoon': [
+    'Bangers', 'Fredoka One', 'Boogaloo', 'Pacifico', 'Righteous',
+    'Lilita One', 'Titan One', 'Chewy', 'Permanent Marker',
+    'Patrick Hand', 'Gochi Hand', 'Kalam', 'Gloria Hallelujah',
+  ],
+  'Cursivas / Handwritten': [
+    'Dancing Script', 'Caveat', 'Satisfy',
+    'Sacramento', 'Great Vibes', 'Allura', 'Parisienne',
+    'Alex Brush', 'Courgette', 'Kaushan Script', 'Lobster Two',
+    'Marck Script', 'Pinyon Script', 'Rochester',
+  ],
+  'Mono / Tech': [
+    'Space Mono', 'JetBrains Mono', 'Fira Code', 'Source Code Pro',
+    'IBM Plex Mono', 'Roboto Mono', 'Courier Prime', 'Share Tech Mono',
+  ],
+};
+
+const TODAS_FONTES = Object.values(FONTES_CATALOGO).flat();
+
 function FontOption({
-  nome, label, fontFamily, fontWeight = 700, selected, onSelect
+  nome, fontWeight = 700, selected, onSelect
 }: {
-  key?: React.Key; nome: string; label: string; fontFamily: string;
-  fontWeight?: number;
+  key?: React.Key; nome: string; fontWeight?: number;
   selected: boolean; onSelect: () => void;
 }) {
-  React.useEffect(() => {
-    if (!nome || ['inherit', 'serif', 'sans-serif', 'cursive'].includes(nome)) return;
+  useEffect(() => {
+    if (!nome) return;
     const linkId = `gfont-preview-${nome.replace(/\s/g, '-')}`;
     if (document.getElementById(linkId)) return;
     const link = document.createElement('link');
     link.id = linkId;
     link.rel = 'stylesheet';
-    link.href = `https://fonts.googleapis.com/css2?family=${nome.replace(/\s/g, '+')}:wght@700&display=swap`;
+    link.href = `https://fonts.googleapis.com/css2?family=${nome.replace(/\s/g, '+')}:wght@400;700;900&display=swap`;
     document.head.appendChild(link);
   }, [nome]);
 
@@ -28,12 +65,13 @@ function FontOption({
     <button
       type="button"
       onClick={onSelect}
-      className={`w-full px-4 py-2.5 text-left text-base transition-colors cursor-pointer ${
+      className={`w-full px-4 py-2 text-left text-base transition-colors cursor-pointer flex items-center justify-between ${
         selected ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
       }`}
-      style={{ fontFamily, fontSize: '16px', fontWeight }}
+      style={{ fontFamily: nome ? `"${nome}", sans-serif` : 'inherit', fontSize: '15px', fontWeight }}
     >
-      {label}
+      <span>{nome || 'Padrão da marca'}</span>
+      {selected && <span className="text-emerald-500 text-xs">✓</span>}
     </button>
   );
 }
@@ -77,6 +115,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [corTextoPrincipal, setCorTextoPrincipal] = useState(preload?.corTextoPrincipal ?? '#FFFFFF');
   const [estiloDesign, setEstiloDesign] = useState(preload?.estiloDesign ?? '');
   const [fonteDropdownOpen, setFonteDropdownOpen] = useState(false);
+  const [fonteBusca, setFonteBusca] = useState('');
+  const [fonteBuscaSub, setFonteBuscaSub] = useState('');
+  const [fonteBuscaBotao, setFonteBuscaBotao] = useState('');
   const [fonteSubtitulo, setFonteSubtitulo] = useState(preload?.fonteSubtitulo ?? '');
   const [corSubtitulo, setCorSubtitulo] = useState(preload?.corSubtitulo ?? 'rgba(255,255,255,0.90)');
   const [fonteSubtituloDropdownOpen, setFonteSubtituloDropdownOpen] = useState(false);
@@ -509,10 +550,10 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setFonteDropdownOpen(!fonteDropdownOpen)}
+                onClick={() => { setFonteDropdownOpen(!fonteDropdownOpen); setFonteBusca(''); }}
                 className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
               >
-                <span style={{ fontFamily: fonteEscolhida ? `"${fonteEscolhida}", sans-serif` : 'inherit' }}>
+                <span style={{ fontFamily: fonteEscolhida ? `"${fonteEscolhida}", sans-serif` : 'inherit', fontWeight: 700 }}>
                   {fonteEscolhida || 'Padrão da marca'}
                 </span>
                 <svg className={`w-4 h-4 text-slate-400 transition-transform ${fonteDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -521,33 +562,43 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               </button>
 
               {fonteDropdownOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-72 overflow-y-auto">
-                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" selected={fonteEscolhida === ''} onSelect={() => { setFonteEscolhida(''); setFonteDropdownOpen(false); }} />
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Elegantes / Serif</div>
-                  {['Playfair Display', 'Merriweather', 'Abril Fatface', 'Lora'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
-                  {['Montserrat', 'Nunito Sans', 'Poppins', 'Raleway', 'Oswald', 'Inter', 'DM Sans'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Impactantes / Display</div>
-                  {['Bebas Neue', 'Teko', 'Fjalla One', 'Barlow', 'Black Han Sans'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Divertidas / Cartoon</div>
-                  {['Bangers', 'Fredoka One', 'Boogaloo', 'Pacifico', 'Righteous'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Cursivas / Handwritten</div>
-                  {['Dancing Script', 'Caveat', 'Satisfy', 'Permanent Marker'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
-                  ))}
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl">
+                  <div className="p-2 border-b border-slate-100">
+                    <input
+                      type="text"
+                      value={fonteBusca}
+                      onChange={(e) => setFonteBusca(e.target.value)}
+                      placeholder="Buscar fonte..."
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    <FontOption nome="" fontWeight={700} selected={fonteEscolhida === ''} onSelect={() => { setFonteEscolhida(''); setFonteDropdownOpen(false); }} />
+                    {fonteBusca.trim() ? (
+                      TODAS_FONTES
+                        .filter(f => f.toLowerCase().includes(fonteBusca.toLowerCase()))
+                        .map(f => (
+                          <FontOption key={f} nome={f} fontWeight={700} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); setFonteBusca(''); }} />
+                        ))
+                    ) : (
+                      Object.entries(FONTES_CATALOGO).map(([categoria, fontes]) => (
+                        <div key={categoria}>
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50 sticky top-0">
+                            {categoria}
+                          </div>
+                          {fontes.map(f => (
+                            <FontOption key={f} nome={f} fontWeight={700} selected={fonteEscolhida === f} onSelect={() => { setFonteEscolhida(f); setFonteDropdownOpen(false); }} />
+                          ))}
+                        </div>
+                      ))
+                    )}
+                    {fonteBusca.trim() && TODAS_FONTES.filter(f => f.toLowerCase().includes(fonteBusca.toLowerCase())).length === 0 && (
+                      <div className="px-4 py-6 text-center text-sm text-slate-400">
+                        Nenhuma fonte encontrada para "{fonteBusca}"
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -601,7 +652,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setFonteSubtituloDropdownOpen(!fonteSubtituloDropdownOpen)}
+                onClick={() => { setFonteSubtituloDropdownOpen(!fonteSubtituloDropdownOpen); setFonteBuscaSub(''); }}
                 className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
               >
                 <span style={{ fontFamily: fonteSubtitulo ? `"${fonteSubtitulo}", sans-serif` : 'inherit', fontWeight: 400 }}>
@@ -613,23 +664,43 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               </button>
 
               {fonteSubtituloDropdownOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-64 overflow-y-auto">
-                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" fontWeight={400} selected={fonteSubtitulo === ''} onSelect={() => { setFonteSubtitulo(''); setFonteSubtituloDropdownOpen(false); }} />
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
-                  {['Montserrat', 'Nunito Sans', 'Poppins', 'Raleway', 'Inter', 'DM Sans', 'Lato', 'Open Sans'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Elegantes / Serif</div>
-                  {['Playfair Display', 'Merriweather', 'Lora', 'Cormorant Garamond'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", serif`} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
-                  ))}
-
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Leves / Light</div>
-                  {['Comfortaa', 'Quicksand', 'Nunito', 'Karla', 'Figtree'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={300} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
-                  ))}
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl">
+                  <div className="p-2 border-b border-slate-100">
+                    <input
+                      type="text"
+                      value={fonteBuscaSub}
+                      onChange={(e) => setFonteBuscaSub(e.target.value)}
+                      placeholder="Buscar fonte..."
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    <FontOption nome="" fontWeight={400} selected={fonteSubtitulo === ''} onSelect={() => { setFonteSubtitulo(''); setFonteSubtituloDropdownOpen(false); }} />
+                    {fonteBuscaSub.trim() ? (
+                      TODAS_FONTES
+                        .filter(f => f.toLowerCase().includes(fonteBuscaSub.toLowerCase()))
+                        .map(f => (
+                          <FontOption key={f} nome={f} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); setFonteBuscaSub(''); }} />
+                        ))
+                    ) : (
+                      Object.entries(FONTES_CATALOGO).map(([categoria, fontes]) => (
+                        <div key={categoria}>
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50 sticky top-0">
+                            {categoria}
+                          </div>
+                          {fontes.map(f => (
+                            <FontOption key={f} nome={f} fontWeight={400} selected={fonteSubtitulo === f} onSelect={() => { setFonteSubtitulo(f); setFonteSubtituloDropdownOpen(false); }} />
+                          ))}
+                        </div>
+                      ))
+                    )}
+                    {fonteBuscaSub.trim() && TODAS_FONTES.filter(f => f.toLowerCase().includes(fonteBuscaSub.toLowerCase())).length === 0 && (
+                      <div className="px-4 py-6 text-center text-sm text-slate-400">
+                        Nenhuma fonte encontrada para "{fonteBuscaSub}"
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -744,7 +815,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setFonteBotaoDropdownOpen(!fonteBotaoDropdownOpen)}
+                onClick={() => { setFonteBotaoDropdownOpen(!fonteBotaoDropdownOpen); setFonteBuscaBotao(''); }}
                 className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300 flex justify-between items-center"
               >
                 <span style={{ fontFamily: fonteBotao ? `"${fonteBotao}", sans-serif` : 'inherit', fontWeight: 800 }}>
@@ -756,20 +827,43 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               </button>
 
               {fonteBotaoDropdownOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto">
-                  <FontOption nome="" label="Padrão da marca" fontFamily="inherit" fontWeight={800} selected={fonteBotao === ''} onSelect={() => { setFonteBotao(''); setFonteBotaoDropdownOpen(false); }} />
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Impactantes / Display</div>
-                  {['Bebas Neue', 'Oswald', 'Teko', 'Barlow', 'Black Han Sans', 'Fjalla One'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
-                  ))}
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Modernas / Sans-serif</div>
-                  {['Montserrat', 'Poppins', 'Inter', 'Raleway', 'Nunito Sans'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", sans-serif`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
-                  ))}
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50">Divertidas / Cartoon</div>
-                  {['Bangers', 'Fredoka One', 'Righteous', 'Boogaloo'].map(f => (
-                    <FontOption key={f} nome={f} label={f} fontFamily={`"${f}", cursive`} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
-                  ))}
+                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl">
+                  <div className="p-2 border-b border-slate-100">
+                    <input
+                      type="text"
+                      value={fonteBuscaBotao}
+                      onChange={(e) => setFonteBuscaBotao(e.target.value)}
+                      placeholder="Buscar fonte..."
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    <FontOption nome="" fontWeight={800} selected={fonteBotao === ''} onSelect={() => { setFonteBotao(''); setFonteBotaoDropdownOpen(false); }} />
+                    {fonteBuscaBotao.trim() ? (
+                      TODAS_FONTES
+                        .filter(f => f.toLowerCase().includes(fonteBuscaBotao.toLowerCase()))
+                        .map(f => (
+                          <FontOption key={f} nome={f} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); setFonteBuscaBotao(''); }} />
+                        ))
+                    ) : (
+                      Object.entries(FONTES_CATALOGO).map(([categoria, fontes]) => (
+                        <div key={categoria}>
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400 bg-slate-50 sticky top-0">
+                            {categoria}
+                          </div>
+                          {fontes.map(f => (
+                            <FontOption key={f} nome={f} fontWeight={800} selected={fonteBotao === f} onSelect={() => { setFonteBotao(f); setFonteBotaoDropdownOpen(false); }} />
+                          ))}
+                        </div>
+                      ))
+                    )}
+                    {fonteBuscaBotao.trim() && TODAS_FONTES.filter(f => f.toLowerCase().includes(fonteBuscaBotao.toLowerCase())).length === 0 && (
+                      <div className="px-4 py-6 text-center text-sm text-slate-400">
+                        Nenhuma fonte encontrada para "{fonteBuscaBotao}"
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
