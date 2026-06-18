@@ -7,7 +7,17 @@ if (!url || !key) {
   console.warn('[Supabase] Credenciais ausentes — operando sem persistência remota.');
 }
 
-export const supabase = url && key ? createClient(url, key) : null;
+export const supabase = url && key
+  ? createClient(url, key, {
+      auth: {
+        persistSession: true,
+        storageKey: 'spectrum-auth-token',
+        storage: window.localStorage,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : null;
 
 export const ALLOWED_DOMAINS = ['gocase.com', 'gogroup.com', 'gobeaute.com'];
 
