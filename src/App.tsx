@@ -259,7 +259,11 @@ export default function App() {
     if (newHistory.length === 0) {
       clearPautas().catch(err => console.warn("[Supabase] clearPautas falhou:", err));
     } else {
-      upsertPautas(newHistory).catch(err => console.warn("[Supabase] upsertPautas falhou:", err));
+      try {
+        upsertPautas(newHistory).catch(err => console.warn("[Supabase] upsertPautas falhou:", err));
+      } catch (err) {
+        console.warn("[Supabase] upsertPautas erro síncrono:", err);
+      }
     }
   };
 
@@ -290,7 +294,7 @@ export default function App() {
         alert(resData.error || "Erro de geração no servidor.");
       }
     } catch (err) {
-      console.error(err);
+      console.error("[FormA] Erro completo:", err);
       alert("Houve uma falha de rede ao conectar com a IA do robô de email CRM.");
     } finally {
       setLoading(false);
@@ -343,7 +347,7 @@ export default function App() {
         alert(resData.error || "Erro de geração no servidor.");
       }
     } catch (err) {
-      console.error(err);
+      console.error("[FormB] Erro completo:", err);
       alert("Houve uma falha de rede ao calibrar o copilot de email CRM.");
     } finally {
       setLoading(false);
