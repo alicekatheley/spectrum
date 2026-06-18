@@ -503,7 +503,7 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#18142E] flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
       </div>
     );
@@ -511,7 +511,7 @@ export default function App() {
 
   if (accessDenied) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#18142E] flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-10 max-w-md w-full flex flex-col items-center gap-6 text-center">
           <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center">
             <span className="text-rose-600 text-3xl">✕</span>
@@ -525,7 +525,7 @@ export default function App() {
           </div>
           <button
             onClick={() => { setAccessDenied(false); }}
-            className="px-6 py-2.5 bg-slate-800 text-white rounded-xl font-semibold hover:bg-slate-700 transition-colors cursor-pointer"
+            className="px-6 py-2.5 bg-[#13102A] text-white rounded-xl font-semibold hover:bg-slate-700 transition-colors cursor-pointer"
           >
             Tentar novamente
           </button>
@@ -539,7 +539,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-150 py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
+    <div className="min-h-screen bg-[#0D0A1A] text-slate-150 py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
       <div className="max-w-7xl mx-auto flex flex-col gap-8">
         
         {/* Top Header & Brand Selector */}
@@ -551,14 +551,14 @@ export default function App() {
         />
 
         {/* Abas Principais de Navegação */}
-        <div id="main-tabs-container" className="flex border-b border-slate-800 gap-1 sm:gap-2 mb-4 relative z-10 p-1 bg-slate-900/40 rounded-2xl">
+        <div id="main-tabs-container" className="flex border-b border-slate-800 gap-1 sm:gap-2 mb-4 relative z-10 p-1 bg-[#18142E]/40 rounded-2xl">
           <button
             id="tab-btn-geracao"
             onClick={() => setMainTab('geracao')}
             className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
               mainTab === 'geracao'
                 ? 'bg-[#688D65]/20 text-emerald-300 border border-[#688D65]/30 shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-[#13102A]/30'
             }`}
           >
             <Sparkles className="w-4 h-4 text-emerald-400" />
@@ -571,7 +571,7 @@ export default function App() {
             className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative ${
               mainTab === 'historico'
                 ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-[#13102A]/30'
             }`}
           >
             <Clock className="w-4 h-4 text-indigo-450" />
@@ -589,8 +589,8 @@ export default function App() {
           <div className="max-w-6xl mx-auto w-full animate-fade-in flex flex-col gap-6">
             
             {/* Seletor central de marcas exclusivo do Painel de Geração */}
-            <div className="bg-slate-900 border border-slate-850 p-6 rounded-3xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xl">
-              <div className="absolute top-0 right-0 w-80 h-80 bg-slate-800 rounded-full blur-3xl opacity-10 pointer-events-none -mr-20 -mt-20"></div>
+            <div className="bg-[#18142E] border border-slate-850 p-6 rounded-3xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xl">
+              <div className="absolute top-0 right-0 w-80 h-80 bg-[#13102A] rounded-full blur-3xl opacity-10 pointer-events-none -mr-20 -mt-20"></div>
               
               <div className="relative z-10 flex flex-col gap-1 max-w-xl text-left">
                 <span className="text-[10px] uppercase font-extrabold tracking-widest text-[#AA834B]">
@@ -605,14 +605,14 @@ export default function App() {
               </div>
 
               {/* Botões Grandes Detalhados de Marca */}
-              <div className="bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 flex items-center gap-2 shrink-0 relative z-10 w-full md:w-auto">
+              <div className="bg-[#0D0A1A]/80 p-1.5 rounded-2xl border border-slate-800 flex items-center gap-2 shrink-0 relative z-10 w-full md:w-auto">
                 <button
                   id="tab-brand-apice-local"
                   onClick={() => { setCurrentBrand('Apice'); setEditInputPreload(null); }}
                   className={`flex-1 md:flex-none px-5 py-3 rounded-xl text-xs font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
                     currentBrand === 'Apice'
                       ? 'bg-[#688D65] text-white shadow-lg shadow-[#688D65]/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#18142E]'
                   }`}
                 >
                   <span className="w-2 h-2 rounded-full bg-emerald-350"></span>
@@ -624,7 +624,7 @@ export default function App() {
                   className={`flex-1 md:flex-none px-5 py-3 rounded-xl text-xs font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
                     currentBrand === 'Barbours'
                       ? 'bg-[#BF0F26] text-white shadow-lg shadow-[#BF0F26]/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#18142E]'
                   }`}
                 >
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
@@ -640,7 +640,7 @@ export default function App() {
               <div className="lg:col-span-5 flex flex-col gap-6">
                 
                 {/* Seletor de Modo Operacional com estilo adaptativo */}
-                <div className="bg-slate-900/60 rounded-3xl p-5 border border-slate-800/80 flex flex-col gap-4">
+                <div className="bg-[#18142E]/60 rounded-3xl p-5 border border-slate-800/80 flex flex-col gap-4">
                   <div className="flex flex-col gap-1 text-left">
                     <span className="text-[10px] uppercase font-bold tracking-widest text-[#AA834B]">
                       Criação de {currentBrand}
@@ -659,7 +659,7 @@ export default function App() {
                           ? currentBrand === 'Apice'
                             ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
                             : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-slate-950/40 border-slate-900/20 hover:bg-slate-900/30'
+                          : 'bg-[#0D0A1A]/40 border-slate-900/20 hover:bg-[#18142E]/30'
                       }`}
                     >
                       <div className="flex justify-between items-start w-full">
@@ -688,7 +688,7 @@ export default function App() {
                           ? currentBrand === 'Apice'
                             ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
                             : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-slate-950/40 border-slate-900/20 hover:bg-slate-900/30'
+                          : 'bg-[#0D0A1A]/40 border-slate-900/20 hover:bg-[#18142E]/30'
                       }`}
                     >
                       <div className="flex justify-between items-start w-full">
@@ -712,7 +712,7 @@ export default function App() {
                 </div>
 
                 {/* Perfil tático consolidado focado na marca selecionada para o Modo A e B */}
-                <div className="bg-slate-900/40 border border-slate-850 p-5 rounded-3xl flex flex-col gap-3 text-left">
+                <div className="bg-[#18142E]/40 border border-slate-850 p-5 rounded-3xl flex flex-col gap-3 text-left">
                   <h4 className="text-xs uppercase font-extrabold tracking-widest text-[#AA834B]">
                     Acordo tático de {currentBrand}
                   </h4>
@@ -830,13 +830,13 @@ export default function App() {
                   ))}
 
                 {filteredHistory.length === 0 && history.length > 0 && (
-                  <div className="bg-slate-900/30 text-center py-12 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
+                  <div className="bg-[#18142E]/30 text-center py-12 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
                     <span className="text-3xl mb-3 block">🔍</span>
                     <h4 className="text-base font-bold text-slate-200">Nenhuma pauta encontrada com esses filtros</h4>
                     <p className="text-sm text-slate-400 mt-1 mb-4">Tente ajustar os filtros acima ou limpe para ver todas as pautas.</p>
                     <button
                       onClick={handleClearFilters}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                      className="bg-[#13102A] hover:bg-slate-700 text-slate-200 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
                     >
                       Limpar filtros
                     </button>
@@ -844,7 +844,7 @@ export default function App() {
                 )}
 
                 {history.length === 0 && (
-                  <div className="bg-slate-900/30 text-center py-20 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
+                  <div className="bg-[#18142E]/30 text-center py-20 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
                     <span className="text-5xl mb-4 block animate-bounce">🤖</span>
                     <h4 className="text-lg font-bold text-slate-200">Seu histórico de pautas geradas está vazio</h4>
                     <p className="text-sm text-slate-444 mt-2 max-w-sm mx-auto leading-relaxed">
