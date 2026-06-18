@@ -144,14 +144,34 @@ export default function LoginPage() {
       >
         {/* Logo */}
         <div className="flex flex-col items-center gap-3">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{
-              background: 'linear-gradient(135deg, #059669, #047857)',
-              boxShadow: '0 0 24px rgba(5,150,105,0.4)',
-            }}
-          >
-            <span className="text-white text-2xl font-black">S</span>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '8px', paddingLeft: '32px', overflow: 'visible' }}>
+            <svg viewBox="0 0 140 160" xmlns="http://www.w3.org/2000/svg" width="80" height="80" style={{ overflow: 'visible' }}>
+              <defs>
+                <style>{`
+                  @keyframes shimmer { 0%,100%{opacity:0.85} 50%{opacity:1} }
+                  .glow { animation: shimmer 3s ease-in-out infinite; }
+                `}</style>
+              </defs>
+              <ellipse cx="70" cy="125" rx="38" ry="10" fill="#7C3AED" opacity="0.15"/>
+              <polygon points="70,10 118,100 22,100"
+                fill="#0F0720" stroke="#8B5CF6" strokeWidth="2.5" strokeLinejoin="round"/>
+              <line x1="22" y1="100" x2="70" y2="10" stroke="#A855F7" strokeWidth="0.75" opacity="0.3"/>
+              <circle cx="70" cy="10" r="4" fill="#C084FC" className="glow"/>
+              <circle cx="70" cy="10" r="8" fill="none" stroke="#A855F7" strokeWidth="0.75" opacity="0.4"/>
+              <line x1="70" y1="-8" x2="70" y2="10" stroke="#C084FC" strokeWidth="1.5" strokeLinecap="round" opacity="0.6"/>
+              <line x1="22" y1="100" x2="-18" y2="72"  stroke="#7C3AED" strokeWidth="3"    strokeLinecap="round"/>
+              <line x1="22" y1="100" x2="-24" y2="88"  stroke="#9333EA" strokeWidth="2.5"  strokeLinecap="round" opacity="0.9"/>
+              <line x1="22" y1="100" x2="-26" y2="104" stroke="#A855F7" strokeWidth="2"    strokeLinecap="round" opacity="0.8"/>
+              <line x1="22" y1="100" x2="-20" y2="120" stroke="#C026D3" strokeWidth="1.75" strokeLinecap="round" opacity="0.7"/>
+              <line x1="22" y1="100" x2="-10" y2="134" stroke="#DB2777" strokeWidth="1.5"  strokeLinecap="round" opacity="0.55"/>
+              <line x1="22" y1="100" x2="4"   y2="144" stroke="#EC4899" strokeWidth="1"    strokeLinecap="round" opacity="0.4"/>
+              <circle cx="-18" cy="72"  r="2.5" fill="#7C3AED" opacity="0.9"/>
+              <circle cx="-24" cy="88"  r="2"   fill="#9333EA" opacity="0.8"/>
+              <circle cx="-26" cy="104" r="2"   fill="#A855F7" opacity="0.7"/>
+              <circle cx="-20" cy="120" r="1.75" fill="#C026D3" opacity="0.6"/>
+              <circle cx="-10" cy="134" r="1.5" fill="#DB2777" opacity="0.5"/>
+              <circle cx="4"   cy="144" r="1"   fill="#EC4899" opacity="0.4"/>
+            </svg>
           </div>
           <div className="flex flex-col items-center gap-1">
             <h1 style={{ color: '#FFFFFF', fontSize: '28px', fontWeight: 600, lineHeight: 1.2 }}>
