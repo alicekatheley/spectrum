@@ -46,7 +46,7 @@ export default function LoginPage() {
 
   return (
     <div
-      className="relative min-h-screen flex items-center justify-center overflow-hidden"
+      className="relative min-h-screen flex items-center justify-center overflow-visible"
       style={{ backgroundColor: '#05060F' }}
     >
       <style>{`
@@ -134,7 +134,7 @@ export default function LoginPage() {
         style={{
           maxWidth: '420px',
           padding: 'clamp(32px, 5vw, 48px)',
-          background: 'rgba(255,255,255,0.04)',
+          background: 'rgba(124,58,237,0.10)',
           backdropFilter: 'blur(24px)',
           WebkitBackdropFilter: 'blur(24px)',
           border: '1px solid rgba(255,255,255,0.08)',
@@ -144,8 +144,8 @@ export default function LoginPage() {
       >
         {/* Logo */}
         <div className="flex flex-col items-center gap-3">
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '8px', paddingLeft: '32px', overflow: 'visible' }}>
-            <svg viewBox="0 0 140 160" xmlns="http://www.w3.org/2000/svg" width="80" height="80" style={{ overflow: 'visible' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '8px' }}>
+            <svg viewBox="-32 -12 172 170" xmlns="http://www.w3.org/2000/svg" width="80" height="80" style={{ overflow: 'visible' }}>
               <defs>
                 <style>{`
                   @keyframes shimmer { 0%,100%{opacity:0.85} 50%{opacity:1} }
