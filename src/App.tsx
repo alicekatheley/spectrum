@@ -716,24 +716,24 @@ export default function App() {
                   <h4 className="text-xs uppercase font-extrabold tracking-widest text-[#AA834B]">
                     Acordo tático de {currentBrand}
                   </h4>
-                  <div className="flex flex-col gap-2.5 text-xs text-slate-350">
+                  <div className="flex flex-col gap-2.5 text-xs text-slate-300">
                     <p className="leading-relaxed">
                       Todas as geração neste modo são automaticamente governadas pelas regras invioláveis:
                     </p>
                     <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-400">Tom de voz:</span>
+                      <span className="text-slate-300">Tom de voz:</span>
                       <strong className="text-slate-100">{currentBrand === 'Apice' ? 'Acolhedor, Íntimo e Próximo' : 'Elegante, Direto, Sofisticado'}</strong>
                     </div>
                     <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-400">Eixo Central:</span>
+                      <span className="text-slate-300">Eixo Central:</span>
                       <strong className="text-slate-100">{currentBrand === 'Apice' ? 'Manipular (puxar/cortar/jogar)' : 'Abrir (carta/presente/caixa)'}</strong>
                     </div>
                     <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-400">Caracteres Assunto:</span>
+                      <span className="text-slate-300">Caracteres Assunto:</span>
                       <strong className="text-amber-400 font-mono">{currentBrand === 'Apice' ? '27 a 47 caracteres' : '16 a 39 caracteres'}</strong>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Restrição de Assunto:</span>
+                      <span className="text-slate-300">Restrição de Assunto:</span>
                       <strong className="text-rose-400 text-right">Proibido %, OFF, GRÁTIS ou Caps completo</strong>
                     </div>
                   </div>
