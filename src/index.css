@@ -4,6 +4,10 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-slate-950: #0D0A1A;
+  --color-slate-900: #100D1F;
+  --color-slate-800: #1A1530;
 }
 
 /* Custom simulated fonts for brand playbooks mentioned in the PDF */
@@ -55,6 +59,6 @@
 }
 
 html, body, #root {
-  background-color: #05060F;
+  background-color: #0D0A1A;
   min-height: 100vh;
 }
