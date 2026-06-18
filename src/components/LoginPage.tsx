@@ -31,7 +31,7 @@ export default function LoginPage() {
       const { error } = await supabase!.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: (import.meta as any).env?.VITE_APP_URL || window.location.origin,
           queryParams: {
             hd: 'gocase.com.br',
           },
