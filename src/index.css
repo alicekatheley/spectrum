@@ -53,3 +53,8 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.5);
 }
+
+html, body, #root {
+  background-color: #05060F;
+  min-height: 100vh;
+}
