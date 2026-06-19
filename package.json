@@ -15,6 +15,7 @@
     "sb:types": "supabase gen types typescript --project-id krxuwejvkdkrjrppcwsw --schema public > src/lib/database.types.ts"
   },
   "dependencies": {
+    "hono": "^4.4.0",
     "@google/genai": "^1.29.0",
     "@supabase/supabase-js": "^2.106.1",
     "@tailwindcss/vite": "^4.1.14",
