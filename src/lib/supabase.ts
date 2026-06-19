@@ -15,6 +15,7 @@ export const supabase = url && key
         storage: window.localStorage,
         autoRefreshToken: true,
         detectSessionInUrl: true,
+        flowType: 'pkce',
       },
     })
   : null;
