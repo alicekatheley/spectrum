@@ -417,6 +417,18 @@ export default function ResultPauta({
       ? { text: 'Descartada', bg: 'bg-slate-100 text-slate-500 border-slate-200' }
       : { text: 'Rascunho', bg: 'bg-amber-100 text-amber-800 border-amber-300' };
 
+  const safePauta = {
+    ...pauta,
+    copy: {
+      ...pauta.copy,
+      assunto: typeof pauta.copy?.assunto === 'object' ? JSON.stringify(pauta.copy.assunto) : (pauta.copy?.assunto ?? ''),
+      headlineBanner: typeof pauta.copy?.headlineBanner === 'object' ? '' : (pauta.copy?.headlineBanner ?? ''),
+      subHeadlineBanner: typeof pauta.copy?.subHeadlineBanner === 'object' ? '' : (pauta.copy?.subHeadlineBanner ?? ''),
+      ctaBotao: typeof pauta.copy?.ctaBotao === 'object' ? '' : (pauta.copy?.ctaBotao ?? ''),
+      preHeader: typeof pauta.copy?.preHeader === 'object' ? '' : (pauta.copy?.preHeader ?? ''),
+    },
+  };
+
   return (
     <div className={`bg-white rounded-3xl p-6 shadow-xl border-2 transition-all duration-300 relative overflow-hidden ${
       pauta.status === 'aprovado' 
@@ -927,13 +939,19 @@ export default function ResultPauta({
             </div>
             <div>
               <span className="text-slate-400">Receita Est.: </span>
-              <strong className="text-emerald-400 text-sm font-bold">{String(pauta.previsao?.receitaEsperada ?? '-')}</strong>
+              <strong className="text-emerald-400 text-sm font-bold">
+                {typeof pauta.previsao?.receitaEsperada === 'object'
+                  ? JSON.stringify(pauta.previsao.receitaEsperada)
+                  : String(pauta.previsao?.receitaEsperada ?? '-')}
+              </strong>
             </div>
           </div>
           <p className="text-[10px] text-slate-400 mt-2.5 leading-relaxed max-w-xl">
             Projeção tática real calculada com base científica usando como semelhança estatística de similaridade os históricos de hits reais:{" "}
             <span className="font-mono font-bold text-slate-300">
-              {(pauta.previsao?.casesReferencia ?? []).join(", ") || "Sem cases suficientes"}
+              {(pauta.previsao?.casesReferencia ?? [])
+                .map((c: any) => typeof c === 'string' ? c : c?.nome ?? c?.descricao ?? JSON.stringify(c))
+                .join(", ") || "Sem cases suficientes"}
             </span>.
           </p>
         </div>
