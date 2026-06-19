@@ -82,10 +82,10 @@ export default function HistoryList({
       p.copy.ctaBotao.replace(/"/g, '""'),
       p.operacional.mecanicaEscolhida.replace(/"/g, '""'),
       p.operacional.recompensaEscolhida.replace(/"/g, '""'),
-      p.previsao.receitaEsperada,
-      p.previsao.aberturaEsperada,
-      p.previsao.ctorEsperado,
-      p.operacional.segmentoRecomendado.replace(/"/g, '""'),
+      String(p.previsao?.receitaEsperada ?? ''),
+      String(p.previsao?.aberturaEsperada ?? ''),
+      String(p.previsao?.ctorEsperado ?? ''),
+      (p.operacional?.segmentoRecomendado ?? '').replace(/"/g, '""'),
       (p.previsao?.confianca ?? '').toUpperCase(),
       p.status
     ]);

@@ -665,7 +665,7 @@ export default function ResultPauta({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <strong className="text-slate-500 block">Formato:</strong>
-                  <span>{pauta.visual?.formato} (1:1 quadrado ideal)</span>
+                  <span>{pauta.visual?.formato ?? '-'} (1:1 quadrado ideal)</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block">Paleta Cores:</strong>
@@ -675,10 +675,10 @@ export default function ResultPauta({
                         key={i}
                         className="w-4 h-4 rounded-full border border-slate-300"
                         style={{ backgroundColor: c }}
-                        title={`${pauta.visual?.paletaRecomendada.nome}: ${c}`}
+                        title={`${pauta.visual?.paletaRecomendada?.nome ?? '-'}: ${c}`}
                       />
                     ))}
-                    <span className="text-[9px] font-mono font-bold text-slate-400 capitalize">{pauta.visual?.paletaRecomendada.nome}</span>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 capitalize">{pauta.visual?.paletaRecomendada?.nome ?? '-'}</span>
                   </span>
                 </div>
               </div>
@@ -700,11 +700,11 @@ export default function ResultPauta({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <strong className="text-slate-500 block">Posicionamento CTA:</strong>
-                  <span>{pauta.visual?.posicaoCta}</span>
+                  <span>{pauta.visual?.posicaoCta ?? '-'}</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block">Filtro Tipográfico:</strong>
-                  <span>{pauta.visual?.tipografia}</span>
+                  <span>{pauta.visual?.tipografia ?? '-'}</span>
                 </div>
               </div>
               <hr className="border-slate-200/40" />
@@ -864,7 +864,7 @@ export default function ResultPauta({
               <div>
                 <strong className="text-slate-500 block mb-0.5">Embasamento e Justificativa Histórica:</strong>
                 <p className="text-[11px] text-slate-550 leading-relaxed italic bg-white p-2.5 rounded-lg border border-slate-100">
-                  "{pauta.operacional.justificativaMecanica}"
+                  "{pauta.operacional?.justificativaMecanica ?? '-'}"
                 </p>
               </div>
               <hr className="border-slate-200/40" />
@@ -873,18 +873,18 @@ export default function ResultPauta({
                   <strong className="text-slate-500 block flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5 text-indigo-400" /> Dia Ideal:
                   </strong>
-                  <span className="font-semibold text-emerald-700 uppercase tracking-wide">{pauta.operacional.diaRecomendado}</span>
+                  <span className="font-semibold text-emerald-700 uppercase tracking-wide">{pauta.operacional?.diaRecomendado ?? '-'}</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-indigo-400" /> Janela Ótima:
                   </strong>
-                  <span className="font-semibold">{pauta.operacional.horarioRecomendado}</span>
+                  <span className="font-semibold">{pauta.operacional?.horarioRecomendado ?? '-'}</span>
                 </div>
                 <div>
                   <strong className="text-slate-500 block">Segmento:</strong>
-                  <span className="font-semibold truncate block" title={pauta.operacional.segmentoRecomendado}>
-                    {pauta.operacional.segmentoRecomendado}
+                  <span className="font-semibold truncate block" title={pauta.operacional?.segmentoRecomendado ?? '-'}>
+                    {pauta.operacional?.segmentoRecomendado ?? '-'}
                   </span>
                 </div>
               </div>
@@ -914,15 +914,15 @@ export default function ResultPauta({
           <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs font-mono">
             <div>
               <span className="text-slate-400">Abertura: </span>
-              <strong className="text-emerald-400 text-sm font-bold">{pauta.previsao.aberturaEsperada}</strong>
+              <strong className="text-emerald-400 text-sm font-bold">{pauta.previsao?.aberturaEsperada ?? '-'}</strong>
             </div>
             <div>
               <span className="text-slate-400">CTOR: </span>
-              <strong className="text-emerald-400 text-sm font-bold">{pauta.previsao.ctorEsperado}</strong>
+              <strong className="text-emerald-400 text-sm font-bold">{pauta.previsao?.ctorEsperado ?? '-'}</strong>
             </div>
             <div>
               <span className="text-slate-400">Receita Est.: </span>
-              <strong className="text-emerald-400 text-sm font-bold">{pauta.previsao.receitaEsperada}</strong>
+              <strong className="text-emerald-400 text-sm font-bold">{String(pauta.previsao?.receitaEsperada ?? '-')}</strong>
             </div>
           </div>
           <p className="text-[10px] text-slate-400 mt-2.5 leading-relaxed max-w-xl">
