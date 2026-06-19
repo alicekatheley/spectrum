@@ -109,6 +109,11 @@ export default function App() {
 
   // Auth: verifica sessão e escuta mudanças
   useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('error')) {
+      window.history.replaceState({}, document.title, '/');
+    }
+
     if (!supabase) {
       setAuthLoading(false);
       return;
