@@ -1,11 +1,21 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-
-const GEMINI_API_KEY = 'AIzaSyASv98we9Dbm0lPii2IWv0ECooBA2g7_FI';
+const GEMINI_API_KEY = (globalThis as any).GEMINI_API_KEY || '';
 const SUPABASE_URL   = 'https://krxuwejvkdkrjrppcwsw.supabase.co';
-const SUPABASE_KEY   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyeHV3ZWp2a2RrcmpycHBjd3N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0MDExOTAsImV4cCI6MjA5NDk3NzE5MH0.9hMIizKLPHHv6JTTLCF7RoMPvN0ZcQ3Ledz5HDXTvoM';
-const PIAPP_API_KEY  = 'piapp_3ac8b05a78a971c5dd8a3b54672bdb8c3a91d7ad3af27fcf74502f0e14a54053';
+const SUPABASE_KEY   = (globalThis as any).SUPABASE_KEY || '';
+const PIAPP_API_KEY  = (globalThis as any).PIAPP_API_KEY || '';
 const PIAPP_MCP_URL  = 'https://piapp-v2.vercel.app/api/ai/mcp';
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+function json(data: any, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+  });
+}
 
 const VALID_IMAGE_RATIOS = ['1:1', '3:4', '16:9', '9:16', '4:3'];
 const VALID_IMAGE_MODELS = new Set(['wavespeed-gpt-image-2-t2i','gemini-3-pro-image-preview','gemini-3.1-flash-image-preview','gemini-2.5-flash-image','wavespeed-seedream-v5-lite']);
@@ -163,9 +173,6 @@ async function generatePautaContent(params: any): Promise<any[]> {
   return JSON.parse(text.replace(/```json|```/g, '').trim());
 }
 
-const app = new Hono();
-app.use('*', cors({ origin: '*' }));
-
 let _mecanicasCatalog: string[] = [...DEFAULT_MECANICAS];
 let _crmAiLoaded = false;
 
@@ -178,13 +185,10 @@ async function ensureCrmAiLoaded() {
   } catch { }
 }
 
-app.get('/api/historico', (c) => c.json({ status: 'success', data: hardcodedDisparos }));
-app.get('/api/mecanicas', (c) => c.json({ status: 'success', data: _mecanicasCatalog }));
-
-app.post('/api/generate-pauta', async (c) => {
+async function handleGeneratePauta(request: Request): Promise<Response> {
   try {
     await ensureCrmAiLoaded();
-    const body = await c.req.json();
+    const body = await request.json();
     const { modo, input, aspectRatio: rawAspectRatio, direcionamentoIA, tipoGeracao: rawTipoGeracao, referenciaImagem } = body;
     let direcStr = typeof direcionamentoIA === 'string' ? direcionamentoIA.trim().replace(/[\r\n]+/g, ' ') : '';
     const injectionPattern = /\b(ignore|esqueça|não\s+siga|desconsidere)\b.{0,80}\b(regra|playbook|instrução)/gi;
@@ -195,7 +199,7 @@ app.post('/api/generate-pauta', async (c) => {
       const mimeType = header.replace('data:', '').replace(';base64', '');
       if (data && mimeType) refImageData = { mimeType, data };
     }
-    if (!input?.marca) return c.json({ error: 'A marca é obrigatória.' }, 400);
+    if (!input?.marca) return json({ error: 'A marca é obrigatória.' }, 400);
     const aspectRatio = VALID_IMAGE_RATIOS.includes(rawAspectRatio) ? rawAspectRatio : '1:1';
     const tipoGeracao = ['texto','imagem','texto_imagem'].includes(rawTipoGeracao) ? rawTipoGeracao : 'texto_imagem';
     const { marca } = input;
@@ -218,19 +222,19 @@ app.post('/api/generate-pauta', async (c) => {
         supabaseQuery('mecanicas_catalog', { method: 'POST', body: JSON.stringify({ nome: mec, categoria: 'ia_gerada', criado_por: 'ia_auto' }) }).catch(() => {});
       }
     }
-    return c.json({ status: 'success', data: pautasProps });
+    return json({ status: 'success', data: pautasProps });
   } catch (err: any) {
     console.error('[generate-pauta] Erro:', err.message);
-    return c.json({ error: 'Erro interno ao processar a geração.', details: err.message }, 500);
+    return json({ error: 'Erro interno ao processar a geração.', details: err.message }, 500);
   }
-});
+}
 
-app.post('/api/generate-image', async (c) => {
+async function handleGenerateImage(request: Request): Promise<Response> {
   try {
-    const body = await c.req.json();
+    const body = await request.json();
     const { frameName, frameDescription, aspectRatio: rawRatio, marca, pautaId, imageModel: rawModel, estiloIlustracao, estiloDesignUsuario, paleta, mecanica, recompensa, referenciaImagem: rawRefImage, headline, subheadline, cta, referenceFrameUrl, direcionamento, totalFrames } = body;
-    if (!frameDescription) return c.json({ error: 'frameDescription é obrigatório.' }, 400);
-    if (!BRAND_DNA[marca]) return c.json({ error: 'marca inválida.' }, 400);
+    if (!frameDescription) return json({ error: 'frameDescription é obrigatório.' }, 400);
+    if (!BRAND_DNA[marca]) return json({ error: 'marca inválida.' }, 400);
     let aspectRatio = '1:1';
     if (typeof rawRatio === 'string' && rawRatio.startsWith('custom_')) {
       const [w, h] = rawRatio.replace('custom_', '').split('x').map(Number);
@@ -258,26 +262,17 @@ app.post('/api/generate-image', async (c) => {
         if (uploadRes.ok) { publicUrl = supabaseStorageUrl('campaign-images', storagePath); }
       } catch (e: any) { console.warn('[generate-image] Storage:', e.message); }
     }
-    return c.json({ imageBytes: result.imageBytes, mimeType: result.mimeType, publicUrl });
+    return json({ imageBytes: result.imageBytes, mimeType: result.mimeType, publicUrl });
   } catch (err: any) {
     console.error('[generate-image] Erro:', err.message);
-    return c.json({ error: 'Falha ao gerar imagem.', details: err.message }, 500);
+    return json({ error: 'Falha ao gerar imagem.', details: err.message }, 500);
   }
-});
+}
 
-app.post('/api/parse-estilo-visual', async (c) => {
+async function handleGenerateVariation(request: Request): Promise<Response> {
   try {
-    const { estiloVisualTexto, marca } = await c.req.json();
-    const defaults = { corTexto: '#FFFFFF', corSubheadline: 'rgba(255,255,255,0.90)', estiloBotao: 'pill', corBotao: marca === 'Apice' ? '#688D65' : '#BF0F26', corTextoBotao: '#FFFFFF', tamanhoHeadline: 'grande', pesoFonte: '900', familiaFonte: 'Georgia, serif' };
-    if (!estiloVisualTexto) return c.json(defaults);
-    return c.json(defaults);
-  } catch { return c.json({ corTexto:'#FFFFFF', estiloBotao:'pill', corBotao:'#688D65', corTextoBotao:'#FFFFFF', tamanhoHeadline:'grande', pesoFonte:'900', familiaFonte:'Georgia, serif' }); }
-});
-
-app.post('/api/generate-variation', async (c) => {
-  try {
-    const { pauta } = await c.req.json();
-    if (!pauta) return c.json({ error: 'Pauta obrigatória.' }, 400);
+    const { pauta } = await request.json();
+    if (!pauta) return json({ error: 'Pauta obrigatória.' }, 400);
     const { marca, operacional, copy } = pauta;
     const isApice = marca === 'Apice';
     const prompt = `Gere uma variação de copy para:\nMarca: ${marca}\nMecânica: ${operacional.mecanicaEscolhida}\nAssunto atual: "${copy.assunto}"\nHeadline atual: "${copy.headlineBanner}"\nCTA atual: "${copy.ctaBotao}"\nRegras: sem CAPS LOCK, sem %, OFF, GRÁTIS, R$. Assunto ${isApice ? '27-47':'16-39'} chars.\nRetorne JSON: {"assunto":"","preHeader":"Mas, vou precisar cancelar em breve","headlineBanner":"","subHeadlineBanner":"","ctaBotao":""}`;
@@ -286,14 +281,14 @@ app.post('/api/generate-variation', async (c) => {
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
     const parsedCopy = JSON.parse(text.replace(/```json|```/g,'').trim());
     parsedCopy.preHeader = 'Mas, vou precisar cancelar em breve';
-    return c.json({ status:'success', data: parsedCopy });
-  } catch (err: any) { return c.json({ error:'Erro ao gerar variação.', details: err.message }, 500); }
-});
+    return json({ status:'success', data: parsedCopy });
+  } catch (err: any) { return json({ error:'Erro ao gerar variação.', details: err.message }, 500); }
+}
 
-app.post('/api/save-frame', async (c) => {
+async function handleSaveFrame(request: Request): Promise<Response> {
   try {
-    const { pautaId, frameName, imageDataUrl } = await c.req.json();
-    if (!pautaId || !frameName || !imageDataUrl) return c.json({ error:'Campos obrigatórios faltando.' }, 400);
+    const { pautaId, frameName, imageDataUrl } = await request.json();
+    if (!pautaId || !frameName || !imageDataUrl) return json({ error:'Campos obrigatórios faltando.' }, 400);
     const base64Data = imageDataUrl.split(',')[1];
     const mimeType = imageDataUrl.split(';')[0].split(':')[1] || 'image/png';
     const binaryStr = atob(base64Data);
@@ -301,21 +296,73 @@ app.post('/api/save-frame', async (c) => {
     for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
     const fileName = `frames/${pautaId}/${frameName}.png`;
     const res = await supabaseStorageUpload('campaign-images', fileName, bytes, mimeType);
-    if (!res.ok) return c.json({ error:'Upload falhou.' }, 500);
-    return c.json({ publicUrl: supabaseStorageUrl('campaign-images', fileName) });
-  } catch (err: any) { return c.json({ error: err.message }, 500); }
-});
+    if (!res.ok) return json({ error:'Upload falhou.' }, 500);
+    return json({ publicUrl: supabaseStorageUrl('campaign-images', fileName) });
+  } catch (err: any) { return json({ error: err.message }, 500); }
+}
 
-app.post('/api/approve-pauta', async (c) => {
+async function handleApprovePauta(request: Request): Promise<Response> {
   try {
-    const { pauta } = await c.req.json();
-    if (!pauta?.id) return c.json({ error:'pauta inválida.' }, 400);
+    const { pauta } = await request.json();
+    if (!pauta?.id) return json({ error:'pauta inválida.' }, 400);
     const marcaId = pauta.marca === 'Apice' ? 1 : 2;
     const recomendacaoTexto = `ASSUNTO: ${pauta.copy?.assunto ?? ''}\nHEADLINE: ${pauta.copy?.headlineBanner ?? ''}\nCTA: ${pauta.copy?.ctaBotao ?? ''}\nMECÂNICA: ${pauta.operacional?.mecanicaEscolhida ?? ''}`;
     const res = await supabaseQuery('ia_outputs', { method: 'POST', headers: { 'Prefer':'return=representation', 'Content-Type':'application/json' }, body: JSON.stringify({ marca_id: marcaId, tipo_canal:'email', o_que_foi_analisado: `Pauta ${pauta.modo} aprovada`, modelo: 'gemini-2.5-flash', parametros: { modo: pauta.modo, tipoGeracao: pauta.tipoGeracao, pautaId: pauta.id }, recomendacao_texto: recomendacaoTexto, recomendacao_estruturada: { copy: pauta.copy, visual: pauta.visual, operacional: pauta.operacional }, aprovado: true }) });
     const data = await res.json();
-    return c.json({ success:true, output_id: data?.[0]?.output_id });
-  } catch (err: any) { return c.json({ error: err.message }, 500); }
-});
+    return json({ success:true, output_id: data?.[0]?.output_id });
+  } catch (err: any) { return json({ error: err.message }, 500); }
+}
 
-export default app;
+async function handleParseEstiloVisual(request: Request): Promise<Response> {
+  try {
+    const { estiloVisualTexto, marca } = await request.json();
+    const defaults = { corTexto: '#FFFFFF', corSubheadline: 'rgba(255,255,255,0.90)', estiloBotao: 'pill', corBotao: marca === 'Apice' ? '#688D65' : '#BF0F26', corTextoBotao: '#FFFFFF', tamanhoHeadline: 'grande', pesoFonte: '900', familiaFonte: 'Georgia, serif' };
+    if (!estiloVisualTexto) return json(defaults);
+    return json(defaults);
+  } catch { return json({ corTexto:'#FFFFFF', estiloBotao:'pill', corBotao:'#688D65', corTextoBotao:'#FFFFFF', tamanhoHeadline:'grande', pesoFonte:'900', familiaFonte:'Georgia, serif' }); }
+}
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const { pathname, method } = { pathname: new URL(request.url).pathname, method: request.method };
+
+    if (method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    if (method === 'GET' && pathname === '/api/historico') {
+      return json({ status: 'success', data: hardcodedDisparos });
+    }
+
+    if (method === 'GET' && pathname === '/api/mecanicas') {
+      return json({ status: 'success', data: _mecanicasCatalog });
+    }
+
+    if (method === 'POST' && pathname === '/api/generate-pauta') {
+      return handleGeneratePauta(request);
+    }
+
+    if (method === 'POST' && pathname === '/api/generate-image') {
+      return handleGenerateImage(request);
+    }
+
+    if (method === 'POST' && pathname === '/api/generate-variation') {
+      return handleGenerateVariation(request);
+    }
+
+    if (method === 'POST' && pathname === '/api/save-frame') {
+      return handleSaveFrame(request);
+    }
+
+    if (method === 'POST' && pathname === '/api/approve-pauta') {
+      return handleApprovePauta(request);
+    }
+
+    if (method === 'POST' && pathname === '/api/parse-estilo-visual') {
+      return handleParseEstiloVisual(request);
+    }
+
+    return json({ error: 'Not found' }, 404);
+  },
+};
