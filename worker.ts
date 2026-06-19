@@ -1,4 +1,4 @@
-const GEMINI_API_KEY = (globalThis as any).GEMINI_API_KEY || '';
+const GEMINI_API_KEY = 'AQ.Ab8RN6LDo7TTG6rzWfwi5wuOoH7V96h8Y11F1FVCST5KY7c3gA';
 const SUPABASE_URL = 'https://krxuwejvkdkrjrppcwsw.supabase.co';
 const SUPABASE_KEY = (globalThis as any).SUPABASE_KEY || '';
 const PIAPP_API_KEY = (globalThis as any).PIAPP_API_KEY || '';
