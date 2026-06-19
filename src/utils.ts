@@ -101,14 +101,14 @@ através nos hits históricos reais: ${pauta.previsao.casesReferencia.join(', ')
 [TAXA DE ABERTURA ESTIMADA]  ${pauta.previsao.aberturaEsperada}
 [CTOR ENVOLVIMENTO MÁXIMO]  ${pauta.previsao.ctorEsperado}
 [RECEITA ESTIMADA DO DISPARO]  ${pauta.previsao.receitaEsperada}
-[GRAU DE CONFIANÇA DO MODELO]  ${pauta.previsao.confianca.toUpperCase()}
+[GRAU DE CONFIANÇA DO MODELO]  ${(pauta.previsao?.confianca ?? '').toUpperCase()}
 Motivo: ${pauta.previsao.confiancaMotivo || 'N/A'}
 
 
 5. ANÁLISE DE SEGURANÇA E DIRETIVAS DE SPAM
 -----------------------------------------------------------
 ${pauta.riscos && pauta.riscos.length > 0 
-  ? pauta.riscos.map((r, i) => `[RISCO ${i+1}] Campo: ${r.campo} (${r.nivel.toUpperCase()})
+  ? pauta.riscos.map((r, i) => `[RISCO ${i+1}] Campo: ${r.campo} (${(r.nivel ?? '').toUpperCase()})
   Aviso: ${r.mensagem}
   Alternativa sugerida: ${r.alternativaSugerida}`).join('\n\n')
   : 'Excelente! Nenhuma irregularidade identificada contra o playbook de entregabilidade.'

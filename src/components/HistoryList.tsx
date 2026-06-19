@@ -86,7 +86,7 @@ export default function HistoryList({
       p.previsao.aberturaEsperada,
       p.previsao.ctorEsperado,
       p.operacional.segmentoRecomendado.replace(/"/g, '""'),
-      p.previsao.confianca.toUpperCase(),
+      (p.previsao?.confianca ?? '').toUpperCase(),
       p.status
     ]);
 

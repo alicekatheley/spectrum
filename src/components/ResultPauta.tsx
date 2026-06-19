@@ -604,7 +604,7 @@ export default function ResultPauta({
                   <div key={idx} className="bg-amber-50 p-4.5 rounded-2xl border border-amber-200 flex flex-col gap-2">
                     <div className="flex items-center gap-2 text-xs font-bold text-amber-700">
                       <span className="px-1.5 py-0.5 bg-amber-100 text-[10px] rounded uppercase">Campo: {risco.campo}</span>
-                      <span>Severidade: {risco.nivel.toUpperCase()}</span>
+                      <span>Severidade: {(risco.nivel ?? '').toUpperCase()}</span>
                     </div>
                     <p className="text-[11px] text-slate-650 leading-relaxed font-semibold">
                       {risco.mensagem}
@@ -939,7 +939,7 @@ export default function ResultPauta({
               ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800' 
               : 'bg-amber-900/40 text-amber-400 border border-amber-800 animate-pulse'
           }`}>
-            Confiança: {pauta.previsao.confianca.toUpperCase()}
+            Confiança: {(pauta.previsao?.confianca ?? '').toUpperCase()}
           </span>
           {pauta.previsao.confianca === 'baixa' && (
             <span className="text-[9px] text-amber-500 font-semibold max-w-[150px] leading-snug">
