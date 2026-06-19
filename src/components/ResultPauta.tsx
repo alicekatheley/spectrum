@@ -708,8 +708,13 @@ export default function ResultPauta({
               <div className="flex flex-col gap-1">
                 <strong className="text-slate-500">Fluxo de Frames ({framesArray.length} frames):</strong>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-500 mt-0.5">
-                  {framesArray.map((desc, i) => (
-                    <li key={i}><strong>F{i + 1}:</strong> {desc}</li>
+                  {framesArray.map((desc: any, i) => (
+                    <li key={i}>
+                      <strong>F{i + 1}:</strong>{' '}
+                      {typeof desc === 'string'
+                        ? desc
+                        : desc?.descricao ?? desc?.nome ?? desc?.texto ?? JSON.stringify(desc)}
+                    </li>
                   ))}
                 </ul>
               </div>
