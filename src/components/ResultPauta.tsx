@@ -600,22 +600,27 @@ export default function ResultPauta({
                 Sinalização de Riscos Táticos Identificados Detetados
               </h5>
               <div className="flex flex-col gap-2.5">
-                {pauta.riscos.map((risco, idx) => (
-                  <div key={idx} className="bg-amber-50 p-4.5 rounded-2xl border border-amber-200 flex flex-col gap-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-amber-700">
-                      <span className="px-1.5 py-0.5 bg-amber-100 text-[10px] rounded uppercase">Campo: {risco.campo}</span>
-                      <span>Severidade: {(risco.nivel ?? '').toUpperCase()}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-650 leading-relaxed font-semibold">
-                      {risco.mensagem}
-                    </p>
-                    {risco.alternativaSugerida && (
-                      <div className="text-[11px] text-emerald-700 bg-emerald-50 p-2.5 rounded-lg border border-emerald-100 font-medium leading-normal">
-                        <strong>Melodia recomendada do Playbook:</strong> {risco.alternativaSugerida}
+                {pauta.riscos.map((risco: any, idx) => {
+                  const r = typeof risco === 'string'
+                    ? { campo: 'geral', nivel: 'baixo', mensagem: risco, alternativaSugerida: '' }
+                    : risco;
+                  return (
+                    <div key={idx} className="bg-amber-50 p-4.5 rounded-2xl border border-amber-200 flex flex-col gap-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-amber-700">
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-[10px] rounded uppercase">Campo: {String(r.campo ?? 'geral')}</span>
+                        <span>Severidade: {String(r.nivel ?? '').toUpperCase()}</span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <p className="text-[11px] text-slate-650 leading-relaxed font-semibold">
+                        {String(r.mensagem ?? '')}
+                      </p>
+                      {r.alternativaSugerida && (
+                        <div className="text-[11px] text-emerald-700 bg-emerald-50 p-2.5 rounded-lg border border-emerald-100 font-medium leading-normal">
+                          <strong>Melodia recomendada do Playbook:</strong> {String(r.alternativaSugerida ?? '')}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
