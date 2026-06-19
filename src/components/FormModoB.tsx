@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import { Brand, InputModoB } from "../types";
 import { Sparkles, Trash2, ShieldAlert, Eye, RefreshCw, ImagePlus, X } from "lucide-react";
 import AspectRatioSelector from "./AspectRatioSelector";
@@ -50,8 +50,21 @@ function FontOption({
   key?: React.Key; nome: string; fontWeight?: number;
   selected: boolean; onSelect: () => void;
 }) {
-  useEffect(() => {
-    if (!nome) return;
+  const ref = React.useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect(); } },
+      { threshold: 0.1 }
+    );
+    observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    if (!visible || !nome) return;
     const linkId = `gfont-preview-${nome.replace(/\s/g, '-')}`;
     if (document.getElementById(linkId)) return;
     const link = document.createElement('link');
@@ -59,16 +72,21 @@ function FontOption({
     link.rel = 'stylesheet';
     link.href = `https://fonts.googleapis.com/css2?family=${nome.replace(/\s/g, '+')}:wght@400;700;900&display=swap`;
     document.head.appendChild(link);
-  }, [nome]);
+  }, [visible, nome]);
 
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onSelect}
       className={`w-full px-4 py-2 text-left text-base transition-colors cursor-pointer flex items-center justify-between ${
         selected ? 'bg-emerald-50 text-emerald-700' : 'hover:bg-slate-50 text-slate-700'
       }`}
-      style={{ fontFamily: nome ? `"${nome}", sans-serif` : 'inherit', fontSize: '15px', fontWeight }}
+      style={{
+        fontFamily: visible && nome ? `"${nome}", sans-serif` : 'inherit',
+        fontSize: '15px',
+        fontWeight: visible ? fontWeight : 400,
+      }}
     >
       <span>{nome || 'Padrão da marca'}</span>
       {selected && <span className="text-emerald-500 text-xs">✓</span>}
