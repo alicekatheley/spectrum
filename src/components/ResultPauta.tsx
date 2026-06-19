@@ -182,7 +182,26 @@ export default function ResultPauta({
         } catch (composeErr) {
           console.warn('[composeFrame] Falha, usando imagem pura:', composeErr);
         }
-        onFrameGenerated(pauta.id, frameName, finalDataUrl, data.publicUrl ?? undefined);
+        // Salvar imagem com texto no Storage (sobrescrever a imagem pura do PiApp)
+        let urlFinal = data.publicUrl ?? undefined;
+        try {
+          const saveRes = await fetch('/api/save-frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pautaId: pauta.id,
+              frameName,
+              imageDataUrl: finalDataUrl,
+            }),
+          });
+          if (saveRes.ok) {
+            const { publicUrl: savedUrl } = await saveRes.json();
+            if (savedUrl) urlFinal = savedUrl;
+          }
+        } catch (saveErr) {
+          console.warn('[save-frame] Falha ao salvar imagem composta:', saveErr);
+        }
+        onFrameGenerated(pauta.id, frameName, finalDataUrl, urlFinal);
         if (data.publicUrl) {
           setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
         }
