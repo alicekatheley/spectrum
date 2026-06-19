@@ -627,8 +627,8 @@ export default function ResultPauta({
 
         </div>}
 
-        {/* Lado Direito: Banner Simulador Gráfico — oculto se Apenas Texto */}
-        {tipoEfetivo !== 'texto' && <div>
+        {/* Lado Direito: Banner Simulador Gráfico — oculto se Apenas Texto ou sem frames gerados */}
+        {tipoEfetivo !== 'texto' && Object.keys(frameImages).length > 0 && <div>
           <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2.5 flex justify-between items-center">
             <span>Visual Playbook — Banner Autenticado</span>
             <span className="text-[10px] text-slate-400 italic">Simulação GIF Integrada</span>
