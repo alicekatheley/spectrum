@@ -928,7 +928,7 @@ export default function ResultPauta({
           <p className="text-[10px] text-slate-400 mt-2.5 leading-relaxed max-w-xl">
             Projeção tática real calculada com base científica usando como semelhança estatística de similaridade os históricos de hits reais:{" "}
             <span className="font-mono font-bold text-slate-300">
-              {pauta.previsao.casesReferencia.join(", ") || "Sem cases suficientes"}
+              {(pauta.previsao?.casesReferencia ?? []).join(", ") || "Sem cases suficientes"}
             </span>.
           </p>
         </div>

@@ -57,7 +57,7 @@ Quadrado ideal (1:1 aspect ratio) para visualização móvel.
 GIF Animado de Engajamento em 3 Frames Sequenciais.
 
 [DIRETIVAS DA PALETA: ${pauta.visual.paletaRecomendada.nome.toUpperCase()}]
-Cores recomendadas: ${pauta.visual.paletaRecomendada.cores.join(', ')}
+Cores recomendadas: ${(pauta.visual?.paletaRecomendada?.cores ?? []).join(', ')}
 
 [FILTRO TIPOGRÁFICO MARCA]
 ${pauta.visual.tipografia}
@@ -96,7 +96,7 @@ ${pauta.operacional.justificativaMecanica}
 4. PREVISÕES ANALÍTICAS DE PERFORMANCE
 -----------------------------------------------------------
 A taxa de faturamento e engajamento foi estimada com base cruzada
-através nos hits históricos reais: ${pauta.previsao.casesReferencia.join(', ')}
+através nos hits históricos reais: ${(pauta.previsao?.casesReferencia ?? []).join(', ')}
 
 [TAXA DE ABERTURA ESTIMADA]  ${pauta.previsao.aberturaEsperada}
 [CTOR ENVOLVIMENTO MÁXIMO]  ${pauta.previsao.ctorEsperado}
