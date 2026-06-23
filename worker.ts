@@ -1,4 +1,3 @@
-const GEMINI_API_KEY = (globalThis as any).GEMINI_API_KEY || '';
 const SUPABASE_URL = 'https://krxuwejvkdkrjrppcwsw.supabase.co';
 const SUPABASE_KEY = (globalThis as any).SUPABASE_KEY || '';
 const PIAPP_API_KEY = (globalThis as any).PIAPP_API_KEY || '';
@@ -55,18 +54,29 @@ const hardcodedDisparos = [
 const DEFAULT_MECANICAS = ['Abra o presente','Abra a caixa','Abra a carta','Puxe o Adesivo','Corte o fio','Jogo da Velha','Rasgue o papel','Puxe o post-it','Estoure o balão','Puxe o cupom'];
 
 async function callGemini(prompt: string, systemPrompt: string): Promise<string> {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+  const GOGROUP_TOKEN = (globalThis as any).GOGROUP_TOKEN || '';
+  const res = await fetch('https://ai-proxy.gogroupbr.com/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GOGROUP_TOKEN}`,
+    },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.7 },
-      systemInstruction: { parts: [{ text: systemPrompt }] }
+      model: 'gpt-5.5',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
     })
   });
-  if (!res.ok) throw new Error(JSON.stringify(await res.json()));
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    console.error('[callGemini] Gogroup proxy erro:', JSON.stringify(err));
+    throw new Error(JSON.stringify(err));
+  }
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '[]';
+  return data.choices?.[0]?.message?.content ?? '[]';
 }
 
 async function callPiApp(method: string, params: any): Promise<any> {
