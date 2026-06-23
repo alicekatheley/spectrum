@@ -205,7 +205,8 @@ export default {
 Contexto: ${input.contextoCampanha || 'Geral'}. Segmento: ${input.segmentoAlvo || 'Principal'}.
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
 Histórico: ${JSON.stringify(contextDb)}
-Retorne array JSON com esta estrutura exata:
+Retorne array JSON com ${input.quantidadePautas || 1} pauta(s) e esta estrutura exata:
+CRÍTICO: O array "frames" deve ter EXATAMENTE ${qtdFrames} itens — nem mais, nem menos.
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
   "visual": { "formato": "", "paletaRecomendada": { "nome": "", "cores": [] }, "estiloIlustracao": "", "frames": [], "posicaoCta": "", "tipografia": "" },
@@ -221,7 +222,11 @@ CTA: "${input.boxCta || ''}"
 Mecânica: "${input.boxMecanicaOuEstatico || ''}"
 Recompensa: "${input.boxRecompensa || ''}"
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
-Gere EXATAMENTE ${qtdFrames} frames. Histórico: ${JSON.stringify(contextDb)}
+CRÍTICO: Gere EXATAMENTE ${qtdFrames} frames no array "frames" — nem mais, nem menos.
+O array "frames" deve ter EXATAMENTE ${qtdFrames} itens.
+Se o direcionamento mencionar mais frames, ignore e use apenas ${qtdFrames}.
+Se o direcionamento detalhar FRAME 0 e FRAME 1, use exatamente essas 2 descrições.
+Histórico: ${JSON.stringify(contextDb)}
 Retorne array JSON com 1 pauta e esta estrutura exata:
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
