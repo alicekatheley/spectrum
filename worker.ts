@@ -1,7 +1,11 @@
 const SUPABASE_URL = 'https://krxuwejvkdkrjrppcwsw.supabase.co';
-const SUPABASE_KEY = (globalThis as any).SUPABASE_KEY || '';
-const PIAPP_API_KEY = (globalThis as any).PIAPP_API_KEY || '';
 const PIAPP_MCP_URL = 'https://piapp-v2.vercel.app/api/ai/mcp';
+
+interface Env {
+  SUPABASE_KEY: string;
+  PIAPP_API_KEY: string;
+  GOGROUP_TOKEN: string;
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -53,13 +57,12 @@ const hardcodedDisparos = [
 
 const DEFAULT_MECANICAS = ['Abra o presente','Abra a caixa','Abra a carta','Puxe o Adesivo','Corte o fio','Jogo da Velha','Rasgue o papel','Puxe o post-it','Estoure o balão','Puxe o cupom'];
 
-async function callGemini(prompt: string, systemPrompt: string): Promise<string> {
-  const GOGROUP_TOKEN = (globalThis as any).GOGROUP_TOKEN || '';
+async function callGemini(prompt: string, systemPrompt: string, token: string): Promise<string> {
   const res = await fetch('https://ai-proxy.gogroupbr.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${GOGROUP_TOKEN}`,
+      'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
       model: 'gpt-5.5',
@@ -79,10 +82,10 @@ async function callGemini(prompt: string, systemPrompt: string): Promise<string>
   return data.choices?.[0]?.message?.content ?? '[]';
 }
 
-async function callPiApp(method: string, params: any): Promise<any> {
+async function callPiApp(method: string, params: any, apiKey: string): Promise<any> {
   const resp = await fetch(PIAPP_MCP_URL, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${PIAPP_API_KEY}`, 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
     body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
   });
   const text = await resp.text();
@@ -91,15 +94,15 @@ async function callPiApp(method: string, params: any): Promise<any> {
   return JSON.parse(dataLine.slice(6));
 }
 
-async function generateImage(prompt: string, aspectRatio: string, model: string, refUrls?: string[]) {
+async function generateImage(prompt: string, aspectRatio: string, model: string, apiKey: string, refUrls?: string[]) {
   const genArgs: any = { prompt, model, aspect_ratio: aspectRatio, quality: 'standard' };
   if (refUrls?.length) genArgs.reference_image_urls = refUrls;
-  const genResp = await callPiApp('tools/call', { name: 'generate_image', arguments: genArgs });
+  const genResp = await callPiApp('tools/call', { name: 'generate_image', arguments: genArgs }, apiKey);
   const jobId = JSON.parse(genResp.result?.content?.[0]?.text ?? '{}').job_id;
   if (!jobId) throw new Error('No job_id from PiApp');
   for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 3000));
-    const check = await callPiApp('tools/call', { name: 'check_jobs', arguments: { job_ids: [jobId] } });
+    const check = await callPiApp('tools/call', { name: 'check_jobs', arguments: { job_ids: [jobId] } }, apiKey);
     const checkData = JSON.parse(check.result?.content?.[0]?.text ?? '{}');
     if (!checkData.all_done) continue;
     const job = checkData.jobs?.[0];
@@ -112,10 +115,10 @@ async function generateImage(prompt: string, aspectRatio: string, model: string,
   throw new Error('Timeout after 90s');
 }
 
-async function supabaseUpload(bucket: string, path: string, data: Uint8Array, mimeType: string) {
+async function supabaseUpload(bucket: string, path: string, data: Uint8Array, mimeType: string, supabaseKey: string) {
   return fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
     method: 'POST',
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': mimeType, 'x-upsert': 'true' },
+    headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': mimeType, 'x-upsert': 'true' },
     body: data.buffer as ArrayBuffer
   });
 }
@@ -124,7 +127,7 @@ function sanitize(text: string): string {
   return ['%','OFF','GRÁTIS','GRATIS','R$'].reduce((t, w) => t.replace(new RegExp(w.replace('$','\\$'), 'gi'), ''), text).trim();
 }
 
-function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string, index: number): any {
+function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string, index: number, qtdFrames: number = 3): any {
   return {
     id: `pauta-${Date.now()}-${index}`,
     marca,
@@ -144,7 +147,7 @@ function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string
         cores: Array.isArray(p.visual?.paletaRecomendada?.cores) ? p.visual.paletaRecomendada.cores : [],
       },
       estiloIlustracao: String(p.visual?.estiloIlustracao ?? ''),
-      frames: Array.isArray(p.visual?.frames) ? p.visual.frames : [],
+      frames: Array.isArray(p.visual?.frames) ? p.visual.frames.slice(0, qtdFrames) : [],
       posicaoCta: String(p.visual?.posicaoCta ?? 'Inferior centralizado'),
       tipografia: String(p.visual?.tipografia ?? ''),
     },
@@ -175,7 +178,10 @@ function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string
 }
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const SUPABASE_KEY = env?.SUPABASE_KEY || '';
+    const PIAPP_API_KEY = env?.PIAPP_API_KEY || '';
+    const GOGROUP_TOKEN = env?.GOGROUP_TOKEN || '';
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -197,7 +203,12 @@ export default {
         if (!input?.marca) return json({ error: 'marca obrigatória' }, 400);
         const { marca } = input;
         const contextDb = hardcodedDisparos.filter((d: any) => d.marca === marca);
-        const qtdFrames = typeof input.quantidadeFrames === 'number' ? Math.min(Math.max(input.quantidadeFrames, 2), 20) : 3;
+        // Aceitar número ou string
+        const qtdFramesRaw = input.quantidadeFrames;
+        const qtdFrames = (qtdFramesRaw !== undefined && qtdFramesRaw !== null)
+          ? Math.min(Math.max(parseInt(String(qtdFramesRaw)), 2), 20)
+          : 3;
+        console.log('[generate-pauta] quantidadeFrames recebido:', qtdFramesRaw, '→ qtdFrames:', qtdFrames);
         const isApice = marca === 'Apice';
         const systemPrompt = `Você é agente de CRM especialista para ${marca}. REGRAS: sem CAPS LOCK, sem %, OFF, GRÁTIS, R$. Pré-header SEMPRE: "Mas, vou precisar cancelar em breve". Assunto ${isApice ? '27-47' : '16-39'} chars.`;
         const userPrompt = modo === 'A'
@@ -205,8 +216,8 @@ export default {
 Contexto: ${input.contextoCampanha || 'Geral'}. Segmento: ${input.segmentoAlvo || 'Principal'}.
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
 Histórico: ${JSON.stringify(contextDb)}
-Retorne array JSON com ${input.quantidadePautas || 1} pauta(s) e esta estrutura exata:
 CRÍTICO: O array "frames" deve ter EXATAMENTE ${qtdFrames} itens — nem mais, nem menos.
+Retorne array JSON com ${input.quantidadePautas || 1} pauta(s) e esta estrutura exata:
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
   "visual": { "formato": "", "paletaRecomendada": { "nome": "", "cores": [] }, "estiloIlustracao": "", "frames": [], "posicaoCta": "", "tipografia": "" },
@@ -222,10 +233,8 @@ CTA: "${input.boxCta || ''}"
 Mecânica: "${input.boxMecanicaOuEstatico || ''}"
 Recompensa: "${input.boxRecompensa || ''}"
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
-CRÍTICO: Gere EXATAMENTE ${qtdFrames} frames no array "frames" — nem mais, nem menos.
-O array "frames" deve ter EXATAMENTE ${qtdFrames} itens.
-Se o direcionamento mencionar mais frames, ignore e use apenas ${qtdFrames}.
-Se o direcionamento detalhar FRAME 0 e FRAME 1, use exatamente essas 2 descrições.
+CRÍTICO: O array "frames" deve ter EXATAMENTE ${qtdFrames} itens — nem mais, nem menos.
+O direcionamento pode descrever os frames em detalhes — use essas descrições literalmente para preencher o array "frames", uma por item.
 Histórico: ${JSON.stringify(contextDb)}
 Retorne array JSON com 1 pauta e esta estrutura exata:
 [{
@@ -236,9 +245,12 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
   "riscos": []
 }]`;
 
-        const text = await callGemini(userPrompt, systemPrompt);
+        const text = await callGemini(userPrompt, systemPrompt, GOGROUP_TOKEN);
         const pautas = JSON.parse(text.replace(/```json|```/g, '').trim());
-        const result = pautas.map((p: any, i: number) => normalizePauta(p, marca, modo, tipoGeracao, i));
+        console.log('[generate-pauta] qtdFrames solicitado:', qtdFrames);
+        console.log('[generate-pauta] frames retornados pelo GPT:', pautas[0]?.visual?.frames?.length);
+        const result = pautas.map((p: any, i: number) => normalizePauta(p, marca, modo, tipoGeracao, i, qtdFrames));
+        console.log('[generate-pauta] frames no resultado final:', result[0]?.visual?.frames?.length);
         return json({ status: 'success', data: result });
       } catch (err: any) {
         return json({ error: 'Erro ao gerar pauta', details: err.message }, 500);
@@ -262,7 +274,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
           `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. NO TEXT. 4K. Ratio: ${aspectRatio}.`
         ].filter(Boolean).join('\n\n');
 
-        const result = await generateImage(prompt, aspectRatio, imageModel);
+        const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY);
         let publicUrl: string | null = null;
         if (pautaId) {
           try {
@@ -271,7 +283,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
             const binaryStr = atob(result.imageBytes);
             const bytes = new Uint8Array(binaryStr.length);
             for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-            const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${safeFrame}.png`, bytes, result.mimeType);
+            const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${safeFrame}.png`, bytes, result.mimeType, SUPABASE_KEY);
             if (up.ok) publicUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pautaId}/${safeFrame}.png`;
           } catch {}
         }
@@ -287,7 +299,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         if (!pauta) return json({ error: 'pauta obrigatória' }, 400);
         const { marca, operacional, copy } = pauta;
         const prompt = `Variação de copy para ${marca}. Mecânica: ${operacional?.mecanicaEscolhida}. Assunto: "${copy?.assunto}". Headline: "${copy?.headlineBanner}". CTA: "${copy?.ctaBotao}". Regras: sem %, OFF, GRÁTIS, R$. Assunto ${marca === 'Apice' ? '27-47':'16-39'} chars. Retorne JSON: {"assunto":"","preHeader":"Mas, vou precisar cancelar em breve","headlineBanner":"","subHeadlineBanner":"","ctaBotao":""}`;
-        const text = await callGemini(prompt, 'Retorne apenas JSON válido, sem markdown.');
+        const text = await callGemini(prompt, 'Retorne apenas JSON válido, sem markdown.', GOGROUP_TOKEN);
         const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
         parsed.preHeader = 'Mas, vou precisar cancelar em breve';
         return json({ status: 'success', data: parsed });
@@ -314,7 +326,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const binaryStr = atob(base64Data);
         const bytes = new Uint8Array(binaryStr.length);
         for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-        const res = await supabaseUpload('campaign-images', `frames/${pautaId}/${frameName}.png`, bytes, mimeType);
+        const res = await supabaseUpload('campaign-images', `frames/${pautaId}/${frameName}.png`, bytes, mimeType, SUPABASE_KEY);
         if (!res.ok) return json({ error: 'upload falhou' }, 500);
         return json({ publicUrl: `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pautaId}/${frameName}.png` });
       } catch (err: any) {
@@ -329,7 +341,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const res = await fetch(`${SUPABASE_URL}/rest/v1/ia_outputs`, {
           method: 'POST',
           headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-          body: JSON.stringify({ marca_id: pauta.marca === 'Apice' ? 1 : 2, tipo_canal: 'email', o_que_foi_analisado: `Pauta ${pauta.modo} aprovada`, modelo: 'gemini-2.5-flash', parametros: { modo: pauta.modo, pautaId: pauta.id }, recomendacao_texto: `ASSUNTO: ${pauta.copy?.assunto}\nHEADLINE: ${pauta.copy?.headlineBanner}`, recomendacao_estruturada: { copy: pauta.copy, visual: pauta.visual, operacional: pauta.operacional }, aprovado: true })
+          body: JSON.stringify({ marca_id: pauta.marca === 'Apice' ? 1 : 2, tipo_canal: 'email', o_que_foi_analisado: `Pauta ${pauta.modo} aprovada`, modelo: 'gpt-5.5', parametros: { modo: pauta.modo, pautaId: pauta.id }, recomendacao_texto: `ASSUNTO: ${pauta.copy?.assunto}\nHEADLINE: ${pauta.copy?.headlineBanner}`, recomendacao_estruturada: { copy: pauta.copy, visual: pauta.visual, operacional: pauta.operacional }, aprovado: true })
         });
         const data = await res.json();
         return json({ success: true, output_id: data?.[0]?.output_id });
