@@ -3,6 +3,7 @@ const PIAPP_MCP_URL = 'https://piapp-v2.vercel.app/api/ai/mcp';
 
 interface Env {
   SUPABASE_KEY: string;
+  SUPABASE_SERVICE_KEY: string;
   PIAPP_API_KEY: string;
   GOGROUP_TOKEN: string;
 }
