@@ -227,8 +227,12 @@ export default function PreviewModal({
       pauta.visual?.frameIntermediario,
       pauta.visual?.frameFinal,
     ].filter(Boolean);
-    const jaTemFrames = framesArray.some((_, i) => !!frameImages[`frame_${i}`]);
-    if (jaTemFrames) return;
+    // Só pula se os frames são válidos (base64 real, não URL quebrada)
+    const jaTemFramesValidos = framesArray.every((_, i) => {
+      const img = frameImages[`frame_${i}`];
+      return img && img.startsWith('data:image');
+    });
+    if (jaTemFramesValidos) return;
     if (autoGenStarted.current) return;
 
     // Só auto-gerar se a pauta foi criada há menos de 2 minutos (recém-gerada)

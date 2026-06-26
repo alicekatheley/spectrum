@@ -85,26 +85,24 @@ export default function App() {
       }
     } catch { /* ignore */ }
 
+    // Sempre salva base64 para exibição imediata
+    try {
+      const stored = JSON.parse(localStorage.getItem('crm_frame_b64') || '{}');
+      stored[pautaId] = stored[pautaId] ?? {};
+      stored[pautaId][frameName] = imageData;
+      localStorage.setItem('crm_frame_b64', JSON.stringify(stored));
+    } catch (err) {
+      console.warn('[handleFrameGenerated] Falha ao salvar base64:', err);
+    }
+    // Também salva URL pública se disponível (para reconstituição futura)
     if (publicUrl) {
       try {
         const stored = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
         stored[pautaId] = stored[pautaId] ?? {};
         stored[pautaId][frameName] = publicUrl;
         localStorage.setItem('crm_frame_urls', JSON.stringify(stored));
-        console.log(`[handleFrameGenerated] URL persistida: ${publicUrl}`);
       } catch (err) {
         console.warn('[handleFrameGenerated] Falha ao salvar URL:', err);
-      }
-    } else {
-      // Fallback: persiste base64 para sobreviver ao reload quando upload falhou
-      try {
-        const stored = JSON.parse(localStorage.getItem('crm_frame_b64') || '{}');
-        stored[pautaId] = stored[pautaId] ?? {};
-        stored[pautaId][frameName] = imageData;
-        localStorage.setItem('crm_frame_b64', JSON.stringify(stored));
-        console.log(`[handleFrameGenerated] base64 persistido como fallback: ${pautaId}/${frameName}`);
-      } catch (err) {
-        console.warn('[handleFrameGenerated] Falha ao salvar base64:', err);
       }
     }
   };
