@@ -110,7 +110,14 @@ async function generateImage(prompt: string, aspectRatio: string, model: string,
     if (!job || job.status === 'error') throw new Error(job?.error ?? 'Generation failed');
     const imgResp = await fetch(job.output_url);
     const buffer = await imgResp.arrayBuffer();
-    const imageBytes = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    // Usar loop em vez de spread para evitar stack overflow com imagens grandes
+    const uint8Array = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      binary += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize));
+    }
+    const imageBytes = btoa(binary);
     return { imageBytes, mimeType: imgResp.headers.get('content-type') ?? 'image/png' };
   }
   throw new Error('Timeout after 90s');
@@ -284,7 +291,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
             const binaryStr = atob(result.imageBytes);
             const bytes = new Uint8Array(binaryStr.length);
             for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-            const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${safeFrame}.png`, bytes, result.mimeType, SUPABASE_KEY);
+            const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${safeFrame}.png`, bytes, result.mimeType, SUPABASE_SERVICE_KEY);
             if (up.ok) publicUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pautaId}/${safeFrame}.png`;
           } catch {}
         }
