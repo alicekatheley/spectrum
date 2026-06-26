@@ -57,6 +57,7 @@ export default function App() {
     }
   });
   const reconstructedRef = useRef<Set<string>>(new Set());
+  const generatingPautasRef = useRef<Set<string>>(new Set());
 
   const handleFrameGenerated = async (
     pautaId: string,
@@ -64,7 +65,8 @@ export default function App() {
     imageData: string,
     publicUrl?: string,
   ) => {
-    const imageToStore = publicUrl || imageData;
+    // Sempre usa base64 para exibição — URL só para persistência
+    const imageToStore = imageData;
 
     setAllFrameImages(prev => ({
       ...prev,
@@ -835,6 +837,14 @@ export default function App() {
                       referenciasImagem={referenciasImagem}
                       frameImages={allFrameImages[pauta.id] ?? {}}
                       onFrameGenerated={handleFrameGenerated}
+                      onCanStartGenerating={(pautaId: string) => {
+                        if (generatingPautasRef.current.has(pautaId)) return false;
+                        generatingPautasRef.current.add(pautaId);
+                        return true;
+                      }}
+                      onFinishedGenerating={(pautaId: string) => {
+                        generatingPautasRef.current.delete(pautaId);
+                      }}
                     />
                   ))}
 
@@ -886,6 +896,14 @@ export default function App() {
           imageModel={imageModel}
           referenciaImagem={referenciasImagem[0] ?? undefined}
           referenciasImagem={referenciasImagem}
+          onCanStartGenerating={(pautaId: string) => {
+            if (generatingPautasRef.current.has(pautaId)) return false;
+            generatingPautasRef.current.add(pautaId);
+            return true;
+          }}
+          onFinishedGenerating={(pautaId: string) => {
+            generatingPautasRef.current.delete(pautaId);
+          }}
         />
       )}
     </div>

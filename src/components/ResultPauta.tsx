@@ -22,6 +22,8 @@ interface ResultPautaProps {
   referenciasImagem?: string[];
   frameImages: Record<string, string>;
   onFrameGenerated: (pautaId: string, frameName: string, imageData: string, publicUrl?: string) => void;
+  onCanStartGenerating: (pautaId: string) => boolean;
+  onFinishedGenerating: (pautaId: string) => void;
 }
 
 export default function ResultPauta({
@@ -37,6 +39,8 @@ export default function ResultPauta({
   referenciasImagem,
   frameImages,
   onFrameGenerated,
+  onCanStartGenerating,
+  onFinishedGenerating,
 }: ResultPautaProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showVisualAccordion, setShowVisualAccordion] = useState(true);
@@ -305,9 +309,10 @@ export default function ResultPauta({
     const isPautaRecente = (agora - dataCriacao) < 2 * 60 * 1000;
     if (!isPautaRecente) return;
 
+    if (!onCanStartGenerating(pauta.id)) return;
     autoGenStarted.current = true;
     const timer = setTimeout(() => {
-      gerarTodosFrames();
+      gerarTodosFrames().finally(() => onFinishedGenerating(pauta.id));
     }, 1000);
     return () => clearTimeout(timer);
   }, [pauta.id, Object.keys(frameImages).length]); // eslint-disable-line react-hooks/exhaustive-deps

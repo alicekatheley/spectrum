@@ -14,6 +14,8 @@ interface PreviewModalProps {
   imageModel: string;
   referenciaImagem?: string | null;
   referenciasImagem?: string[];
+  onCanStartGenerating: (pautaId: string) => boolean;
+  onFinishedGenerating: (pautaId: string) => void;
 }
 
 export default function PreviewModal({
@@ -26,6 +28,8 @@ export default function PreviewModal({
   imageModel,
   referenciaImagem,
   referenciasImagem,
+  onCanStartGenerating,
+  onFinishedGenerating,
 }: PreviewModalProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'edit'>('visual');
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -232,9 +236,10 @@ export default function PreviewModal({
     const isPautaRecente = (Date.now() - dataCriacao) < 2 * 60 * 1000;
     if (!isPautaRecente) return;
 
+    if (!onCanStartGenerating(pauta.id)) return;
     autoGenStarted.current = true;
     const timer = setTimeout(() => {
-      gerarTodosFrames();
+      gerarTodosFrames().finally(() => onFinishedGenerating(pauta.id));
     }, 1000);
     return () => clearTimeout(timer);
   }, [pauta.id, JSON.stringify(Object.keys(frameImages))]); // eslint-disable-line react-hooks/exhaustive-deps
