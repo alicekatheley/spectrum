@@ -226,6 +226,12 @@ export default function PreviewModal({
     const jaTemFrames = framesArray.some((_, i) => !!frameImages[`frame_${i}`]);
     if (jaTemFrames) return;
     if (autoGenStarted.current) return;
+
+    // Só auto-gerar se a pauta foi criada há menos de 2 minutos (recém-gerada)
+    const dataCriacao = new Date((pauta as any).dataCriacao ?? 0).getTime();
+    const isPautaRecente = (Date.now() - dataCriacao) < 2 * 60 * 1000;
+    if (!isPautaRecente) return;
+
     autoGenStarted.current = true;
     const timer = setTimeout(() => {
       gerarTodosFrames();
