@@ -292,30 +292,6 @@ export default function ResultPauta({
     autoGenStarted.current = false;
   }, [pauta.id]);
 
-  useEffect(() => {
-    const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
-    if (tipoEfetivo === 'texto') return;
-    const framesArray = pauta.visual?.frames ?? [
-      pauta.visual?.frameInicial,
-      pauta.visual?.frameIntermediario,
-      pauta.visual?.frameFinal,
-    ].filter(Boolean);
-    const jaTemFrames = framesArray.some((_, i) => !!frameImages[`frame_${i}`]);
-    if (jaTemFrames) return;
-    if (autoGenStarted.current) return;
-
-    const dataCriacao = new Date(pauta.dataCriacao ?? 0).getTime();
-    const agora = Date.now();
-    const isPautaRecente = (agora - dataCriacao) < 2 * 60 * 1000;
-    if (!isPautaRecente) return;
-
-    if (!onCanStartGenerating(pauta.id)) return;
-    autoGenStarted.current = true;
-    const timer = setTimeout(() => {
-      gerarTodosFrames().finally(() => onFinishedGenerating(pauta.id));
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [pauta.id, Object.keys(frameImages).length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const framesArray = pauta.visual?.frames ?? [
     pauta.visual?.frameInicial,
