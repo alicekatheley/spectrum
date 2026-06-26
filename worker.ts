@@ -188,6 +188,7 @@ function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const SUPABASE_KEY = env?.SUPABASE_KEY || '';
+    const SUPABASE_SERVICE_KEY = env?.SUPABASE_SERVICE_KEY || SUPABASE_KEY;
     const PIAPP_API_KEY = env?.PIAPP_API_KEY || '';
     const GOGROUP_TOKEN = env?.GOGROUP_TOKEN || '';
     const url = new URL(request.url);
