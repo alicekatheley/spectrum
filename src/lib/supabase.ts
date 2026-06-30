@@ -20,7 +20,7 @@ export const supabase = url && key
     })
   : null;
 
-export const ALLOWED_DOMAINS = ['gocase.com', 'gogroup.com', 'gobeaute.com'];
+export const ALLOWED_DOMAINS = ['gocase.com', 'gogroup.com', 'gobeaute.com', 'gobeaute.com.br'];
 
 export function isEmailAllowed(email: string): boolean {
   return ALLOWED_DOMAINS.some(domain => email.toLowerCase().endsWith(`@${domain}`));
