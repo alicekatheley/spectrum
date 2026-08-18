@@ -16,6 +16,7 @@ function fromDb(row: Record<string, unknown>): PautaGerada {
     status: row.status as PautaGerada['status'],
     dataCriacao: (row.data_criacao ?? row.dataCriacao) as string,
     inputOriginal: row.input_original ?? undefined,
+    aspectRatio: (row.aspect_ratio ?? undefined) as string | undefined,
   } as any;
 }
 
@@ -34,6 +35,7 @@ function toDb(p: PautaGerada) {
     status: p.status,
     data_criacao: p.dataCriacao,
     input_original: (p as any).inputOriginal ?? null,
+    aspect_ratio: (p as any).aspectRatio ?? null,
   };
 }
 

@@ -4,17 +4,15 @@ import BannerSimulador from "./BannerSimulador";
 import GifViewer from "./GifViewer";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
-  HelpCircle, AlertTriangle, Sparkles, Wand2, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image
+  HelpCircle, AlertTriangle, Sparkles, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image, Repeat, PenLine
 } from "lucide-react";
-import { downloadFile, generatePautaBriefingText } from "../utils";
 
 interface ResultPautaProps {
   pauta: PautaGerada;
   onApprove: (id: string) => void;
   onDiscard: (id: string) => void;
-  onGenerateVariation: (pauta: PautaGerada) => Promise<void>;
-  onEdit: (pauta: PautaGerada) => void;
-  onOpenPreview: (pauta: PautaGerada) => void;
+  onRefazer: (pauta: PautaGerada) => void;
+  onOpenPreview: (pauta: PautaGerada, tab?: 'visual' | 'edit') => void;
   key?: string | number;
   aspectRatio: string;
   imageModel: string;
@@ -30,8 +28,7 @@ export default function ResultPauta({
   pauta,
   onApprove,
   onDiscard,
-  onGenerateVariation,
-  onEdit,
+  onRefazer,
   onOpenPreview,
   aspectRatio,
   imageModel,
@@ -42,11 +39,19 @@ export default function ResultPauta({
   onCanStartGenerating,
   onFinishedGenerating,
 }: ResultPautaProps) {
+  // Usa o aspect ratio gravado nesta pauta (o que foi usado pra gerar as imagens dela),
+  // não o seletor global — que pode ter mudado desde a geração e faria o recompose/GIF
+  // usar dimensões diferentes das imagens já geradas, "achatando" o resultado.
+  const pautaAspectRatio = (pauta as any).aspectRatio || aspectRatio;
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showVisualAccordion, setShowVisualAccordion] = useState(true);
   const [showOperacionalAccordion, setShowOperacionalAccordion] = useState(true);
-  const [loadingVariation, setLoadingVariation] = useState(false);
   const [framePublicUrls, setFramePublicUrls] = useState<Record<string, string>>({});
+  // Imagem crua do PiApp (sem headline/subheadline/CTA desenhados por cima) por frame —
+  // usada como referência visual para o próximo frame. Enviar a imagem JÁ composta com texto
+  // como referência confunde o modelo (ele tenta "casar" com o texto/botão desenhados) e é
+  // a causa raiz da luz/fundo mudando de frame a frame.
+  const [rawFrameImages, setRawFrameImages] = useState<Record<string, string>>({});
   const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
   const [generatingGif, setGeneratingGif] = useState(false);
@@ -59,23 +64,12 @@ export default function ResultPauta({
     setTimeout(() => setCopiedField(null), 1500);
   };
 
-  const handleVariationClick = async () => {
-    setLoadingVariation(true);
-    try {
-      await onGenerateVariation(pauta);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingVariation(false);
-    }
-  };
-
   // Stable style index derived from pauta.id — same value for all 3 frames of this pauta
   const styleIndex = pauta.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 5;
 
   const generateFrameImage = async (
     frameIndex: number,
-    referenceFrameUrl?: string,
+    referenceFrameUrls?: string[],
   ): Promise<string | null> => {
     if (!pauta.visual) return null;
 
@@ -98,7 +92,7 @@ export default function ResultPauta({
           frameIndex,
           totalFrames: framesArray.length,
           frameDescription,
-          aspectRatio,
+          aspectRatio: pautaAspectRatio,
           marca: pauta.marca,
           pautaId: pauta.id,
           styleIndex,
@@ -112,7 +106,7 @@ export default function ResultPauta({
           headline: pauta.copy.headlineBanner,
           subheadline: pauta.copy.subHeadlineBanner,
           cta: pauta.copy.ctaBotao,
-          referenceFrameUrl,
+          referenceFrameUrls: referenceFrameUrls ?? [],
           direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
         }),
       });
@@ -124,6 +118,7 @@ export default function ResultPauta({
       const data = await response.json();
       if (data.imageBytes) {
         const rawDataUrl = `data:${data.mimeType};base64,${data.imageBytes}`;
+        setRawFrameImages(prev => ({ ...prev, [frameName]: rawDataUrl }));
         let finalDataUrl = rawDataUrl;
         try {
           const { composeFrame } = await import('../utils/composeFrame');
@@ -154,13 +149,14 @@ export default function ResultPauta({
             }
           }
 
-          if (fonteEscolhida || inputOriginal?.corBotaoEscolhida || inputOriginal?.fonteBotao) {
+          if (fonteEscolhida || inputOriginal?.corBotaoEscolhida || inputOriginal?.fonteBotao || inputOriginal?.corTextoBotao) {
             estiloVisual = {
               ...estiloVisual,
               familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
               corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
               estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
               corBotao: inputOriginal?.corBotaoEscolhida || estiloVisual?.corBotao,
+              corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
               familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
             };
           }
@@ -176,11 +172,21 @@ export default function ResultPauta({
             subheadline: (inputOriginal?.subheadline || pauta.copy.subHeadlineBanner) as string,
             cta: (inputOriginal?.cta || pauta.copy.ctaBotao) as string,
             marca: pauta.marca as 'Apice' | 'Barbours',
+            aspectRatio: pautaAspectRatio,
             estiloVisual: {
               ...estiloVisual,
               familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
               corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
               familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
+              corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
+              headlineTopPercent: inputOriginal?.headlineTopPercent,
+              headlineSizePx: inputOriginal?.headlineSizePx,
+              subheadlineTopPercent: inputOriginal?.subheadlineTopPercent,
+              subheadlineSizePx: inputOriginal?.subheadlineSizePx,
+              buttonTopPercent: inputOriginal?.buttonTopPercent,
+              buttonWidthPercent: inputOriginal?.buttonWidthPercent,
+              buttonHeightPercent: inputOriginal?.buttonHeightPercent,
+              buttonFontSizePx: inputOriginal?.buttonFontSizePx,
             },
           });
         } catch (composeErr) {
@@ -209,7 +215,8 @@ export default function ResultPauta({
         if (data.publicUrl) {
           setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
         }
-        return finalDataUrl;
+        // Retorna a imagem CRUA (sem texto) — é o que deve virar referência do próximo frame.
+        return rawDataUrl;
       } else {
         setFrameErrors(prev => ({ ...prev, [frameName]: data.error ?? 'Resposta inválida.' }));
         return null;
@@ -230,9 +237,16 @@ export default function ResultPauta({
       pauta.visual?.frameFinal ?? '',
     ].filter(Boolean);
 
+    // Envia o frame 1 (master, trava zoom/composição) + o frame imediatamente anterior
+    // (mantém a continuidade do objeto) como referências — encadear só o anterior acumula
+    // desvio de zoom a cada geração; usar só o master perde a continuidade entre frames.
+    let masterUrl: string | undefined = undefined;
     let previousUrl: string | undefined = undefined;
     for (let i = 0; i < framesArray.length; i++) {
-      previousUrl = await generateFrameImage(i, previousUrl) ?? undefined;
+      const refs = Array.from(new Set([masterUrl, previousUrl].filter(Boolean) as string[]));
+      const result = await generateFrameImage(i, refs.length > 0 ? refs : undefined);
+      if (i === 0) masterUrl = result ?? undefined;
+      previousUrl = result ?? previousUrl;
     }
   };
 
@@ -244,7 +258,7 @@ export default function ResultPauta({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          aspectRatio,
+          aspectRatio: pautaAspectRatio,
           marca: pauta.marca,
           pautaId: pauta.id,
           styleIndex,
@@ -355,9 +369,16 @@ export default function ResultPauta({
     .filter(Boolean) as string[];
   const todosFramesProntos = framesGerados.length === framesArray.length && framesArray.length > 0;
 
-  const downloadGifAnimado = async () => {
+  // Quantidade de frames a incluir no GIF final — permite baixar só os N primeiros
+  // frames (ex: gostou até o 4º de 5) em vez de exigir o conjunto completo.
+  const [gifFrameLimit, setGifFrameLimit] = useState<number | null>(null);
+  const gifFramesSelecionados = Math.max(2, Math.min(gifFrameLimit ?? framesGerados.length, framesGerados.length));
+
+  const downloadGifAnimado = async (frameCount?: number) => {
+    const count = Math.max(2, Math.min(frameCount ?? gifFramesSelecionados, framesGerados.length));
+    const framesParaGif = framesGerados.slice(0, count);
     try {
-      if (framesGerados.length === 0) {
+      if (framesParaGif.length === 0) {
         alert('Aguarde os frames serem gerados antes de baixar o GIF.');
         return;
       }
@@ -376,17 +397,22 @@ export default function ResultPauta({
         });
       };
 
-      // Converter todos os frames para base64
-      const framesBase64 = await Promise.all(framesGerados.map(toBase64));
+      // Converter os frames selecionados para base64
+      const framesBase64 = await Promise.all(framesParaGif.map(toBase64));
 
       // Usar gifshot para montar o GIF
       // @ts-ignore
       const gifshot = (await import('gifshot')).default ?? (await import('gifshot'));
+      const { resolveCanvasSize } = await import('../utils/composeFrame');
+      const [rawW, rawH] = resolveCanvasSize(pautaAspectRatio);
+      const scale = 600 / Math.max(rawW, rawH);
+      const gifWidth = Math.round(rawW * scale);
+      const gifHeight = Math.round(rawH * scale);
 
       gifshot.createGIF({
         images: framesBase64,
-        gifWidth: 600,
-        gifHeight: 600,
+        gifWidth,
+        gifHeight,
         interval: 0.7,
         numFrames: framesBase64.length,
         frameDuration: 1,
@@ -418,6 +444,7 @@ export default function ResultPauta({
 
   const isApice = pauta.marca === 'Apice';
   const tipoEfetivo = pauta.tipoGeracao ?? 'texto_imagem';
+  const showVisualColumn = tipoEfetivo !== 'texto' && Object.keys(frameImages).length > 0;
   const TIPO_LABELS: Record<string, string> = {
     texto_imagem: 'Texto + Imagem',
     texto: 'Só Texto',
@@ -441,16 +468,93 @@ export default function ResultPauta({
     },
   };
 
+  const acoesPautaJSX = (
+    <>
+      <div className="flex gap-2.5 flex-wrap">
+        {pauta.status === 'rascunho' && (
+          <>
+            <button
+              id={`btn-approve-${pauta.id}`}
+              onClick={() => onApprove(pauta.id)}
+              className="bg-emerald-600 hover:bg-emerald-705 text-white shadow-lg shadow-emerald-600/10 px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all"
+            >
+              <ThumbsUp className="w-4 h-4" />
+              Aprovar Pauta
+            </button>
+            <button
+              id={`btn-discard-${pauta.id}`}
+              onClick={() => onDiscard(pauta.id)}
+              className="bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <XOctagon className="w-4 h-4" />
+              Descartar
+            </button>
+          </>
+        )}
+
+        {pauta.status === 'aprovado' && (
+          <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs bg-emerald-50 px-4 py-3 border border-emerald-200 rounded-xl relative select-none">
+            <Check className="w-4 h-4" />
+            Esta pauta está aprovada e pronta para envio na plataforma CRM!
+          </div>
+        )}
+
+        {pauta.status === 'descartado' && (
+          <button
+            id={`btn-re-approve-${pauta.id}`}
+            onClick={() => onApprove(pauta.id)}
+            className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Restaurar Rascunho
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-2 text-slate-700 flex-wrap mt-2.5">
+        <button
+          id={`btn-preview-modal-trigger-${pauta.id}`}
+          onClick={() => onOpenPreview(pauta)}
+          className="bg-indigo-650 hover:bg-indigo-750 bg-indigo-600 text-white shadow-md shadow-indigo-600/10 px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all"
+          title="Visualizar mockup e download da arte"
+        >
+          <Eye className="w-4 h-4" />
+          Visualizar Mockup
+        </button>
+
+        <button
+          id={`btn-refazer-pauta-${pauta.id}`}
+          onClick={() => onRefazer(pauta)}
+          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+          title="Preenche o Modo B com tudo que gerou essa pauta, pra ajustar e gerar de novo"
+        >
+          <Repeat className="w-4 h-4" />
+          Refazer Pauta
+        </button>
+
+        <button
+          id={`btn-reajustar-copy-${pauta.id}`}
+          onClick={() => onOpenPreview(pauta, 'edit')}
+          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+          title="Editar título, subtítulo e botão e redesenhar a arte já gerada, sem chamar a IA de imagem de novo"
+        >
+          <PenLine className="w-4 h-4" />
+          Reajustar Copy
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className={`bg-white rounded-3xl p-6 shadow-xl border-2 transition-all duration-300 relative overflow-hidden ${
-      pauta.status === 'aprovado' 
-        ? 'border-emerald-300 ring-4 ring-emerald-500/10' 
+      pauta.status === 'aprovado'
+        ? 'border-emerald-300 ring-4 ring-emerald-500/10'
         : pauta.status === 'descartado'
           ? 'border-slate-150 opacity-70'
           : isApice ? 'border-indigo-100' : 'border-[#BF0F26]/10'
     }`}>
       {/* Detalhe superior estético de branding da pauta */}
-      <div 
+      <div
         className="absolute top-0 inset-x-0 h-1.5"
         style={{ backgroundColor: isApice ? '#688D65' : '#BF0F26' }}
       ></div>
@@ -478,7 +582,7 @@ export default function ResultPauta({
               ID: {pauta.id.split('-')[1] || pauta.id}
             </span>
           </div>
-          <h4 className="text-lg font-bold text-slate-850">
+          <h4 className="text-lg font-bold text-slate-800">
             Pauta Hits — Marca {pauta.marca}
           </h4>
         </div>
@@ -581,7 +685,7 @@ export default function ResultPauta({
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sub-Headline do Banner</span>
                 <div className="flex justify-between items-start gap-4 p-2 bg-white rounded-xl border border-slate-150">
-                  <p className="text-xs font-medium text-slate-650">
+                  <p className="text-xs font-medium text-slate-700">
                     {pauta.copy.subHeadlineBanner}
                   </p>
                   <button
@@ -634,7 +738,7 @@ export default function ResultPauta({
                         <span className="px-1.5 py-0.5 bg-amber-100 text-[10px] rounded uppercase">Campo: {String(r.campo ?? 'geral')}</span>
                         <span>Severidade: {String(r.nivel ?? '').toUpperCase()}</span>
                       </div>
-                      <p className="text-[11px] text-slate-650 leading-relaxed font-semibold">
+                      <p className="text-[11px] text-slate-700 leading-relaxed font-semibold">
                         {String(r.mensagem ?? '')}
                       </p>
                       {r.alternativaSugerida && (
@@ -652,7 +756,7 @@ export default function ResultPauta({
         </div>}
 
         {/* Lado Direito: Banner Simulador Gráfico — oculto se Apenas Texto ou sem frames gerados */}
-        {tipoEfetivo !== 'texto' && Object.keys(frameImages).length > 0 && <div>
+        {showVisualColumn && <div>
           <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2.5 flex justify-between items-center">
             <span>Visual Playbook — Banner Autenticado</span>
             <span className="text-[10px] text-slate-400 italic">Simulação GIF Integrada</span>
@@ -672,9 +776,60 @@ export default function ResultPauta({
               frameImages={{}}
             />
           )}
+
+          {framesGerados.length >= 2 && (
+            <div className="mt-4 flex flex-col gap-2">
+              {framesGerados.length > 2 && (
+                <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                  <span>Frames a incluir no GIF final</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGifFrameLimit(Math.max(2, gifFramesSelecionados - 1))}
+                      disabled={gifFramesSelecionados <= 2}
+                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
+                    >
+                      −
+                    </button>
+                    <span className="w-14 text-center font-mono text-slate-700">{gifFramesSelecionados} / {framesGerados.length}</span>
+                    <button
+                      type="button"
+                      onClick={() => setGifFrameLimit(Math.min(framesGerados.length, gifFramesSelecionados + 1))}
+                      disabled={gifFramesSelecionados >= framesGerados.length}
+                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => downloadGifAnimado()}
+                className={`w-full py-3.5 rounded-2xl font-extrabold text-sm uppercase tracking-wider text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer hover:-translate-y-0.5 ${
+                  isApice ? 'bg-[#688D65] hover:bg-[#52704f]' : 'bg-[#BF0F26] hover:bg-[#990c1e]'
+                }`}
+              >
+                <Download className="w-4 h-4" />
+                Baixar GIF Animado ({gifFramesSelecionados}{(!todosFramesProntos || gifFramesSelecionados < framesGerados.length) ? ` de ${framesArray.length}` : ''} frames)
+              </button>
+            </div>
+          )}
+
+          {/* Ações da Pauta — logo abaixo do download do GIF */}
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            {acoesPautaJSX}
+          </div>
         </div>}
 
       </div>
+
+      {/* Quando não há coluna visual (pauta só-texto ou sem frames ainda), as ações ficam aqui embaixo */}
+      {!showVisualColumn && (
+        <div className="mt-8 pt-6 border-t border-slate-100">
+          {acoesPautaJSX}
+        </div>
+      )}
 
       {/* Accordions de Briefing Técnico Visual & Operacional */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
@@ -745,7 +900,7 @@ export default function ResultPauta({
               <div className="flex flex-col gap-2">
                 <strong className="text-slate-500 flex items-center gap-1">
                   <Image className="w-3.5 h-3.5" />
-                  Gerar Imagens dos Frames ({aspectRatio})
+                  Gerar Imagens dos Frames ({pautaAspectRatio})
                 </strong>
                 {/* Generate all 3 frames — only shown as fallback when errors occurred */}
                 {Object.keys(frameErrors).length > 0 && (
@@ -781,7 +936,7 @@ export default function ResultPauta({
                       <button
                         key={frameName}
                         type="button"
-                        onClick={() => generateFrameImage(i, i > 0 ? frameImages[`frame_${i - 1}`] : undefined)}
+                        onClick={() => generateFrameImage(i, i > 0 ? Array.from(new Set([rawFrameImages['frame_0'], rawFrameImages[`frame_${i - 1}`]].filter(Boolean))) : undefined)}
                         disabled={generatingFrame !== null || generatingGif}
                         className={`text-[10px] font-bold px-3 py-2 rounded-lg border flex items-center gap-1 transition-colors cursor-pointer ${
                           isDone
@@ -817,7 +972,7 @@ export default function ResultPauta({
                     <div
                       className="relative rounded-xl overflow-hidden border-2 shadow-md"
                       style={{
-                        aspectRatio: aspectRatio.replace(':', '/'),
+                        aspectRatio: pautaAspectRatio.replace(':', '/'),
                         borderColor: isApice ? '#688D65' : '#BF0F26',
                       }}
                     >
@@ -834,17 +989,6 @@ export default function ResultPauta({
                       </div>
                     </div>
                   </div>
-                )}
-
-                {todosFramesProntos && (
-                  <button
-                    type="button"
-                    onClick={downloadGifAnimado}
-                    className="w-full py-2.5 rounded-xl font-bold text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Baixar GIF Animado ({framesGerados.length} frames)
-                  </button>
                 )}
 
                 {framesArray.map((_, i) => {
@@ -869,7 +1013,7 @@ export default function ResultPauta({
                         src={src}
                         alt={`Frame ${i + 1}`}
                         className="rounded-lg border border-slate-200 max-w-full"
-                        style={{ aspectRatio: aspectRatio.replace(':', '/') }}
+                        style={{ aspectRatio: pautaAspectRatio.replace(':', '/') }}
                       />
                     </div>
                   );
@@ -897,7 +1041,7 @@ export default function ResultPauta({
               </div>
               <div>
                 <strong className="text-slate-500 block mb-0.5">Embasamento e Justificativa Histórica:</strong>
-                <p className="text-[11px] text-slate-550 leading-relaxed italic bg-white p-2.5 rounded-lg border border-slate-100">
+                <p className="text-[11px] text-slate-600 leading-relaxed italic bg-white p-2.5 rounded-lg border border-slate-100">
                   "{pauta.operacional?.justificativaMecanica ?? '-'}"
                 </p>
               </div>
@@ -985,115 +1129,6 @@ export default function ResultPauta({
             <span className="text-[9px] text-amber-500 font-semibold max-w-[150px] leading-snug">
               Sem dados suficientes no banco de hits. Recomenda-se rodar teste piloto A/B inicialmente.
             </span>
-          )}
-        </div>
-      </div>
-
-      {/* Ações da Pauta */}
-      <div className="mt-8 flex flex-wrap justify-between items-center gap-4 pt-6 border-t border-slate-100">
-        <div className="flex gap-2.5">
-          {pauta.status === 'rascunho' && (
-            <>
-              <button
-                id={`btn-approve-${pauta.id}`}
-                onClick={() => onApprove(pauta.id)}
-                className="bg-emerald-600 hover:bg-emerald-705 text-white shadow-lg shadow-emerald-600/10 px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all"
-              >
-                <ThumbsUp className="w-4 h-4" />
-                Aprovar Pauta
-              </button>
-              <button
-                id={`btn-discard-${pauta.id}`}
-                onClick={() => onDiscard(pauta.id)}
-                className="bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors"
-              >
-                <XOctagon className="w-4 h-4" />
-                Descartar
-              </button>
-            </>
-          )}
-
-          {pauta.status === 'aprovado' && (
-            <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs bg-emerald-50 px-4 py-3 border border-emerald-200 rounded-xl relative select-none">
-              <Check className="w-4 h-4" />
-              Esta pauta está aprovada e pronta para envio na plataforma CRM!
-            </div>
-          )}
-
-          {pauta.status === 'descartado' && (
-            <button
-              id={`btn-re-approve-${pauta.id}`}
-              onClick={() => onApprove(pauta.id)}
-              className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Restaurar Rascunho
-            </button>
-          )}
-        </div>
-
-        <div className="flex gap-2 text-slate-700 flex-wrap">
-          {/* Universal mockup and download buttons */}
-          <button
-            id={`btn-preview-modal-trigger-${pauta.id}`}
-            onClick={() => onOpenPreview(pauta)}
-            className="bg-indigo-650 hover:bg-indigo-750 bg-indigo-600 text-white shadow-md shadow-indigo-600/10 px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all"
-            title="Visualizar mockup e download da arte"
-          >
-            <Eye className="w-4 h-4" />
-            Visualizar Mockup
-          </button>
-
-          <button
-            id={`btn-download-pauta-briefing-${pauta.id}`}
-            onClick={() => {
-              const text = generatePautaBriefingText(pauta);
-              const idStr = pauta.id.split('-')[1] || pauta.id;
-              downloadFile(`pauta_crm_${pauta.marca.toLowerCase()}_${idStr}.txt`, text);
-            }}
-            className="bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors shadow"
-            title="Baixar redação e parâmetros técnicos"
-          >
-            <Download className="w-4 h-4 text-emerald-400" />
-            Baixar Pauta
-          </button>
-
-          {pauta.status === 'rascunho' && (
-            <>
-              <button
-                id={`btn-edit-pauta-${pauta.id}`}
-                onClick={() => onEdit(pauta.id as any)}
-                className="bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-bold px-3 py-3 rounded-xl text-xs uppercase cursor-pointer flex items-center gap-1 transition-colors"
-                title="Voltar para edição"
-              >
-                Editar
-              </button>
-
-              <button
-                id={`btn-variation-${pauta.id}`}
-                onClick={handleVariationClick}
-                disabled={loadingVariation}
-                className={`border text-[10px] font-extrabold uppercase px-3 py-3 rounded-xl transition-all duration-300 flex items-center gap-1 cursor-pointer ${
-                  loadingVariation 
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-slate-300' 
-                    : isApice
-                      ? 'border-[#688D65]/50 hover:bg-[#688D65]/5 text-[#688D65]' 
-                      : 'border-[#BF0F26]/50 hover:bg-[#BF0F26]/5 text-[#BF0F26]'
-                }`}
-              >
-                {loadingVariation ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    Modificando...
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="w-3.5 h-3.5" />
-                    Variação IA
-                  </>
-                )}
-              </button>
-            </>
           )}
         </div>
       </div>

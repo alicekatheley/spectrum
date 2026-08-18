@@ -95,6 +95,56 @@ async function callPiApp(method: string, params: any, apiKey: string): Promise<a
   return JSON.parse(dataLine.slice(6));
 }
 
+function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; mimeType: string } {
+  const [header, base64Data] = dataUrl.split(',');
+  const mimeType = header.replace('data:', '').replace(';base64', '');
+  const binaryStr = atob(base64Data);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+  return { bytes, mimeType };
+}
+
+async function uploadReferenceToPiApp(dataUrl: string, apiKey: string): Promise<string> {
+  const { bytes, mimeType } = dataUrlToBytes(dataUrl);
+  const ext = mimeType.split('/')[1] || 'png';
+  const refResp = await callPiApp('tools/call', { name: 'upload_reference', arguments: { filename: `reference-${Date.now()}.${ext}`, content_type: mimeType } }, apiKey);
+  const refText = refResp.result?.content?.[0]?.text ?? '{}';
+  const refData = JSON.parse(refText);
+  const { upload_url, upload_token, public_url } = refData;
+  if (!upload_url || !upload_token || !public_url) throw new Error(`PiApp upload_reference não retornou URLs esperadas: ${refText.slice(0, 300)}`);
+  const putResp = await fetch(upload_url, {
+    method: 'PUT',
+    headers: { 'Content-Type': mimeType, 'Authorization': `Bearer ${upload_token}` },
+    body: bytes.buffer as ArrayBuffer,
+  });
+  if (!putResp.ok) throw new Error(`Falha no upload de referência PiApp: ${putResp.status}`);
+  return public_url;
+}
+
+async function uploadReferences(rawRefImage: unknown, rawRefImages: unknown, apiKey: string): Promise<string[]> {
+  const inputs: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
+    ? rawRefImages.slice(0, 4)
+    : (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:') ? [rawRefImage] : []);
+  const urls: string[] = [];
+  for (const img of inputs) {
+    if (typeof img === 'string' && img.startsWith('data:')) {
+      try {
+        urls.push(await uploadReferenceToPiApp(img, apiKey));
+      } catch (err: any) {
+        console.error('[uploadReferences] Falha ao enviar referência (ignorando):', err.message);
+      }
+    }
+  }
+  return urls;
+}
+
+function resolveImageModel(requestedModel: string, hasReference: boolean): string {
+  if (hasReference && requestedModel === 'wavespeed-gpt-image-2-t2i') {
+    return 'wavespeed-gpt-image-2-edit';
+  }
+  return requestedModel;
+}
+
 async function generateImage(prompt: string, aspectRatio: string, model: string, apiKey: string, refUrls?: string[]) {
   const genArgs: any = { prompt, model, aspect_ratio: aspectRatio, quality: 'standard' };
   if (refUrls?.length) genArgs.reference_image_urls = refUrls;
@@ -131,11 +181,59 @@ async function supabaseUpload(bucket: string, path: string, data: Uint8Array, mi
   });
 }
 
+const FRAME_STATE_HINTS: Record<string, string> = {
+  inicial: 'pristine and fully closed, perfectly sealed — pure anticipation, nothing revealed',
+  intermediario: 'caught mid-action, the instant of being opened or pulled apart — motion frozen at peak energy',
+  final: 'fully open and triumphant, the reward dramatically revealed and glowing center-stage',
+};
+
+const NAMED_FRAME_NUMBERS: Record<string, number> = { inicial: 1, intermediario: 2, final: 3 };
+
+function buildFramePrompt({
+  frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa,
+  headline, subheadline, direcionamento, aspectRatio, frameRefCount = 0,
+}: {
+  frameName?: string; frameDescription: string; marca: string; brandDna: any;
+  estiloIlustracao?: string; paleta?: { cores?: string[] }; mecanica?: string; recompensa?: string;
+  headline?: string; subheadline?: string; direcionamento?: string; aspectRatio: string; frameRefCount?: number;
+}): string {
+  const paletaCores = Array.isArray(paleta?.cores) && paleta!.cores!.length ? paleta!.cores!.join(', ') : brandDna.primaryColors;
+  const frameState = frameName ? FRAME_STATE_HINTS[frameName] : undefined;
+  const rewardPhrase = recompensa
+    ? (frameName === 'final' ? ` The reward — "${recompensa}" — is fully revealed, glowing and celebrated.` : ` The reward remains completely hidden inside.`)
+    : '';
+  const isFirstFrame = frameName === 'inicial' || frameName === 'frame_0';
+  const frameNumber = frameName
+    ? (NAMED_FRAME_NUMBERS[frameName] ?? (parseInt(frameName.replace('frame_', '')) + 1 || 1))
+    : undefined;
+
+  // Instrução só positiva, sem repetir palavras como "vignette"/"darkening"/"dimming" —
+  // modelos de imagem lidam mal com negação e mencionar o efeito indesejado repetidamente
+  // tende a reforçá-lo em vez de evitá-lo.
+  const lightingRule = `Lighting: bright, soft studio light, perfectly even from edge to edge — corners and borders exactly as bright and saturated as the center.`;
+  const cameraLockRule = `Camera and lighting stay fixed across frames: same zoom, framing, crop and light setup. Only the hero element's state/position changes (per the scene below) — the camera and lighting themselves never change. ${lightingRule}`;
+
+  const consistencyBlock = frameRefCount >= 2
+    ? `FRAME ${frameNumber} — two reference images attached: the FIRST is Frame 1, the master — match its background, composition, framing and lighting. The SECOND is the immediately preceding frame — use it only to continue the hero element's motion/state naturally. ${cameraLockRule}`
+    : frameRefCount === 1
+      ? `FRAME ${frameNumber} — reference image attached is Frame 1, the master. Reproduce its background, composition, framing and lighting closely. ${cameraLockRule}`
+      : (isFirstFrame ? `FRAME 1 — MASTER FRAME: establish the composition, background color, camera framing and lighting now; every later frame will match it. ${lightingRule}` : '');
+  return [
+    direcionamento ? `=== USER DIRECTION ===\n"${direcionamento}"\nFollow for frame: ${frameName}` : '',
+    `${estiloIlustracao || brandDna.style} illustration for ${marca} email banner.`,
+    `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene: ${frameDescription}.${rewardPhrase}`,
+    `Palette: ${paletaCores}. Background: ${brandDna.backgrounds}. ${brandDna.prohibitedColors}`,
+    consistencyBlock,
+    headline ? `COPY (DO NOT render): "${headline}" | "${subheadline}"` : '',
+    `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. NO TEXT. 4K. Ratio: ${aspectRatio}.`
+  ].filter(Boolean).join('\n\n');
+}
+
 function sanitize(text: string): string {
   return ['%','OFF','GRÁTIS','GRATIS','R$'].reduce((t, w) => t.replace(new RegExp(w.replace('$','\\$'), 'gi'), ''), text).trim();
 }
 
-function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string, index: number, qtdFrames: number = 3): any {
+function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string, index: number, qtdFrames: number = 3, aspectRatio: string = '1:1'): any {
   return {
     id: `pauta-${Date.now()}-${index}`,
     marca,
@@ -182,6 +280,7 @@ function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string
       : [],
     status: 'rascunho',
     dataCriacao: new Date().toISOString(),
+    aspectRatio,
   };
 }
 
@@ -258,7 +357,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const pautas = JSON.parse(text.replace(/```json|```/g, '').trim());
         console.log('[generate-pauta] qtdFrames solicitado:', qtdFrames);
         console.log('[generate-pauta] frames retornados pelo GPT:', pautas[0]?.visual?.frames?.length);
-        const result = pautas.map((p: any, i: number) => normalizePauta(p, marca, modo, tipoGeracao, i, qtdFrames));
+        const result = pautas.map((p: any, i: number) => normalizePauta(p, marca, modo, tipoGeracao, i, qtdFrames, aspectRatio));
         console.log('[generate-pauta] frames no resultado final:', result[0]?.visual?.frames?.length);
         return json({ status: 'success', data: result });
       } catch (err: any) {
@@ -269,21 +368,41 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
     if (url.pathname === '/api/generate-image' && request.method === 'POST') {
       try {
         const body = await request.json() as any;
-        const { frameName, frameDescription, aspectRatio = '1:1', marca, pautaId, imageModel = 'wavespeed-gpt-image-2-t2i', estiloIlustracao, paleta, mecanica, headline, subheadline, direcionamento } = body;
+        const {
+          frameName, frameDescription, aspectRatio = '1:1', marca, pautaId,
+          imageModel: rawModel = 'wavespeed-gpt-image-2-t2i', estiloIlustracao, paleta, mecanica, recompensa,
+          headline, subheadline, direcionamento, referenceFrameUrl, referenceFrameUrls: rawFrameRefs,
+          referenciaImagem: rawRefImage, referenciasImagem: rawRefImages,
+        } = body;
         if (!frameDescription) return json({ error: 'frameDescription obrigatório' }, 400);
         const brandDna = BRAND_DNA[marca];
         if (!brandDna) return json({ error: 'marca inválida' }, 400);
-        const paletaCores = Array.isArray(paleta?.cores) && paleta.cores.length ? paleta.cores.join(', ') : brandDna.primaryColors;
-        const prompt = [
-          direcionamento ? `=== USER DIRECTION ===\n"${direcionamento}"\nFollow for frame: ${frameName}` : '',
-          `${estiloIlustracao || brandDna.style} illustration for ${marca} email banner.`,
-          `Hero: ${mecanica || 'mechanic'}. Scene: ${frameDescription}.`,
-          `Palette: ${paletaCores}. Background: ${brandDna.backgrounds}. ${brandDna.prohibitedColors}`,
-          headline ? `COPY (DO NOT render): "${headline}" | "${subheadline}"` : '',
-          `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. NO TEXT. 4K. Ratio: ${aspectRatio}.`
-        ].filter(Boolean).join('\n\n');
 
-        const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY);
+        const productRefUrls = await uploadReferences(rawRefImage, rawRefImages, PIAPP_API_KEY);
+
+        // Frame(s) anterior(es) — normalmente [frame 1 (master), frame imediatamente anterior] —
+        // servem de referência visual pra manter objeto/posição/layout/zoom iguais entre frames do GIF.
+        const frameRefInputs: string[] = Array.isArray(rawFrameRefs) && rawFrameRefs.length > 0
+          ? rawFrameRefs
+          : (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:') ? [referenceFrameUrl] : []);
+
+        const frameRefUrls: string[] = [];
+        for (const frameRef of frameRefInputs) {
+          if (typeof frameRef === 'string' && frameRef.startsWith('data:')) {
+            try {
+              frameRefUrls.push(await uploadReferenceToPiApp(frameRef, PIAPP_API_KEY));
+            } catch (err: any) {
+              console.error('[generate-image] Falha ao subir frame de referência (ignorando):', err.message);
+            }
+          }
+        }
+
+        const refUrls = [...productRefUrls, ...frameRefUrls];
+        const imageModel = resolveImageModel(rawModel, refUrls.length > 0);
+
+        const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, headline, subheadline, direcionamento, aspectRatio, frameRefCount: frameRefUrls.length });
+
+        const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY, refUrls.length > 0 ? refUrls : undefined);
         let publicUrl: string | null = null;
         if (pautaId) {
           try {
@@ -299,6 +418,69 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         return json({ imageBytes: result.imageBytes, mimeType: result.mimeType, publicUrl });
       } catch (err: any) {
         return json({ error: 'Erro ao gerar imagem', details: err.message }, 500);
+      }
+    }
+
+    if (url.pathname === '/api/generate-gif' && request.method === 'POST') {
+      try {
+        const body = await request.json() as any;
+        const {
+          aspectRatio = '1:1', marca, pautaId,
+          imageModel: rawModel = 'wavespeed-gpt-image-2-t2i', estiloIlustracao, paleta, mecanica, recompensa,
+          frameInicial, frameIntermediario, frameFinal,
+          referenciaImagem: rawRefImage, referenciasImagem: rawRefImages,
+        } = body;
+        if (!frameInicial || !frameIntermediario || !frameFinal) {
+          return json({ error: 'frameInicial, frameIntermediario e frameFinal são obrigatórios.' }, 400);
+        }
+        const brandDna = BRAND_DNA[marca];
+        if (!brandDna) return json({ error: 'marca inválida' }, 400);
+
+        const refUrls = await uploadReferences(rawRefImage, rawRefImages, PIAPP_API_KEY);
+        const imageModel = resolveImageModel(rawModel, refUrls.length > 0);
+
+        const frames = [
+          { frameName: 'inicial', frameDescription: frameInicial as string },
+          { frameName: 'intermediario', frameDescription: frameIntermediario as string },
+          { frameName: 'final', frameDescription: frameFinal as string },
+        ];
+
+        // Sequencial (não paralelo): frame 1 é a "master frame" e serve de referência visual
+        // pros frames 2 e 3, pra manter objeto/posição/layout consistentes entre eles.
+        const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
+        let masterFrameRefUrl: string | undefined;
+
+        for (const { frameName, frameDescription } of frames) {
+          const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, aspectRatio, frameRefCount: masterFrameRefUrl ? 1 : 0 });
+          const frameRefUrls = masterFrameRefUrl ? [...refUrls, masterFrameRefUrl] : refUrls;
+          const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY, frameRefUrls.length > 0 ? frameRefUrls : undefined);
+          frameResults.push({ frameName, ...result });
+
+          if (!masterFrameRefUrl) {
+            try {
+              masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`, PIAPP_API_KEY);
+            } catch (err: any) {
+              console.error('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
+            }
+          }
+        }
+
+        const results = await Promise.all(frameResults.map(async ({ frameName, imageBytes, mimeType }) => {
+          let publicUrl: string | null = null;
+          if (pautaId) {
+            try {
+              const safeMarca = marca.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const { bytes } = dataUrlToBytes(`data:${mimeType};base64,${imageBytes}`);
+              const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${frameName}.png`, bytes, mimeType, SUPABASE_SERVICE_KEY);
+              if (up.ok) publicUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pautaId}/${frameName}.png`;
+            } catch {}
+          }
+          return { frameName, imageBytes, mimeType, publicUrl };
+        }));
+
+        return json({ frames: results });
+      } catch (err: any) {
+        return json({ error: 'Erro ao gerar GIF', details: err.message }, 500);
       }
     }
 

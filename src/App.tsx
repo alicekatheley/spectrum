@@ -9,11 +9,23 @@ import FormModoB from "./components/FormModoB";
 import ResultPauta from "./components/ResultPauta";
 import { DEFAULT_IMAGE_MODEL } from "./components/ImageModelSelector";
 import HistoryList from "./components/HistoryList";
+import HistoryGallery from "./components/HistoryGallery";
 import PreviewModal from "./components/PreviewModal";
 import WeeklyPlanner from "./components/WeeklyPlanner";
-import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, ChevronDown } from "lucide-react";
+import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
+import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X } from "lucide-react";
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
+  );
+}
+
+function AppInner() {
+  const { theme, toggleTheme } = useTheme();
+  const isLight = theme === 'light';
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState(false);
@@ -24,6 +36,11 @@ export default function App() {
   const [history, setHistory] = useState<PautaGerada[]>([]);
   const [loading, setLoading] = useState(false);
   const [activePreviewPauta, setActivePreviewPauta] = useState<PautaGerada | null>(null);
+  const [previewInitialTab, setPreviewInitialTab] = useState<'visual' | 'edit'>('visual');
+  const openPreview = (pauta: PautaGerada, tab: 'visual' | 'edit' = 'visual') => {
+    setPreviewInitialTab(tab);
+    setActivePreviewPauta(pauta);
+  };
   const [historySubTab, setHistorySubTab] = useState<'lista' | 'planner'>('lista');
 
   // Estados para Filtros de Histórico
@@ -31,6 +48,10 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<"all" | "rascunho" | "aprovado" | "descartado">("all");
   const [modoFilter, setModoFilter] = useState<"all" | "A" | "B">("all");
   const [tipoGeracaoFilter, setTipoGeracaoFilter] = useState<"all" | "texto" | "imagem" | "texto_imagem">("all");
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [historyTimeRange, setHistoryTimeRange] = useState<'7d' | '30d' | '60d' | '120d' | 'custom'>('7d');
+  const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
+  const [galleryOpenPautaId, setGalleryOpenPautaId] = useState<string | null>(null);
 
   // Estado para preencher formulário do Modo B quando for solicitado Editar pauta
   const [editInputPreload, setEditInputPreload] = useState<InputModoB | null>(null);
@@ -75,15 +96,6 @@ export default function App() {
         [frameName]: imageToStore,
       },
     }));
-
-    // Registra pautaId como tendo frames (usado para reconstituição no reload)
-    try {
-      const knownPautas: string[] = JSON.parse(localStorage.getItem('crm_frame_pautas') || '[]');
-      if (!knownPautas.includes(pautaId)) {
-        knownPautas.push(pautaId);
-        localStorage.setItem('crm_frame_pautas', JSON.stringify(knownPautas));
-      }
-    } catch { /* ignore */ }
 
     // Sempre salva base64 para exibição imediata
     try {
@@ -185,49 +197,79 @@ export default function App() {
     init();
   }, []);
 
-  // Reconstrói URLs do Supabase Storage para pautas cujos frames sumiram do localStorage
+  // Reconstrói URLs do Supabase Storage pra pautas sem frames carregados neste navegador —
+  // inclui pautas geradas por OUTRAS pessoas, já que o Storage é compartilhado mesmo que
+  // 'crm_frame_pautas'/'crm_frame_urls' (localStorage) sejam por-navegador.
   useEffect(() => {
     if (history.length === 0) return;
     const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
     if (!SUPABASE_URL) return;
-
-    const knownPautas: string[] = (() => {
-      try { return JSON.parse(localStorage.getItem('crm_frame_pautas') || '[]'); }
-      catch { return []; }
-    })();
-    if (knownPautas.length === 0) return;
 
     const storedUrls: Record<string, Record<string, string>> = (() => {
       try { return JSON.parse(localStorage.getItem('crm_frame_urls') || '{}'); }
       catch { return {}; }
     })();
 
-    const toReconstruct = history.filter(p =>
-      knownPautas.includes(p.id) &&
-      !storedUrls[p.id] &&
-      !reconstructedRef.current.has(p.id)
-    );
+    // Quantidade real de frames da pauta (N configurável no Modo B) — a geração sempre
+    // nomeia como frame_0..frame_{N-1}, então a reconstrução precisa cobrir todos eles.
+    const getExpectedFrameKeys = (p: PautaGerada): string[] => {
+      const framesArray = p.visual?.frames ?? [
+        p.visual?.frameInicial ?? '',
+        p.visual?.frameIntermediario ?? '',
+        p.visual?.frameFinal ?? '',
+      ].filter(Boolean);
+      return framesArray.map((_: any, i: number) => `frame_${i}`);
+    };
+
+    const toReconstruct = history.filter(p => {
+      if (reconstructedRef.current.has(p.id)) return false;
+      const expectedKeys = getExpectedFrameKeys(p);
+      if (expectedKeys.length === 0) return false;
+      const have = new Set([
+        ...Object.keys(storedUrls[p.id] ?? {}),
+        ...Object.keys(allFrameImages[p.id] ?? {}),
+      ]);
+      return expectedKeys.some(k => !have.has(k));
+    });
     if (toReconstruct.length === 0) return;
 
     const reconstruct = async () => {
-      const urlUpdates: Record<string, Record<string, string>> = {};
-      const frameKeys = ['frame_0', 'frame_1', 'frame_2'];
-
-      for (const pauta of toReconstruct) {
+      // Todas as pautas e todos os frames em paralelo — com dezenas de pautas x N frames cada,
+      // fazer isso em série (um HEAD request de cada vez) podia levar dezenas de segundos até
+      // chegar na pauta que o usuário está olhando.
+      const results = await Promise.all(toReconstruct.map(async (pauta) => {
         reconstructedRef.current.add(pauta.id);
         const safeMarca = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const found: Record<string, string> = {};
+        const frameKeys = getExpectedFrameKeys(pauta);
 
-        for (const frameName of frameKeys) {
-          const safeFrame = frameName.replace(/[^a-z0-9]/g, '');
-          const url = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${safeFrame}.png`;
+        const frameResults = await Promise.all(frameKeys.map(async (frameName) => {
+          // Preservar '_' — o backend salva como "frame_0.png", não "frame0.png"
+          const safeFrame = frameName.replace(/[^a-z0-9_]/g, '');
+          // "frames/{pautaId}/..." é a versão COMPOSTA (com headline/subheadline/CTA já
+          // desenhados via /api/save-frame) — é essa que deve ser exibida. "{marca}/{pautaId}/..."
+          // é só a imagem crua do PiApp, sem texto; usada como fallback se a composta não existir.
+          const composedUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pauta.id}/${safeFrame}.png`;
+          const rawUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${safeFrame}.png`;
           try {
-            const resp = await fetch(url, { method: 'HEAD' });
-            if (resp.ok) found[frameName] = url;
-          } catch { /* network error */ }
-        }
+            const composedResp = await fetch(composedUrl, { method: 'HEAD' });
+            if (composedResp.ok) return [frameName, composedUrl] as const;
+            const rawResp = await fetch(rawUrl, { method: 'HEAD' });
+            return rawResp.ok ? [frameName, rawUrl] as const : null;
+          } catch {
+            return null;
+          }
+        }));
 
-        if (Object.keys(found).length > 0) urlUpdates[pauta.id] = found;
+        const found: Record<string, string> = {};
+        for (const entry of frameResults) {
+          if (entry) found[entry[0]] = entry[1];
+        }
+        return { id: pauta.id, found };
+      }));
+
+      const urlUpdates: Record<string, Record<string, string>> = {};
+      for (const { id, found } of results) {
+        if (Object.keys(found).length > 0) urlUpdates[id] = found;
       }
 
       if (Object.keys(urlUpdates).length === 0) return;
@@ -331,6 +373,7 @@ export default function App() {
             fonteSubtitulo: (inputB as any).fonteSubtitulo || '',
             corSubtitulo: (inputB as any).corSubtitulo || 'rgba(255,255,255,0.90)',
             corBotaoEscolhida: (inputB as any).corBotaoEscolhida || '',
+            corTextoBotao: (inputB as any).corTextoBotao || '#FFFFFF',
             fonteBotao: (inputB as any).fonteBotao || '',
             estiloDesign: (inputB as any).estiloDesign || '',
           },
@@ -343,9 +386,8 @@ export default function App() {
           setActivePreviewPauta(pautasComInput[0]);
         }
 
-        setDirecionamentoIA('');
-        // Limpar preload de edição após submit bem sucedido
-        setEditInputPreload(null);
+        // Manter os campos preenchidos após gerar, pra permitir regenerar/ajustar sem retypar tudo
+        setEditInputPreload(inputB);
         // Redireciona para o histórico recém gerado
         setMainTab('historico');
       } else {
@@ -359,36 +401,6 @@ export default function App() {
     }
   };
 
-  // Gerar variação alternativa de um bloco de copy específico via backend
-  const handleGenerateVariation = async (pauta: PautaGerada) => {
-    try {
-      const response = await fetch("/api/generate-variation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pauta }),
-      });
-      const resData = await response.json();
-      if (resData.status === "success" && resData.data) {
-        // Atualizar bloco de copy na pauta correspondente
-        const updated = history.map((item) => {
-          if (item.id === pauta.id) {
-            return {
-              ...item,
-              copy: resData.data,
-              status: 'rascunho' as const // reverter para rascunho para aprovação
-            };
-          }
-          return item;
-        });
-        saveHistory(updated);
-      } else {
-        alert("Não foi possível gerar variação do copy com a IA.");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Falha ao comunicar com o gerador de variação rápida.");
-    }
-  };
 
   const handleApprovePauta = async (id: string) => {
     const updated = history.map((item) => {
@@ -469,50 +481,86 @@ export default function App() {
     }
   };
 
+  // Preenche o formulário do Modo B com tudo que foi usado pra gerar essa pauta
+  // (copy + estilo visual), pra "refazer" sem redigitar do zero.
+  const handleRefazerPauta = (pauta: PautaGerada) => {
+    const inputOriginal = (pauta as any).inputOriginal ?? {};
+    setCurrentBrand(pauta.marca);
+    setCurrentMode('B');
+    setEditInputPreload({
+      marca: pauta.marca,
+      boxTituloEmail: pauta.copy.assunto,
+      boxHeadlineBanner: inputOriginal.headline || pauta.copy.headlineBanner,
+      boxSubtituloEmail: inputOriginal.subheadline || pauta.copy.subHeadlineBanner,
+      boxCta: inputOriginal.cta || pauta.copy.ctaBotao,
+      boxMecanicaOuEstatico: pauta.operacional.mecanicaEscolhida,
+      boxRecompensa: pauta.operacional.recompensaEscolhida,
+      estiloVisualTexto: inputOriginal.estiloVisualTexto || '',
+      fonteEscolhida: inputOriginal.fonteEscolhida || '',
+      estiloBotaoEscolhido: inputOriginal.estiloBotaoEscolhido || 'pill',
+      corTextoPrincipal: inputOriginal.corTextoPrincipal || '#FFFFFF',
+      fonteSubtitulo: inputOriginal.fonteSubtitulo || '',
+      corSubtitulo: inputOriginal.corSubtitulo || 'rgba(255,255,255,0.90)',
+      corBotaoEscolhida: inputOriginal.corBotaoEscolhida || '',
+      corTextoBotao: inputOriginal.corTextoBotao || '#FFFFFF',
+      fonteBotao: inputOriginal.fonteBotao || '',
+      estiloDesign: inputOriginal.estiloDesign || '',
+    } as any);
+    setDirecionamentoIA(inputOriginal.direcionamento || '');
+    setMainTab('geracao');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleClearFilters = () => {
     setBrandFilter("all");
     setModoFilter("all");
     setTipoGeracaoFilter("all");
     setStatusFilter("all");
+    setHistorySearchQuery("");
   };
 
-  // Carrega dados da pauta gerada e abre de volta no formulário do Modo B para ajustes manuais
-  const handleEditPauta = (id: string) => {
-    const pautaToEdit = history.find((p) => p.id === id);
-    if (pautaToEdit) {
-      // Definir marca para coincidir com a pauta editada
-      setCurrentBrand(pautaToEdit.marca);
-      // Mudar fluxo de modo para assistido
-      setCurrentMode('B');
-      // Passar dados originais para preenchimento
-      setEditInputPreload({
-        marca: pautaToEdit.marca,
-        boxTituloEmail: pautaToEdit.copy.assunto,
-        boxSubtituloEmail: pautaToEdit.copy.subHeadlineBanner,
-        boxCta: pautaToEdit.copy.ctaBotao,
-        boxMecanicaOuEstatico: pautaToEdit.operacional.mecanicaEscolhida,
-        boxRecompensa: pautaToEdit.operacional.recompensaEscolhida,
-      });
-
-      // Mudar de aba para a criação onde o form de edição estará carregado
-      setMainTab('geracao');
-
-      // Rolar suavemente para o topo do formulário
-      window.scrollTo({ top: 300, behavior: 'smooth' });
-    }
-  };
 
   const filteredHistory = history.filter((p) => {
     const matchBrand = brandFilter === "all" || p.marca === brandFilter;
     const matchStatus = statusFilter === "all" || p.status === statusFilter;
     const matchModo = modoFilter === "all" || p.modo === modoFilter;
     const matchTipo = tipoGeracaoFilter === "all" || (p.tipoGeracao ?? 'texto_imagem') === tipoGeracaoFilter;
-    return matchBrand && matchStatus && matchModo && matchTipo;
+    const query = historySearchQuery.trim().toLowerCase();
+    const matchSearch = query === "" || [
+      p.copy?.assunto, p.copy?.headlineBanner, p.copy?.subHeadlineBanner, p.copy?.ctaBotao,
+    ].some(v => typeof v === 'string' && v.toLowerCase().includes(query));
+    return matchBrand && matchStatus && matchModo && matchTipo && matchSearch;
   });
+
+  // Filtro de período por cima dos demais filtros — janelas relativas (7/30/60/120 dias)
+  // ou um intervalo de datas personalizado escolhido no calendário.
+  const timeRangeFilteredHistory = filteredHistory.filter((p) => {
+    const created = new Date(p.dataCriacao);
+    if (historyTimeRange === 'custom') {
+      if (customDateRange.start) {
+        const start = new Date(customDateRange.start);
+        start.setHours(0, 0, 0, 0);
+        if (created < start) return false;
+      }
+      if (customDateRange.end) {
+        const end = new Date(customDateRange.end);
+        end.setHours(23, 59, 59, 999);
+        if (created > end) return false;
+      }
+      return true;
+    }
+    const days = { '7d': 7, '30d': 30, '60d': 60, '120d': 120 }[historyTimeRange];
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setHours(0, 0, 0, 0);
+    return created >= cutoff;
+  });
+
+  const galleryOpenPauta = galleryOpenPautaId ? history.find(p => p.id === galleryOpenPautaId) ?? null : null;
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#18142E] flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--shell-bg)] flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-slate-600 border-t-emerald-500 rounded-full animate-spin" />
       </div>
     );
@@ -520,7 +568,7 @@ export default function App() {
 
   if (accessDenied) {
     return (
-      <div className="min-h-screen bg-[#18142E] flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[var(--shell-bg)] flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-10 max-w-md w-full flex flex-col items-center gap-6 text-center">
           <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center">
             <span className="text-rose-600 text-3xl">✕</span>
@@ -548,7 +596,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0D0A1A] text-slate-150 py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
+    <div className="min-h-screen bg-[var(--shell-bg)] text-[var(--shell-text)] py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
       <div className="max-w-7xl mx-auto flex flex-col gap-8">
         
         {/* Top Header & Brand Selector */}
@@ -560,68 +608,65 @@ export default function App() {
         />
 
         {/* Abas Principais de Navegação */}
-        <div id="main-tabs-container" className="flex border-b border-slate-800 gap-1 sm:gap-2 mb-4 relative z-10 p-1 bg-[#18142E]/40 rounded-2xl">
+        <div id="main-tabs-container" className="flex border-b border-[var(--shell-border)] gap-1 sm:gap-2 mb-4 relative z-10 p-1 bg-[var(--shell-panel-soft)] rounded-2xl">
           <button
             id="tab-btn-geracao"
             onClick={() => setMainTab('geracao')}
             className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
               mainTab === 'geracao'
-                ? 'bg-[#688D65]/20 text-emerald-300 border border-[#688D65]/30 shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-[#13102A]/30'
+                ? isLight
+                  ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-lg'
+                  : 'bg-[#688D65]/20 text-emerald-300 border border-[#688D65]/30 shadow-lg'
+                : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]/50'
             }`}
           >
-            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <Sparkles className={`w-4 h-4 ${isLight ? 'text-indigo-400' : 'text-emerald-400'}`} />
             Painel de Geração Inteligente
           </button>
-          
+
           <button
             id="tab-btn-historico"
             onClick={() => setMainTab('historico')}
             className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative ${
               mainTab === 'historico'
                 ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-[#13102A]/30'
+                : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]/50'
             }`}
           >
             <Clock className="w-4 h-4 text-indigo-450" />
             Histórico de Pautas
-            {history.length > 0 && (
-              <span className="bg-indigo-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full border border-indigo-400 flex items-center justify-center scale-90">
-                {history.length}
-              </span>
-            )}
           </button>
         </div>
 
         {/* Renderização condicional por Aba Principal */}
         {mainTab === 'geracao' ? (
           <div className="max-w-6xl mx-auto w-full animate-fade-in flex flex-col gap-6">
-            
+
             {/* Seletor central de marcas exclusivo do Painel de Geração */}
-            <div className="bg-[#18142E] border border-slate-850 p-6 rounded-3xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xl">
-              <div className="absolute top-0 right-0 w-80 h-80 bg-[#13102A] rounded-full blur-3xl opacity-10 pointer-events-none -mr-20 -mt-20"></div>
-              
+            <div className="bg-[var(--shell-panel)] border border-[var(--shell-border)] p-6 rounded-3xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xl">
+              <div className="absolute top-0 right-0 w-80 h-80 bg-[var(--shell-panel-soft)] rounded-full blur-3xl opacity-10 pointer-events-none -mr-20 -mt-20"></div>
+
               <div className="relative z-10 flex flex-col gap-1 max-w-xl text-left">
                 <span className="text-[10px] uppercase font-extrabold tracking-widest text-[#AA834B]">
                   Workspace de Criação de E-mail de CRM
                 </span>
-                <h2 className="text-xl font-bold font-sans text-white">
+                <h2 className="text-xl font-bold font-sans text-[var(--shell-text)]">
                   Selecione a Marca para Separar as Regras e Diretivas
                 </h2>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed mt-1">
                   Ative o playbook apropriado para calibrar a inteligência com as restrições estritas da marca, incluindo limites de assunto, cores de proibição e tonalidades do visual.
                 </p>
               </div>
 
               {/* Botões Grandes Detalhados de Marca */}
-              <div className="bg-[#0D0A1A]/80 p-1.5 rounded-2xl border border-slate-800 flex items-center gap-2 shrink-0 relative z-10 w-full md:w-auto">
+              <div className="bg-[var(--shell-bg)]/80 p-1.5 rounded-2xl border border-[var(--shell-border)] flex items-center gap-2 shrink-0 relative z-10 w-full md:w-auto">
                 <button
                   id="tab-brand-apice-local"
                   onClick={() => { setCurrentBrand('Apice'); setEditInputPreload(null); }}
                   className={`flex-1 md:flex-none px-5 py-3 rounded-xl text-xs font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
                     currentBrand === 'Apice'
                       ? 'bg-[#688D65] text-white shadow-lg shadow-[#688D65]/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#18142E]'
+                      : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]'
                   }`}
                 >
                   <span className="w-2 h-2 rounded-full bg-emerald-350"></span>
@@ -633,7 +678,7 @@ export default function App() {
                   className={`flex-1 md:flex-none px-5 py-3 rounded-xl text-xs font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
                     currentBrand === 'Barbours'
                       ? 'bg-[#BF0F26] text-white shadow-lg shadow-[#BF0F26]/20'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#18142E]'
+                      : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]'
                   }`}
                 >
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
@@ -644,21 +689,21 @@ export default function App() {
 
             {/* Grid dos Formulários separados por marca no modo A e B */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              
+
               {/* Coluna Seletor de Modo Operacional por Marca */}
               <div className="lg:col-span-5 flex flex-col gap-6">
-                
+
                 {/* Seletor de Modo Operacional com estilo adaptativo */}
-                <div className="bg-[#18142E]/60 rounded-3xl p-5 border border-slate-800/80 flex flex-col gap-4">
+                <div className="bg-[var(--shell-panel-soft)] rounded-3xl p-5 border border-[var(--shell-border)] flex flex-col gap-4">
                   <div className="flex flex-col gap-1 text-left">
                     <span className="text-[10px] uppercase font-bold tracking-widest text-[#AA834B]">
                       Criação de {currentBrand}
                     </span>
-                    <h3 className="text-sm font-black text-slate-100">
+                    <h3 className="text-sm font-black text-[var(--shell-text)]">
                       Escolha o Fluxo Operacional
                     </h3>
                   </div>
-                  
+
                   <div className="flex flex-col gap-3">
                     <button
                       id="tab-modo-a-local"
@@ -668,11 +713,11 @@ export default function App() {
                           ? currentBrand === 'Apice'
                             ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
                             : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-[#0D0A1A]/40 border-slate-900/20 hover:bg-[#18142E]/30'
+                          : 'bg-[var(--shell-bg)]/40 border-[var(--shell-border)] hover:bg-[var(--shell-panel)]/50'
                       }`}
                     >
                       <div className="flex justify-between items-start w-full">
-                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'A' ? currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300' : 'bg-slate-850 text-slate-500'} mb-3`}>
+                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'A' ? (isLight ? 'bg-indigo-600/20 text-indigo-500' : currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300') : 'bg-[var(--shell-panel)] text-[var(--shell-text-muted)]'} mb-3`}>
                           <Sparkles className="w-4 h-4" />
                         </div>
                         {currentMode === 'A' && (
@@ -680,10 +725,10 @@ export default function App() {
                         )}
                       </div>
                       <div>
-                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'A' ? 'text-white font-extrabold' : 'text-slate-400'}`}>
+                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'A' ? 'text-[var(--shell-text)] font-extrabold' : 'text-[var(--shell-text-muted)]'}`}>
                           Modo A: Descoberta Livre
                         </h4>
-                        <p className="text-[10px] text-slate-400 leading-normal mt-1">
+                        <p className="text-[10px] text-[var(--shell-text-muted)] leading-normal mt-1">
                           A IA analisa o histórico de hits de {currentBrand} e propõe propostas sob medida do zero de alto desempenho.
                         </p>
                       </div>
@@ -697,11 +742,11 @@ export default function App() {
                           ? currentBrand === 'Apice'
                             ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
                             : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-[#0D0A1A]/40 border-slate-900/20 hover:bg-[#18142E]/30'
+                          : 'bg-[var(--shell-bg)]/40 border-[var(--shell-border)] hover:bg-[var(--shell-panel)]/50'
                       }`}
                     >
                       <div className="flex justify-between items-start w-full">
-                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'B' ? currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300' : 'bg-slate-850 text-slate-500'} mb-3`}>
+                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'B' ? (isLight ? 'bg-indigo-600/20 text-indigo-500' : currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300') : 'bg-[var(--shell-panel)] text-[var(--shell-text-muted)]'} mb-3`}>
                           <Sliders className="w-4 h-4" />
                         </div>
                         {currentMode === 'B' && (
@@ -709,10 +754,10 @@ export default function App() {
                         )}
                       </div>
                       <div>
-                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'B' ? 'text-white' : 'text-slate-400'}`}>
+                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'B' ? 'text-[var(--shell-text)]' : 'text-[var(--shell-text-muted)]'}`}>
                           Modo B: Briefing Co-Pilot
                         </h4>
-                        <p className="text-[10px] text-slate-400 leading-normal mt-1">
+                        <p className="text-[10px] text-[var(--shell-text-muted)] leading-normal mt-1">
                           Escreva suas ideias parciais e a inteligência calibra, ajusta e expande seu briefing seguindo o playbook de {currentBrand}.
                         </p>
                       </div>
@@ -721,28 +766,28 @@ export default function App() {
                 </div>
 
                 {/* Perfil tático consolidado focado na marca selecionada para o Modo A e B */}
-                <div className="bg-[#18142E]/40 border border-slate-850 p-5 rounded-3xl flex flex-col gap-3 text-left">
+                <div className="bg-[var(--shell-panel-soft)] border border-[var(--shell-border)] p-5 rounded-3xl flex flex-col gap-3 text-left">
                   <h4 className="text-xs uppercase font-extrabold tracking-widest text-[#AA834B]">
                     Acordo tático de {currentBrand}
                   </h4>
-                  <div className="flex flex-col gap-2.5 text-xs text-slate-300">
+                  <div className="flex flex-col gap-2.5 text-xs text-[var(--shell-text-muted)]">
                     <p className="leading-relaxed">
                       Todas as geração neste modo são automaticamente governadas pelas regras invioláveis:
                     </p>
-                    <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-300">Tom de voz:</span>
-                      <strong className="text-slate-100">{currentBrand === 'Apice' ? 'Acolhedor, Íntimo e Próximo' : 'Elegante, Direto, Sofisticado'}</strong>
+                    <div className="flex justify-between pb-2 border-b border-[var(--shell-border)]">
+                      <span className="text-[var(--shell-text-muted)]">Tom de voz:</span>
+                      <strong className="text-[var(--shell-text)]">{currentBrand === 'Apice' ? 'Acolhedor, Íntimo e Próximo' : 'Elegante, Direto, Sofisticado'}</strong>
                     </div>
-                    <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-300">Eixo Central:</span>
-                      <strong className="text-slate-100">{currentBrand === 'Apice' ? 'Manipular (puxar/cortar/jogar)' : 'Abrir (carta/presente/caixa)'}</strong>
+                    <div className="flex justify-between pb-2 border-b border-[var(--shell-border)]">
+                      <span className="text-[var(--shell-text-muted)]">Eixo Central:</span>
+                      <strong className="text-[var(--shell-text)]">{currentBrand === 'Apice' ? 'Manipular (puxar/cortar/jogar)' : 'Abrir (carta/presente/caixa)'}</strong>
                     </div>
-                    <div className="flex justify-between pb-2 border-b border-slate-850/60">
-                      <span className="text-slate-300">Caracteres Assunto:</span>
+                    <div className="flex justify-between pb-2 border-b border-[var(--shell-border)]">
+                      <span className="text-[var(--shell-text-muted)]">Caracteres Assunto:</span>
                       <strong className="text-amber-400 font-mono">{currentBrand === 'Apice' ? '27 a 47 caracteres' : '16 a 39 caracteres'}</strong>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-300">Restrição de Assunto:</span>
+                      <span className="text-[var(--shell-text-muted)]">Restrição de Assunto:</span>
                       <strong className="text-rose-400 text-right">Proibido %, OFF, GRÁTIS ou Caps completo</strong>
                     </div>
                   </div>
@@ -808,52 +853,40 @@ export default function App() {
               onClearFilters={handleClearFilters}
               historySubTab={historySubTab}
               setHistorySubTab={setHistorySubTab}
+              historySearchQuery={historySearchQuery}
+              setHistorySearchQuery={setHistorySearchQuery}
+              historyTimeRange={historyTimeRange}
+              setHistoryTimeRange={setHistoryTimeRange}
+              customDateRange={customDateRange}
+              setCustomDateRange={setCustomDateRange}
             />
 
             {/* Alternação entre o Timeline Semanal do Planejador e a Lista Detalhada */}
             {historySubTab === 'planner' ? (
               <WeeklyPlanner
                 pautas={filteredHistory}
-                onOpenPreview={setActivePreviewPauta}
+                onOpenPreview={(p) => openPreview(p)}
                 onUpdatePautaDay={handleUpdatePautaDay}
               />
             ) : (
-              /* Lista unificada com visualização 100% expandida das pautas geradas */
-              <div className="flex flex-col gap-8 text-left">
-                {filteredHistory.map((pauta) => (
-                    <ResultPauta
-                      key={pauta.id}
-                      pauta={pauta}
-                      onApprove={handleApprovePauta}
-                      onDiscard={handleDiscardPauta}
-                      onGenerateVariation={handleGenerateVariation}
-                      onEdit={() => handleEditPauta(pauta.id)}
-                      onOpenPreview={setActivePreviewPauta}
-                      aspectRatio={aspectRatio}
-                      imageModel={imageModel}
-                      referenciaImagem={referenciasImagem[0] ?? undefined}
-                      referenciasImagem={referenciasImagem}
-                      frameImages={allFrameImages[pauta.id] ?? {}}
-                      onFrameGenerated={handleFrameGenerated}
-                      onCanStartGenerating={(pautaId: string) => {
-                        if (generatingPautasRef.current.has(pautaId)) return false;
-                        generatingPautasRef.current.add(pautaId);
-                        return true;
-                      }}
-                      onFinishedGenerating={(pautaId: string) => {
-                        generatingPautasRef.current.delete(pautaId);
-                      }}
-                    />
-                  ))}
+              /* Galeria de pautas do período selecionado — thumbnails clicáveis, abre detalhe completo */
+              <div className="flex flex-col gap-4 text-left">
+                {timeRangeFilteredHistory.length > 0 && (
+                  <HistoryGallery
+                    pautas={timeRangeFilteredHistory}
+                    frameImagesByPauta={allFrameImages}
+                    onOpenPauta={(pauta) => setGalleryOpenPautaId(pauta.id)}
+                  />
+                )}
 
-                {filteredHistory.length === 0 && history.length > 0 && (
-                  <div className="bg-[#18142E]/30 text-center py-12 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
+                {timeRangeFilteredHistory.length === 0 && history.length > 0 && (
+                  <div className="bg-[var(--shell-panel-soft)] text-center py-12 px-8 border border-[var(--shell-border)] border-dashed rounded-[2.5rem] text-[var(--shell-text-muted)] max-w-2xl mx-auto w-full">
                     <span className="text-3xl mb-3 block">🔍</span>
-                    <h4 className="text-base font-bold text-slate-200">Nenhuma pauta encontrada com esses filtros</h4>
-                    <p className="text-sm text-slate-400 mt-1 mb-4">Tente ajustar os filtros acima ou limpe para ver todas as pautas.</p>
+                    <h4 className="text-base font-bold text-[var(--shell-text)]">Nenhuma pauta encontrada nesse período/filtros</h4>
+                    <p className="text-sm text-[var(--shell-text-muted)] mt-1 mb-4">Tente um período maior ou limpe os filtros acima.</p>
                     <button
                       onClick={handleClearFilters}
-                      className="bg-[#13102A] hover:bg-slate-700 text-slate-200 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                      className="bg-[var(--shell-panel)] hover:bg-[var(--shell-border)] text-[var(--shell-text)] px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
                     >
                       Limpar filtros
                     </button>
@@ -861,10 +894,10 @@ export default function App() {
                 )}
 
                 {history.length === 0 && (
-                  <div className="bg-[#18142E]/30 text-center py-20 px-8 border border-slate-800 border-dashed rounded-[2.5rem] text-slate-400 max-w-2xl mx-auto w-full">
+                  <div className="bg-[var(--shell-panel-soft)] text-center py-20 px-8 border border-[var(--shell-border)] border-dashed rounded-[2.5rem] text-[var(--shell-text-muted)] max-w-2xl mx-auto w-full">
                     <span className="text-5xl mb-4 block animate-bounce">🤖</span>
-                    <h4 className="text-lg font-bold text-slate-200">Seu histórico de pautas geradas está vazio</h4>
-                    <p className="text-sm text-slate-444 mt-2 max-w-sm mx-auto leading-relaxed">
+                    <h4 className="text-lg font-bold text-[var(--shell-text)]">Seu histórico de pautas geradas está vazio</h4>
+                    <p className="text-sm text-[var(--shell-text-muted)] mt-2 max-w-sm mx-auto leading-relaxed">
                       Você ainda não gerou propostas de e-mail de CRM nesta sessão. Vá para o <strong>Painel de Geração Inteligente</strong>, preencha os campos de briefings e clique para acionar a inteligência artificial do Playbook integrado!
                     </p>
                     <button
@@ -886,6 +919,7 @@ export default function App() {
       {activePreviewPauta && (
         <PreviewModal
           pauta={activePreviewPauta}
+          initialTab={previewInitialTab}
           onClose={() => setActivePreviewPauta(null)}
           onUpdatePauta={handleUpdatePauta}
           frameImages={allFrameImages[activePreviewPauta.id] ?? {}}
@@ -903,6 +937,45 @@ export default function App() {
             generatingPautasRef.current.delete(pautaId);
           }}
         />
+      )}
+
+      {galleryOpenPauta && (
+        <div
+          className="fixed inset-0 z-40 flex items-start justify-center p-4 overflow-y-auto backdrop-blur-md bg-slate-950/80 animate-fade-in"
+          onClick={() => setGalleryOpenPautaId(null)}
+        >
+          <div className="relative w-full max-w-4xl my-8" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setGalleryOpenPautaId(null)}
+              title="Fechar"
+              className="absolute -top-3 -right-3 z-10 bg-slate-900 text-white rounded-full p-2 shadow-lg hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <ResultPauta
+              pauta={galleryOpenPauta}
+              onApprove={handleApprovePauta}
+              onDiscard={handleDiscardPauta}
+              onRefazer={(p) => { setGalleryOpenPautaId(null); handleRefazerPauta(p); }}
+              onOpenPreview={(p, tab) => openPreview(p, tab)}
+              aspectRatio={aspectRatio}
+              imageModel={imageModel}
+              referenciaImagem={referenciasImagem[0] ?? undefined}
+              referenciasImagem={referenciasImagem}
+              frameImages={allFrameImages[galleryOpenPauta.id] ?? {}}
+              onFrameGenerated={handleFrameGenerated}
+              onCanStartGenerating={(pautaId: string) => {
+                if (generatingPautasRef.current.has(pautaId)) return false;
+                generatingPautasRef.current.add(pautaId);
+                return true;
+              }}
+              onFinishedGenerating={(pautaId: string) => {
+                generatingPautasRef.current.delete(pautaId);
+              }}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

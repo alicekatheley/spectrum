@@ -10,6 +10,27 @@
   --color-slate-800: #1A1530;
 }
 
+/* Cores dedicadas ao "shell" do app (fundo geral, header, painel de histórico) —
+   isoladas das cores slate-800/900/950 reaproveitadas em cards claros e no mockup
+   de celular, que devem continuar iguais independente do tema. */
+:root {
+  --shell-bg: #0D0A1A;
+  --shell-panel: #18142E;
+  --shell-panel-soft: #0D0A1A;
+  --shell-border: #26213F;
+  --shell-text: #F1F5F9;
+  --shell-text-muted: #94A3B8;
+}
+
+:root[data-theme="light"] {
+  --shell-bg: #F5F4FA;
+  --shell-panel: #FFFFFF;
+  --shell-panel-soft: #F1EFF9;
+  --shell-border: #E3E1EF;
+  --shell-text: #211D3A;
+  --shell-text-muted: #6B6885;
+}
+
 /* Custom simulated fonts for brand playbooks mentioned in the PDF */
 @layer utilities {
   .font-serif-brand {
@@ -59,6 +80,6 @@
 }
 
 html, body, #root {
-  background-color: #05060F;
+  background-color: var(--shell-bg);
   min-height: 100vh;
 }

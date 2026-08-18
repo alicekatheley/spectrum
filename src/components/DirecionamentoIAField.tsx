@@ -17,7 +17,9 @@ export default function DirecionamentoIAField({
     <div className="flex flex-col gap-2">
       <label htmlFor="direcionamento-ia" className="text-sm font-semibold text-slate-700">
         {label}
-        {!required && (
+        {required ? (
+          <span className="text-rose-500 font-normal text-xs ml-1">(Obrigatório)</span>
+        ) : (
           <span className="text-slate-400 font-normal text-xs ml-1">(Opcional)</span>
         )}
       </label>

@@ -187,8 +187,16 @@ export default function WeeklyPlanner({ pautas, onOpenPreview, onUpdatePautaDay 
                             title="Reagendar pauta para outro dia"
                           >
                             {DAYS_OF_WEEK.map(dOption => (
-                              <option key={dOption} value={dOption} className="text-slate-900 text-xs font-bold uppercase p-2">
-                                REPLANARA {dOption.split("-")[0].toUpperCase()}
+                              <option
+                                key={dOption}
+                                value={dOption}
+                                className="text-xs font-bold uppercase p-2"
+                                style={{
+                                  backgroundColor: dOption === day ? "#4F46E5" : "#0f172a",
+                                  color: "#ffffff",
+                                }}
+                              >
+                                REPLANEJAR {dOption.split("-")[0].toUpperCase()}
                               </option>
                             ))}
                           </select>

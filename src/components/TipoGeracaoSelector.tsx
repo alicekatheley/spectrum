@@ -1,5 +1,5 @@
 import React from "react";
-import { FileText, Image, Layers } from "lucide-react";
+import { Image, Layers } from "lucide-react";
 import { Brand } from "../types";
 
 type TipoGeracao = 'texto' | 'imagem' | 'texto_imagem';
@@ -17,7 +17,6 @@ const OPTIONS: Array<{
   Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
 }> = [
   { value: 'texto_imagem', label: 'Texto + Imagem', description: 'Gera copy e briefing visual', Icon: Layers },
-  { value: 'texto', label: 'Apenas Texto', description: 'Só copy — sem imagem', Icon: FileText },
   { value: 'imagem', label: 'Apenas Imagem', description: 'Só visual — sem copy', Icon: Image },
 ];
 
@@ -29,7 +28,7 @@ export default function TipoGeracaoSelector({ value, onChange, brand }: TipoGera
       <span className="text-sm font-semibold text-slate-700">
         Tipo de Geração
       </span>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {OPTIONS.map(({ value: v, label, description, Icon }) => {
           const isSelected = value === v;
           return (

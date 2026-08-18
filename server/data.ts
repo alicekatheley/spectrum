@@ -55,6 +55,7 @@ export const BRAND_DNA_FALLBACK: Record<string, {
 
 export const VALID_IMAGE_MODELS = new Set([
   'wavespeed-gpt-image-2-t2i',
+  'wavespeed-gpt-image-2-edit',
   'gemini-3-pro-image-preview',
   'gemini-3.1-flash-image-preview',
   'gemini-2.5-flash-image',

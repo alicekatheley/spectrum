@@ -27,15 +27,21 @@ export async function callPiAppMCP(method: string, params: any): Promise<any> {
 }
 
 export async function uploadReferenceToPiApp(base64DataUrl: string): Promise<string> {
-  const refResp = await callPiAppMCP('tools/call', { name: 'upload_reference', arguments: {} });
-  const refData = JSON.parse(refResp.result?.content?.[0]?.text ?? '{}');
-  const { upload_url, upload_token, public_url } = refData;
-  if (!upload_url || !upload_token || !public_url) {
-    throw new Error('PiApp upload_reference não retornou URLs esperadas');
-  }
-
   const [header, base64Data] = base64DataUrl.split(',');
   const mimeType = header.replace('data:', '').replace(';base64', '');
+  const ext = mimeType.split('/')[1] || 'png';
+
+  const refResp = await callPiAppMCP('tools/call', {
+    name: 'upload_reference',
+    arguments: { filename: `reference-${Date.now()}.${ext}`, content_type: mimeType },
+  });
+  const refText = refResp.result?.content?.[0]?.text ?? '{}';
+  const refData = JSON.parse(refText);
+  const { upload_url, upload_token, public_url } = refData;
+  if (!upload_url || !upload_token || !public_url) {
+    throw new Error(`PiApp upload_reference não retornou URLs esperadas: ${refText.slice(0, 300)}`);
+  }
+
   const imageBuffer = Buffer.from(base64Data, 'base64');
 
   const putResp = await fetch(upload_url, {
@@ -156,7 +162,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline, cta, direcionamento, totalFrames, frameMetadata,
+  headline, subheadline, cta, direcionamento, totalFrames, frameRefCount = 0, frameMetadata,
 }: {
   frameName: string;
   frameDescription: string;
@@ -174,6 +180,7 @@ export function buildImagePrompt({
   cta?: string;
   direcionamento?: string;
   totalFrames?: number;
+  frameRefCount?: number;
   frameMetadata?: {
     backgroundColor?: string;
     headlineFontSize?: string;
@@ -218,7 +225,8 @@ export function buildImagePrompt({
     ? ''
     : `${compVariant.replace(/^Composition:\s*/i, '')} ${lightVariant.replace(/^Lighting:\s*/i, '')}`;
 
-  const totalFramesLabel = `frame ${parseInt(frameName.replace('frame_', '')) + 1} of ${totalFrames ?? 3}`;
+  const namedFrameNumbers: Record<string, number> = { inicial: 1, intermediario: 2, final: 3 };
+  const frameNumber = namedFrameNumbers[frameName] ?? (parseInt(frameName.replace('frame_', '')) + 1);
 
   const consistencyBlock = frameName === 'frame_0' || frameName === 'inicial'
     ? `FRAME 1 — ESTABLISH FIXED LAYOUT:
@@ -235,11 +243,16 @@ IMPORTANT: Choose specific values now and stick to them:
 - Button: pick pill OR rectangle — do not change between frames
 - Text colors: pick exact colors now — do not vary in subsequent frames
 
-The hero object (ribbon/scissors/etc) occupies the MIDDLE area only.`
+The hero object (ribbon/scissors/etc) occupies the MIDDLE area only.
+Camera zoom, distance and framing: choose them now and lock them — every subsequent frame must use this EXACT same zoom level and framing, zero variation.
+Lighting: bright, soft studio light, perfectly even from edge to edge — corners and borders exactly as bright and saturated as the center.`
 
-    : `FRAME ${parseInt(frameName.replace('frame_', '')) + 1} — COPY MASTER FRAME EXACTLY:
+    : `FRAME ${frameNumber} — COPY MASTER FRAME EXACTLY, SAME CAMERA AND LIGHTING:
 
-The reference image is Frame 1 — the MASTER FRAME. You must reproduce it with ONE change only.
+${frameRefCount >= 2
+  ? `TWO reference images are attached: the FIRST is Frame 1, the master — match its camera zoom, framing, composition, lighting and background color. The SECOND is the immediately preceding frame — use it only to continue the hero element's motion/state naturally.`
+  : `The reference image is Frame 1 — the MASTER FRAME.`}
+Camera and lighting stay fixed to match the master frame: same zoom level, focal length, framing and crop, same light direction, color temperature and intensity. The hero object must occupy the SAME pixel area at the SAME distance from camera, lit exactly the same way as in the master frame. You must reproduce it with ONE change only.
 ${frameMetadata ? `
 EXTRACTED MEASUREMENTS FROM MASTER FRAME (use these EXACT values):
 - Background color: ${frameMetadata.backgroundColor ?? 'match reference'}
@@ -259,9 +272,9 @@ ONLY CHANGE: the position/state of the animated hero element (${
   frameName === 'frame_1' || frameName === 'intermediario'
     ? 'mid-action state'
     : 'final/revealed state'
-})
+}) — never its size, zoom level, distance from camera, or the lighting.
 
-If you change ANYTHING about the text layout, font size, button size or colors compared to the reference image, that is a CRITICAL ERROR.
+If you change ANYTHING about the text layout, font size, button size, colors, camera zoom/framing, or lighting compared to the reference image, that is a CRITICAL ERROR.
 The viewer will see these as an animation — any text movement or size change creates a distracting flicker.`;
 
   return [

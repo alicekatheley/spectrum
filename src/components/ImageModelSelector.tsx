@@ -10,6 +10,14 @@ export const IMAGE_MODELS = [
     credits: 2,
   },
   {
+    id: 'wavespeed-gpt-image-2-edit',
+    label: 'GPT Image 2 Edit',
+    provider: 'OpenAI',
+    badge: 'Com referência',
+    badgeColor: 'blue',
+    credits: 2,
+  },
+  {
     id: 'gemini-3-pro-image-preview',
     label: 'Gemini 3 Pro',
     provider: 'Google',

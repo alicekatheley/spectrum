@@ -140,10 +140,12 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [corSubtitulo, setCorSubtitulo] = useState(preload?.corSubtitulo ?? 'rgba(255,255,255,0.90)');
   const [fonteSubtituloDropdownOpen, setFonteSubtituloDropdownOpen] = useState(false);
   const [corBotaoEscolhida, setCorBotaoEscolhida] = useState(preload?.corBotaoEscolhida ?? '');
+  const [corTextoBotao, setCorTextoBotao] = useState(preload?.corTextoBotao ?? '#FFFFFF');
   const [fonteBotao, setFonteBotao] = useState(preload?.fonteBotao ?? '');
   const [fonteBotaoDropdownOpen, setFonteBotaoDropdownOpen] = useState(false);
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
+  const [direcionamentoError, setDirecionamentoError] = useState<string>('');
 
   // Limpar campos individuais
   const clearField = (field: string) => {
@@ -156,6 +158,10 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (direcionamentoIA.trim() === '') {
+      setDirecionamentoError('Preencha o direcionamento antes de gerar.');
+      return;
+    }
     onSubmit({
       brand, // marca obrigatória
       marca: brand, // mantendo duplicado para retrocompatibilidade
@@ -172,6 +178,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       fonteSubtitulo,
       corSubtitulo,
       corBotaoEscolhida,
+      corTextoBotao,
       fonteBotao,
       estiloDesign,
       aspectRatio: customW && customH ? `custom_${customW}x${customH}` : aspectRatio,
@@ -230,9 +237,10 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
 
       <DirecionamentoIAField
         label="Direcionamento para a IA"
-        required={false}
+        required={true}
         value={direcionamentoIA}
-        onChange={onDirecionamentoChange}
+        onChange={(v) => { setDirecionamentoError(''); onDirecionamentoChange(v); }}
+        error={direcionamentoError}
       />
 
       <TipoGeracaoSelector
@@ -262,7 +270,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
         </div>
 
         {/* Grid de referências */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-4 gap-2 max-w-xs">
           {Array.from({ length: 4 }).map((_, i) => {
             const src = referenciasImagem[i];
             return (
@@ -292,16 +300,23 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                     <input
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
+                      multiple
                       className="hidden"
                       onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
-                          const result = ev.target?.result as string;
-                          onReferenciasImagemChange([...referenciasImagem, result]);
-                        };
-                        reader.readAsDataURL(file);
+                        const files = Array.from(e.target.files ?? []) as File[];
+                        if (files.length === 0) return;
+                        const remainingSlots = 4 - referenciasImagem.length;
+                        const filesToAdd = files.slice(0, remainingSlots);
+                        Promise.all(
+                          filesToAdd.map((file) => new Promise<string>((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = (ev) => resolve(ev.target?.result as string);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(file);
+                          }))
+                        ).then((results) => {
+                          onReferenciasImagemChange([...referenciasImagem, ...results]);
+                        });
                         e.target.value = '';
                       }}
                     />
@@ -562,6 +577,10 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
             Estilo Visual do Texto
           </span>
 
+          {/* Card: Título */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Título</span>
+
           {/* Fonte */}
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-slate-600">Fonte do Título</label>
@@ -638,8 +657,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                   onClick={() => setCorTextoPrincipal(value)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
                     corTextoPrincipal === value
-                      ? 'border-slate-600 bg-slate-100'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
+                      ? 'border-slate-600 bg-slate-100 text-slate-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                   }`}
                 >
                   <span
@@ -658,11 +677,11 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               />
             </div>
           </div>
-
-          {/* Separador */}
-          <div className="border-t border-slate-200 pt-3">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Subtítulo</span>
           </div>
+
+          {/* Card: Subtítulo */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Subtítulo</span>
 
           {/* Fonte do Subtítulo */}
           <div className="flex flex-col gap-2">
@@ -741,8 +760,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                   onClick={() => setCorSubtitulo(value)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
                     corSubtitulo === value
-                      ? 'border-slate-600 bg-slate-100'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
+                      ? 'border-slate-600 bg-slate-100 text-slate-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                   }`}
                 >
                   <span
@@ -761,6 +780,11 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
               />
             </div>
           </div>
+          </div>
+
+          {/* Card: Botão CTA */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Botão CTA</span>
 
           {/* Estilo do botão */}
           <div className="flex flex-col gap-2">
@@ -806,8 +830,8 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                   onClick={() => setCorBotaoEscolhida(value)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
                     corBotaoEscolhida === value
-                      ? 'border-slate-600 bg-slate-100'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
+                      ? 'border-slate-600 bg-slate-100 text-slate-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                   }`}
                 >
                   <span
@@ -821,6 +845,43 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                 type="color"
                 value={corBotaoEscolhida || (brand === 'Apice' ? '#688D65' : '#BF0F26')}
                 onChange={(e) => setCorBotaoEscolhida(e.target.value)}
+                className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
+                title="Cor personalizada"
+              />
+            </div>
+          </div>
+
+          {/* Cor da Fonte do Botão */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-slate-600">Cor da Fonte do Botão</label>
+            <div className="flex gap-2 flex-wrap items-center">
+              {[
+                { label: 'Branco', value: '#FFFFFF' },
+                { label: 'Preto', value: '#000000' },
+                { label: 'Cor da marca', value: brand === 'Apice' ? '#688D65' : '#BF0F26' },
+                { label: 'Amarelo', value: '#FFD700' },
+              ].map(({ label, value }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setCorTextoBotao(value)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 text-xs font-semibold transition-all cursor-pointer ${
+                    corTextoBotao === value
+                      ? 'border-slate-600 bg-slate-100 text-slate-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  <span
+                    className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block"
+                    style={{ backgroundColor: value }}
+                  />
+                  {label}
+                </button>
+              ))}
+              <input
+                type="color"
+                value={corTextoBotao}
+                onChange={(e) => setCorTextoBotao(e.target.value)}
                 className="w-9 h-9 rounded-lg cursor-pointer border border-slate-200"
                 title="Cor personalizada"
               />
@@ -885,6 +946,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       )}

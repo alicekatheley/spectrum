@@ -1,9 +1,45 @@
+const RATIO_DIMENSIONS: Record<string, [number, number]> = {
+  '1:1':  [800, 800],
+  '3:4':  [800, 1067],
+  '4:3':  [1067, 800],
+  '16:9': [1200, 675],
+  '9:16': [675, 1200],
+};
+
+export function resolveCanvasSize(aspectRatio?: string): [number, number] {
+  if (!aspectRatio) return RATIO_DIMENSIONS['1:1'];
+  if (aspectRatio.startsWith('custom_')) {
+    const [w, h] = aspectRatio.replace('custom_', '').split('x').map(Number);
+    if (w > 0 && h > 0) {
+      // Escalar mantendo a razão original para o lado maior não passar de 1200px
+      const scale = 1200 / Math.max(w, h);
+      return [Math.round(w * scale), Math.round(h * scale)];
+    }
+  }
+  return RATIO_DIMENSIONS[aspectRatio] ?? RATIO_DIMENSIONS['1:1'];
+}
+
+// Fonte única dos defaults de tamanho de headline/subheadline — usado tanto no composeFrame
+// (render final em canvas) quanto na prévia ao vivo em CSS (aba "Editar Copy"), pra evitar
+// que as duas implementações divirjam e a prévia mostre um layout diferente do resultado real.
+export function resolveHeadlineSizePx(headlineSizePx?: number, tamanhoHeadline?: 'grande' | 'medio' | 'pequeno'): number {
+  return headlineSizePx ?? (
+    tamanhoHeadline === 'pequeno' ? 52 :
+    tamanhoHeadline === 'medio'   ? 62 : 72
+  );
+}
+
+export function resolveSubheadlineSizePx(headlineSizePx: number, subheadlineSizePx?: number): number {
+  return subheadlineSizePx ?? Math.round(headlineSizePx * 0.44);
+}
+
 export interface ComposeFrameOptions {
   imageDataUrl: string;
   headline: string;
   subheadline: string;
   cta: string;
   marca: 'Apice' | 'Barbours';
+  aspectRatio?: string;
   estiloVisual?: {
     corTexto?: string;
     corSubheadline?: string;
@@ -15,6 +51,16 @@ export interface ComposeFrameOptions {
     familiaFonte?: string;
     familiaFonteSubheadline?: string;
     familiaFonteBotao?: string;
+    // Posição/tamanho manuais — em % do canvas (0-100) ou px de fonte. Quando ausentes,
+    // usa o layout automático padrão (headline no topo, sub logo abaixo, botão no rodapé).
+    headlineTopPercent?: number;
+    headlineSizePx?: number;
+    subheadlineTopPercent?: number;
+    subheadlineSizePx?: number;
+    buttonTopPercent?: number;
+    buttonWidthPercent?: number;
+    buttonHeightPercent?: number;
+    buttonFontSizePx?: number;
   };
 }
 
@@ -123,7 +169,7 @@ const SYSTEM_FONTS = new Set([
   'courier new', 'impact', 'verdana', 'trebuchet ms',
 ]);
 
-async function loadFont(familiaFonte: string, peso: string): Promise<string> {
+export async function loadFont(familiaFonte: string, peso: string): Promise<string> {
   const nomeFonte = familiaFonte.split(',')[0].trim().replace(/['"]/g, '').toLowerCase();
   if (SYSTEM_FONTS.has(nomeFonte)) return familiaFonte;
 
@@ -159,8 +205,49 @@ async function loadFont(familiaFonte: string, peso: string): Promise<string> {
   }
 }
 
+// Corrige vinheta/gradiente escuro que o modelo de geração de imagem às vezes aplica no
+// topo/rodapé (apesar da instrução de prompt pra evitar isso). Mede o brilho médio em faixas
+// horizontais e "levanta" as faixas mais escuras que a faixa mais clara via blend 'screen' —
+// faixas já uniformes recebem alpha ~0 e ficam praticamente intocadas.
+function flattenVerticalVignette(ctx: CanvasRenderingContext2D, img: CanvasImageSource, width: number, height: number) {
+  const ROWS = 24;
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 1;
+  sampleCanvas.height = ROWS;
+  const sctx = sampleCanvas.getContext('2d')!;
+  sctx.drawImage(img, 0, 0, width, height, 0, 0, 1, ROWS);
+
+  let rowLuma: number[];
+  try {
+    const data = sctx.getImageData(0, 0, 1, ROWS).data;
+    rowLuma = Array.from({ length: ROWS }, (_, i) => {
+      const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    });
+  } catch {
+    return; // Canvas tainted (CORS) — não corrige, mas não quebra a geração.
+  }
+
+  const sorted = [...rowLuma].sort((a, b) => a - b);
+  const target = sorted[Math.floor(sorted.length * 0.75)]; // faixa clara de referência (p75)
+  const MAX_ALPHA = 0.5;
+
+  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  rowLuma.forEach((luma, i) => {
+    const deficit = Math.max(0, target - luma);
+    const alpha = Math.min(MAX_ALPHA, deficit / 255);
+    grad.addColorStop(i / (ROWS - 1), `rgba(255,255,255,${alpha.toFixed(3)})`);
+  });
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
 export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
-  const { imageDataUrl, headline, subheadline, cta, marca } = opts;
+  const { imageDataUrl, headline, subheadline, cta, marca, aspectRatio } = opts;
   const isApice = marca === 'Apice';
   const ev = opts.estiloVisual ?? {};
 
@@ -188,39 +275,29 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
     tamanhoHeadline: ev.tamanhoHeadline,
   });
 
-  const headlineSizeBase =
-    ev.tamanhoHeadline === 'pequeno' ? 52 :
-    ev.tamanhoHeadline === 'medio'   ? 62 : 72;
+  const headlineSizeBase = resolveHeadlineSizePx(ev.headlineSizePx, ev.tamanhoHeadline);
+  // Quando o tamanho é escolhido manualmente, não encolher automaticamente pra caber na zona —
+  // o usuário já decidiu o tamanho, respeitar exatamente.
+  const tamanhoManual = ev.headlineSizePx != null || ev.subheadlineSizePx != null;
 
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      const SIZE = 800;
+      const [WIDTH, HEIGHT] = resolveCanvasSize(aspectRatio);
       const canvas = document.createElement('canvas');
-      canvas.width = SIZE;
-      canvas.height = SIZE;
+      canvas.width = WIDTH;
+      canvas.height = HEIGHT;
       const ctx = canvas.getContext('2d')!;
 
       // 1. Imagem base
-      ctx.drawImage(img, 0, 0, SIZE, SIZE);
+      ctx.drawImage(img, 0, 0, WIDTH, HEIGHT);
 
-      // 2. Overlay topo
-      const topH = SIZE * 0.34;
-      const topGrad = ctx.createLinearGradient(0, 0, 0, topH);
-      topGrad.addColorStop(0, 'rgba(0,0,0,0.60)');
-      topGrad.addColorStop(0.65, 'rgba(0,0,0,0.18)');
-      topGrad.addColorStop(1, 'rgba(0,0,0,0.0)');
-      ctx.fillStyle = topGrad;
-      ctx.fillRect(0, 0, SIZE, topH);
+      // 2. Corrige vinheta escura que o modelo de imagem eventualmente gera no topo/rodapé.
+      flattenVerticalVignette(ctx, img, WIDTH, HEIGHT);
 
-      // 3. Overlay rodapé
-      const botH = SIZE * 0.24;
-      const botGrad = ctx.createLinearGradient(0, SIZE - botH, 0, SIZE);
-      botGrad.addColorStop(0, 'rgba(0,0,0,0.0)');
-      botGrad.addColorStop(1, 'rgba(0,0,0,0.45)');
-      ctx.fillStyle = botGrad;
-      ctx.fillRect(0, SIZE - botH, SIZE, botH);
+      // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem
+      // só da sombra (shadowColor/shadowBlur) aplicada em cada elemento abaixo.
 
       // Helper: wrap com font-size adaptativo
       const wrap = (text: string, maxW: number, fontSpec: string): string[] => {
@@ -239,25 +316,31 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       };
 
       // ZONA DE TEXTO: headline + sub agrupados no topo, máximo 32%
-      const ZONA_MAX_PX = SIZE * 0.32;
-      const ZONA_TOP_PX = SIZE * 0.035;
-      const maxW = SIZE * 0.88;
+      const ZONA_MAX_PX = HEIGHT * 0.32;
+      const ZONA_TOP_PX = ev.headlineTopPercent != null ? HEIGHT * (ev.headlineTopPercent / 100) : HEIGHT * 0.035;
+      const maxW = WIDTH * 0.88;
 
       let hSize = headlineSizeBase;
-      let sSize = Math.round(hSize * 0.44);
+      let sSize = resolveSubheadlineSizePx(hSize, ev.subheadlineSizePx);
       let hLines: string[] = [];
       let sLines: string[] = [];
 
-      for (let attempt = 0; attempt < 30; attempt++) {
+      if (tamanhoManual) {
+        // Tamanho escolhido manualmente — só quebra linha, não encolhe pra caber na zona.
         hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
         sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
-        // Cálculo CORRETO: sem linha extra no final
-        const hBlockH = (hLines.length - 1) * (hSize * 1.18) + hSize;
-        const sBlockH = (sLines.length - 1) * (sSize * 1.25) + sSize;
-        const totalH = hBlockH + 12 + sBlockH;
-        if (ZONA_TOP_PX + totalH <= ZONA_MAX_PX) break;
-        hSize = Math.max(hSize - 2, 22);
-        sSize = Math.max(Math.round(hSize * 0.44), 13);
+      } else {
+        for (let attempt = 0; attempt < 30; attempt++) {
+          hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
+          sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
+          // Cálculo CORRETO: sem linha extra no final
+          const hBlockH = (hLines.length - 1) * (hSize * 1.18) + hSize;
+          const sBlockH = (sLines.length - 1) * (sSize * 1.25) + sSize;
+          const totalH = hBlockH + 12 + sBlockH;
+          if (ZONA_TOP_PX + totalH <= ZONA_MAX_PX) break;
+          hSize = Math.max(hSize - 2, 22);
+          sSize = Math.max(Math.round(hSize * 0.44), 13);
+        }
       }
 
       const hLineH = hSize * 1.18;
@@ -272,17 +355,20 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       let hY = ZONA_TOP_PX + hSize;
       hLines.forEach((line, i) => {
         ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
-        ctx.fillText(line, SIZE / 2, hY);
+        ctx.fillText(line, WIDTH / 2, hY);
         if (i < hLines.length - 1) hY += hLineH;
       });
 
-      // 5. Sub-headline — 12px abaixo da ÚLTIMA linha do headline
+      // 5. Sub-headline — por padrão 12px abaixo da ÚLTIMA linha do headline,
+      // ou em posição própria se subheadlineTopPercent for definido manualmente.
       ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
-      let sY = hY + 12 + sSize;
+      let sY = ev.subheadlineTopPercent != null
+        ? HEIGHT * (ev.subheadlineTopPercent / 100) + sSize
+        : hY + 12 + sSize;
       sLines.forEach((line, i) => {
         ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
-        ctx.fillText(line, SIZE / 2, sY);
+        ctx.fillText(line, WIDTH / 2, sY);
         if (i < sLines.length - 1) sY += sLineH;
       });
 
@@ -291,10 +377,10 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       ctx.shadowColor = 'transparent';
       ctx.shadowOffsetY = 0;
 
-      const btnW = SIZE * 0.52;
-      const btnH = SIZE * 0.074;
-      const btnX = (SIZE - btnW) / 2;
-      const btnY = SIZE * 0.874;
+      const btnW = ev.buttonWidthPercent != null ? WIDTH * (ev.buttonWidthPercent / 100) : WIDTH * 0.52;
+      const btnH = ev.buttonHeightPercent != null ? HEIGHT * (ev.buttonHeightPercent / 100) : HEIGHT * 0.074;
+      const btnX = (WIDTH - btnW) / 2;
+      const btnY = ev.buttonTopPercent != null ? HEIGHT * (ev.buttonTopPercent / 100) : HEIGHT * 0.874;
       const btnR = estiloBotao === 'retangular' ? 10 : btnH * 0.5;
 
       if (estiloBotao === 'outline') {
@@ -320,12 +406,12 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
         ctx.stroke();
       }
 
-      const ctaSize = 34;
+      const ctaSize = ev.buttonFontSizePx ?? 34;
       ctx.font = `800 ${ctaSize}px ${familiaFonteBotao}`;
       ctx.fillStyle = corTextoBotao;
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
-      ctx.fillText(cta.toUpperCase(), SIZE / 2, btnY + btnH * 0.665);
+      ctx.fillText(cta.toUpperCase(), WIDTH / 2, btnY + btnH * 0.665);
 
       resolve(canvas.toDataURL('image/png'));
     };

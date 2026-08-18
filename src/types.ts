@@ -51,6 +51,7 @@ export interface InputModoB {
   fonteSubtitulo?: string;
   corSubtitulo?: string;
   corBotaoEscolhida?: string;
+  corTextoBotao?: string;
   fonteBotao?: string;
   quantidadeFrames?: number;
   estiloDesign?: string;
@@ -117,4 +118,8 @@ export interface PautaGerada {
   riscos: RiscoAlerta[];
   status: 'rascunho' | 'aprovado' | 'descartado';
   dataCriacao: string;
+  // Aspect ratio usado na geração dos frames desta pauta. Fixado no momento da criação —
+  // não deve ser substituído pelo seletor global de aspect ratio da UI, que muda livremente
+  // entre gerações e não reflete o formato já "assado" nas imagens já geradas desta pauta.
+  aspectRatio?: string;
 }

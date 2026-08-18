@@ -122,7 +122,8 @@ app.post("/api/generate-pauta", async (req, res) => {
         previsao: p.previsao,
         riscos: risksUnique(riscosFinais),
         status: 'rascunho',
-        dataCriacao: new Date().toISOString()
+        dataCriacao: new Date().toISOString(),
+        aspectRatio
       };
     });
 
@@ -230,6 +231,7 @@ app.post("/api/generate-image", async (req, res) => {
       subheadline,
       cta,
       referenceFrameUrl,
+      referenceFrameUrls: rawFrameRefs,
       direcionamento,
       totalFrames,
     } = req.body;
@@ -260,7 +262,7 @@ app.post("/api/generate-image", async (req, res) => {
       aspectRatio = rawRatio;
     }
 
-    const imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
+    let imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
 
     const mechanicSeed = (mecanica || frameDescription || '').split('').reduce(
       (acc: number, char: string) => acc + char.charCodeAt(0), 0
@@ -271,13 +273,21 @@ app.post("/api/generate-image", async (req, res) => {
     const compVariant = COMPOSITION_VARIANTS[styleIndex];
     const lightVariant = LIGHTING_VARIANTS[mechanicSeed % LIGHTING_VARIANTS.length];
 
+    // referenceFrameUrls (plural) é o formato atual — [frame master, frame imediatamente anterior].
+    // referenceFrameUrl (singular) fica como fallback de compatibilidade.
+    const frameRefInputs: string[] = Array.isArray(rawFrameRefs) && rawFrameRefs.length > 0
+      ? rawFrameRefs
+      : (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:') ? [referenceFrameUrl] : []);
+    // Pra metadados de texto/botão, usar o frame imediatamente anterior (último da lista)
+    const metadataSourceUrl = frameRefInputs[frameRefInputs.length - 1];
+
     // Extrair metadados visuais do frame anterior para injetar valores exatos no prompt de frames subsequentes
     let frameMetadata: Record<string, any> | undefined = undefined;
-    if (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:')
+    if (typeof metadataSourceUrl === 'string' && metadataSourceUrl.startsWith('data:')
         && frameName !== 'frame_0' && frameName !== 'inicial') {
       try {
-        const base64Ref = referenceFrameUrl.split(',')[1];
-        const mimeRef = referenceFrameUrl.split(';')[0].split(':')[1] || 'image/png';
+        const base64Ref = metadataSourceUrl.split(',')[1];
+        const mimeRef = metadataSourceUrl.split(';')[0].split(':')[1] || 'image/png';
         const metaPrompt = `Analyze this email marketing banner image and extract the following visual measurements. Be as precise as possible. Return ONLY a valid JSON object with no markdown, no explanation.
 
 The image is 800x800 pixels (even if displayed differently).
@@ -331,6 +341,7 @@ Extract:
       cta:              cta as string | undefined,
       direcionamento:   typeof direcionamento === 'string' && direcionamento.trim() ? direcionamento.trim() : undefined,
       totalFrames:      typeof totalFrames === 'number' ? totalFrames : undefined,
+      frameRefCount:    frameRefInputs.length,
       frameMetadata,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);
@@ -354,15 +365,22 @@ Extract:
       }
     }
 
-    // 2. Frame anterior como referência de consistência visual (F2 usa F1, F3 usa F2)
-    if (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:')) {
-      try {
-        const url = await uploadReferenceToPiApp(referenceFrameUrl);
-        referenceImageUrls.push(url);
-        console.log(`[generate-image] Frame anterior (${frameName}) enviado como referência de consistência`);
-      } catch (err: any) {
-        console.warn('[generate-image] Upload do frame anterior falhou (ignorando):', err.message);
+    // 2. Frame(s) anterior(es) como referência de consistência visual — normalmente [master, imediatamente anterior]
+    for (const frameRef of frameRefInputs) {
+      if (typeof frameRef === 'string' && frameRef.startsWith('data:')) {
+        try {
+          const url = await uploadReferenceToPiApp(frameRef);
+          referenceImageUrls.push(url);
+          console.log(`[generate-image] Frame de referência (${frameName}) enviado ao PiApp`);
+        } catch (err: any) {
+          console.warn('[generate-image] Upload de frame de referência falhou (ignorando):', err.message);
+        }
       }
+    }
+
+    if (referenceImageUrls.length > 0 && imageModel === 'wavespeed-gpt-image-2-t2i') {
+      imageModel = 'wavespeed-gpt-image-2-edit';
+      console.log('[generate-image] Referência de imagem detectada — trocando para wavespeed-gpt-image-2-edit');
     }
 
     const result = await generateImageViaPiApp(
@@ -467,6 +485,7 @@ app.post("/api/generate-gif", async (req, res) => {
       frameIntermediario,
       frameFinal,
       referenciaImagem: rawRefImage,
+      referenciasImagem: rawRefImages,
     } = req.body;
 
     if (!frameInicial || !frameIntermediario || !frameFinal) {
@@ -478,7 +497,7 @@ app.post("/api/generate-gif", async (req, res) => {
     }
 
     const aspectRatio = VALID_IMAGE_RATIOS.includes(rawRatio) ? rawRatio : '1:1';
-    const imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
+    let imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
 
     const styleIndex = typeof rawStyleIndex === 'number' && rawStyleIndex >= 0
       ? rawStyleIndex % COMPOSITION_VARIANTS.length
@@ -493,40 +512,66 @@ app.post("/api/generate-gif", async (req, res) => {
     ];
 
     const sharedRefUrls: string[] = [];
-    if (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:')) {
-      try {
-        const refUrl = await uploadReferenceToPiApp(rawRefImage);
-        sharedRefUrls.push(refUrl);
-        console.log('[generate-gif] Referência do usuário enviada ao PiApp:', refUrl);
-      } catch (err: any) {
-        console.warn('[generate-gif] Upload de referência falhou (ignorando):', err.message);
+    const refImagesInput: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
+      ? rawRefImages.slice(0, 4)
+      : (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:') ? [rawRefImage] : []);
+
+    for (const refImg of refImagesInput) {
+      if (typeof refImg === 'string' && refImg.startsWith('data:')) {
+        try {
+          const refUrl = await uploadReferenceToPiApp(refImg);
+          sharedRefUrls.push(refUrl);
+          console.log('[generate-gif] Referência do usuário enviada ao PiApp:', refUrl);
+        } catch (err: any) {
+          console.warn('[generate-gif] Upload de referência falhou (ignorando):', err.message);
+        }
       }
     }
 
-    console.log(`[generate-gif] Gerando 3 frames em paralelo para ${marca} (${aspectRatio}, ${imageModel})`);
+    if (sharedRefUrls.length > 0 && imageModel === 'wavespeed-gpt-image-2-t2i') {
+      imageModel = 'wavespeed-gpt-image-2-edit';
+      console.log('[generate-gif] Referência de imagem detectada — trocando para wavespeed-gpt-image-2-edit');
+    }
 
-    const frameResults = await Promise.all(
-      frames.map(async ({ frameName, frameDescription }) => {
-        const prompt = buildImagePrompt({
-          frameName,
-          frameDescription,
-          marca:            marca as string,
-          brandDna,
-          estiloIlustracao: estiloIlustracao as string | undefined,
-          paleta:           paleta as { cores?: string[] } | undefined,
-          mecanica:         mecanica as string | undefined,
-          recompensa:       recompensa as string | undefined,
-          aspectRatio,
-          compVariant,
-          lightVariant,
-        });
-        const result = await generateImageViaPiApp(
-          prompt, aspectRatio, imageModel,
-          sharedRefUrls.length > 0 ? sharedRefUrls : undefined,
-        );
-        return { frameName, ...result };
-      })
-    );
+    console.log(`[generate-gif] Gerando ${frames.length} frames sequencialmente para ${marca} (${aspectRatio}, ${imageModel})`);
+
+    // Gerados em sequência (não em paralelo): frame 1 é a "master frame" e serve de referência
+    // visual pros frames 2 e 3, pra manter objeto/posição/layout consistentes entre eles.
+    const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
+    let masterFrameRefUrl: string | undefined;
+
+    for (const { frameName, frameDescription } of frames) {
+      const prompt = buildImagePrompt({
+        frameName,
+        frameDescription,
+        marca:            marca as string,
+        brandDna,
+        estiloIlustracao: estiloIlustracao as string | undefined,
+        paleta:           paleta as { cores?: string[] } | undefined,
+        mecanica:         mecanica as string | undefined,
+        recompensa:       recompensa as string | undefined,
+        aspectRatio,
+        compVariant,
+        lightVariant,
+        totalFrames: frames.length,
+      });
+
+      const referenceImageUrls = masterFrameRefUrl ? [...sharedRefUrls, masterFrameRefUrl] : sharedRefUrls;
+      const result = await generateImageViaPiApp(
+        prompt, aspectRatio, imageModel,
+        referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
+      );
+      frameResults.push({ frameName, ...result });
+
+      if (!masterFrameRefUrl) {
+        try {
+          masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`);
+          console.log(`[generate-gif] Frame "${frameName}" definido como master frame de referência.`);
+        } catch (err: any) {
+          console.warn('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
+        }
+      }
+    }
 
     const results = await Promise.all(
       frameResults.map(async ({ frameName, imageBytes, mimeType }) => {
