@@ -191,41 +191,63 @@ const NAMED_FRAME_NUMBERS: Record<string, number> = { inicial: 1, intermediario:
 
 function buildFramePrompt({
   frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa,
-  headline, subheadline, direcionamento, aspectRatio, frameRefCount = 0,
+  headline, subheadline, direcionamento, aspectRatio, frameRefCount = 0, productRefCount = 0, totalFrames,
 }: {
   frameName?: string; frameDescription: string; marca: string; brandDna: any;
   estiloIlustracao?: string; paleta?: { cores?: string[] }; mecanica?: string; recompensa?: string;
   headline?: string; subheadline?: string; direcionamento?: string; aspectRatio: string; frameRefCount?: number;
+  productRefCount?: number; totalFrames?: number;
 }): string {
   const paletaCores = Array.isArray(paleta?.cores) && paleta!.cores!.length ? paleta!.cores!.join(', ') : brandDna.primaryColors;
   const frameState = frameName ? FRAME_STATE_HINTS[frameName] : undefined;
   const rewardPhrase = recompensa
-    ? (frameName === 'final' ? ` The reward — "${recompensa}" — is fully revealed, glowing and celebrated.` : ` The reward remains completely hidden inside.`)
+    ? (frameName === 'final' ? ` The reward item(s) described above are fully revealed, glowing and celebrated — visually only, no text or labels.` : ` The reward remains completely hidden inside.`)
     : '';
   const isFirstFrame = frameName === 'inicial' || frameName === 'frame_0';
   const frameNumber = frameName
     ? (NAMED_FRAME_NUMBERS[frameName] ?? (parseInt(frameName.replace('frame_', '')) + 1 || 1))
     : undefined;
+  const isLastFrame = totalFrames !== undefined && frameNumber === totalFrames;
 
   // Instrução só positiva, sem repetir palavras como "vignette"/"darkening"/"dimming" —
   // modelos de imagem lidam mal com negação e mencionar o efeito indesejado repetidamente
   // tende a reforçá-lo em vez de evitá-lo.
   const lightingRule = `Lighting: bright, soft studio light, perfectly even from edge to edge — corners and borders exactly as bright and saturated as the center.`;
-  const cameraLockRule = `Camera and lighting stay fixed across frames: same zoom, framing, crop and light setup. Only the hero element's state/position changes (per the scene below) — the camera and lighting themselves never change. ${lightingRule}`;
+  const cameraLockRule = `Camera and lighting stay fixed across frames: same zoom, framing, crop and light setup. Only the hero element's state/position changes (per the scene below), and only as a small continuous step from the previous frame — never a jump. Any OTHER object mentioned in the scene (secondary props, reward items, background elements) must stay at the EXACT SAME position and scale as in the reference frame — zero drift. The camera and lighting themselves never change. ${lightingRule}`;
 
-  const consistencyBlock = frameRefCount >= 2
-    ? `FRAME ${frameNumber} — two reference images attached: the FIRST is Frame 1, the master — match its background, composition, framing and lighting. The SECOND is the immediately preceding frame — use it only to continue the hero element's motion/state naturally. ${cameraLockRule}`
-    : frameRefCount === 1
-      ? `FRAME ${frameNumber} — reference image attached is Frame 1, the master. Reproduce its background, composition, framing and lighting closely. ${cameraLockRule}`
-      : (isFirstFrame ? `FRAME 1 — MASTER FRAME: establish the composition, background color, camera framing and lighting now; every later frame will match it. ${lightingRule}` : '');
+  // As imagens de referência são anexadas NESTA ORDEM EXATA (não pode divergir do texto,
+  // senão o modelo confunde "foto do produto real" com "frame mestre"): produtos primeiro,
+  // depois frame mestre, depois frame anterior. O texto abaixo precisa numerar na mesma ordem.
+  const refLabels: string[] = [];
+  for (let i = 0; i < productRefCount; i++) {
+    refLabels.push(`[${refLabels.length + 1}] REAL PRODUCT REFERENCE PHOTO — this shows the actual physical product(s) that must appear in the scene. Reproduce it EXACTLY: same color, texture, material, proportions, logo/branding/pull-tab text. Never restyle, redesign or substitute it.`);
+  }
+  if (frameRefCount >= 1) {
+    refLabels.push(`[${refLabels.length + 1}] FRAME 1 (the master frame) — match its background, composition, framing and lighting.`);
+  }
+  if (frameRefCount >= 2) {
+    refLabels.push(`[${refLabels.length + 1}] the immediately preceding frame — use ONLY to continue the hero element's motion/state naturally, not for background/composition.`);
+  }
+  const refOrderBlock = refLabels.length > 0
+    ? `REFERENCE IMAGES ATTACHED, IN THIS EXACT ORDER:\n${refLabels.join('\n')}`
+    : '';
+
+  const consistencyBlock = frameRefCount >= 1
+    ? `FRAME ${frameNumber} — reproduce the master frame's background, composition, framing and lighting closely. ${cameraLockRule}`
+    : (isFirstFrame ? `FRAME 1 — MASTER FRAME: establish the composition, background color, camera framing and lighting now; every later frame will match it. ${lightingRule}` : '');
+
   return [
-    direcionamento ? `=== USER DIRECTION ===\n"${direcionamento}"\nFollow for frame: ${frameName}` : '',
+    direcionamento
+      ? `=== USER DIRECTION (may describe the FULL sequence of ${totalFrames ?? '?'} frames) ===\n"${direcionamento}"\n⚠️ This is FRAME ${frameNumber}${isFirstFrame ? ' (the FIRST frame)' : isLastFrame ? ' (the LAST frame)' : ' (a MIDDLE frame)'} of the sequence. Apply ONLY the part of the direction above that describes FRAME ${frameNumber} (it may be labeled "Frame ${frameNumber}" or similar in the text). IGNORE the descriptions of the other frames — they do not apply here.`
+      : '',
+    refOrderBlock,
     `${estiloIlustracao || brandDna.style} illustration for ${marca} email banner.`,
-    `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene: ${frameDescription}.${rewardPhrase}`,
-    `Palette: ${paletaCores}. Background: ${brandDna.backgrounds}. ${brandDna.prohibitedColors}`,
+    isFirstFrame
+      ? `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene (full establishing description — defines the fixed layout every later frame must match): ${frameDescription}.${rewardPhrase}`
+      : `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. ONLY THIS CHANGES vs the reference frame: ${frameDescription}.${rewardPhrase} Everything not mentioned here (background, secondary props, reward items not yet revealed) must remain pixel-identical to the reference image — do not re-imagine or reposition it.`,
+    `Palette: ${paletaCores}.${direcionamento ? '' : ` Background: ${brandDna.backgrounds}.`} ${brandDna.prohibitedColors}`,
     consistencyBlock,
-    headline ? `COPY (DO NOT render): "${headline}" | "${subheadline}"` : '',
-    `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. NO TEXT. 4K. Ratio: ${aspectRatio}.`
+    `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. ABSOLUTELY NO TEXT of any kind anywhere in the image — no letters, words, numbers, or symbols, even if they relate to this campaign. This is a pure background/product illustration; all copy is added separately afterward. 4K. Ratio: ${aspectRatio}.`
   ].filter(Boolean).join('\n\n');
 }
 
@@ -325,6 +347,7 @@ Contexto: ${input.contextoCampanha || 'Geral'}. Segmento: ${input.segmentoAlvo |
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
 Histórico: ${JSON.stringify(contextDb)}
 CRÍTICO: O array "frames" deve ter EXATAMENTE ${qtdFrames} itens — nem mais, nem menos.
+CONTINUIDADE VISUAL (ESCOPO DECRESCENTE — OBRIGATÓRIO): frames[0] é a ÚNICA descrição completa da cena (objeto herói + todos os props secundários + cor + posição + fundo + atmosfera). Os itens seguintes (frames[1], frames[2]...) descrevem SOMENTE o delta — apenas o que muda no objeto/elemento da mecânica principal — e NÃO redescrevem em detalhe props secundários, fundo ou atmosfera já estabelecidos em frames[0] (cite-os no máximo de passagem como inalterados, ex: "a necessaire segue parada no canto inferior direito"). Redescrever um objeto estático em detalhe a cada frame é o que faz a IA de imagem reposicionar esse objeto por engano. O objeto principal só pode mudar de posição/estado de forma incremental (nunca um salto).
 Retorne array JSON com ${input.quantidadePautas || 1} pauta(s) e esta estrutura exata:
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
@@ -343,6 +366,7 @@ Recompensa: "${input.boxRecompensa || ''}"
 ${direcionamentoIA ? `Direcionamento: "${direcionamentoIA}"` : ''}
 CRÍTICO: O array "frames" deve ter EXATAMENTE ${qtdFrames} itens — nem mais, nem menos.
 O direcionamento pode descrever os frames em detalhes — use essas descrições literalmente para preencher o array "frames", uma por item.
+CONTINUIDADE VISUAL (ESCOPO DECRESCENTE — OBRIGATÓRIO): frames[0] é a ÚNICA descrição completa da cena (objeto herói + todos os props secundários + cor + posição + fundo + atmosfera). Os itens seguintes (frames[1], frames[2]...) descrevem SOMENTE o delta — apenas o que muda no objeto/elemento da mecânica principal — e NÃO redescrevem em detalhe props secundários, fundo ou atmosfera já estabelecidos em frames[0] (cite-os no máximo de passagem como inalterados, ex: "a necessaire segue parada no canto inferior direito"). Redescrever um objeto estático em detalhe a cada frame é o que faz a IA de imagem reposicionar esse objeto por engano. O objeto principal só pode mudar de posição/estado de forma incremental (nunca um salto).
 Histórico: ${JSON.stringify(contextDb)}
 Retorne array JSON com 1 pauta e esta estrutura exata:
 [{
@@ -369,7 +393,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
       try {
         const body = await request.json() as any;
         const {
-          frameName, frameDescription, aspectRatio = '1:1', marca, pautaId,
+          frameName, frameDescription, aspectRatio = '1:1', marca, pautaId, totalFrames,
           imageModel: rawModel = 'wavespeed-gpt-image-2-t2i', estiloIlustracao, paleta, mecanica, recompensa,
           headline, subheadline, direcionamento, referenceFrameUrl, referenceFrameUrls: rawFrameRefs,
           referenciaImagem: rawRefImage, referenciasImagem: rawRefImages,
@@ -400,7 +424,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const refUrls = [...productRefUrls, ...frameRefUrls];
         const imageModel = resolveImageModel(rawModel, refUrls.length > 0);
 
-        const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, headline, subheadline, direcionamento, aspectRatio, frameRefCount: frameRefUrls.length });
+        const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, headline, subheadline, direcionamento, aspectRatio, frameRefCount: frameRefUrls.length, productRefCount: productRefUrls.length, totalFrames });
 
         const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY, refUrls.length > 0 ? refUrls : undefined);
         let publicUrl: string | null = null;
@@ -451,7 +475,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         let masterFrameRefUrl: string | undefined;
 
         for (const { frameName, frameDescription } of frames) {
-          const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, aspectRatio, frameRefCount: masterFrameRefUrl ? 1 : 0 });
+          const prompt = buildFramePrompt({ frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa, aspectRatio, frameRefCount: masterFrameRefUrl ? 1 : 0, productRefCount: refUrls.length, totalFrames: frames.length });
           const frameRefUrls = masterFrameRefUrl ? [...refUrls, masterFrameRefUrl] : refUrls;
           const result = await generateImage(prompt, aspectRatio, imageModel, PIAPP_API_KEY, frameRefUrls.length > 0 ? frameRefUrls : undefined);
           frameResults.push({ frameName, ...result });

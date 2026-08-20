@@ -162,7 +162,7 @@ export function buildImagePrompt({
   frameName, frameDescription, marca, brandDna,
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
-  headline, subheadline, cta, direcionamento, totalFrames, frameRefCount = 0, frameMetadata,
+  headline, subheadline, cta, direcionamento, totalFrames, frameRefCount = 0, productRefCount = 0, frameMetadata,
 }: {
   frameName: string;
   frameDescription: string;
@@ -181,6 +181,7 @@ export function buildImagePrompt({
   direcionamento?: string;
   totalFrames?: number;
   frameRefCount?: number;
+  productRefCount?: number;
   frameMetadata?: {
     backgroundColor?: string;
     headlineFontSize?: string;
@@ -214,7 +215,7 @@ export function buildImagePrompt({
   const styleDesc = estiloIlustracao ?? brandDna.style;
   const rewardPhrase = recompensa
     ? frameName === 'final'
-      ? ` The reward — "${recompensa}" — is fully revealed, glowing and celebrated.`
+      ? ` The reward item(s) described above are fully revealed, glowing and celebrated — visually only, no text or labels.`
       : ` The reward remains completely hidden inside.`
     : '';
   const prohibNote = brandDna.prohibitedColors ? ` ${brandDna.prohibitedColors}` : '';
@@ -227,11 +228,30 @@ export function buildImagePrompt({
 
   const namedFrameNumbers: Record<string, number> = { inicial: 1, intermediario: 2, final: 3 };
   const frameNumber = namedFrameNumbers[frameName] ?? (parseInt(frameName.replace('frame_', '')) + 1);
+  const isFirstFrame = frameName === 'frame_0' || frameName === 'inicial';
+  const isLastFrame = totalFrames !== undefined && frameNumber === totalFrames;
 
-  const consistencyBlock = frameName === 'frame_0' || frameName === 'inicial'
+  // As imagens de referência são anexadas NESTA ORDEM EXATA (produtos primeiro, depois frame
+  // mestre, depois frame anterior) — o texto precisa numerar na mesma ordem, senão o modelo
+  // confunde "foto do produto real" com "frame mestre" e vice-versa.
+  const refLabels: string[] = [];
+  for (let i = 0; i < productRefCount; i++) {
+    refLabels.push(`[${refLabels.length + 1}] REAL PRODUCT REFERENCE PHOTO — this shows the actual physical product(s) that must appear in the scene. Reproduce it EXACTLY: same color, texture, material, proportions, logo/branding/pull-tab text. Never restyle, redesign or substitute it.`);
+  }
+  if (frameRefCount >= 1) {
+    refLabels.push(`[${refLabels.length + 1}] FRAME 1 (the master frame) — match its camera zoom, framing, composition, lighting and background color.`);
+  }
+  if (frameRefCount >= 2) {
+    refLabels.push(`[${refLabels.length + 1}] the immediately preceding frame — use ONLY to continue the hero element's motion/state naturally, not for background/composition.`);
+  }
+  const refOrderBlock = refLabels.length > 0
+    ? `REFERENCE IMAGES ATTACHED, IN THIS EXACT ORDER:\n${refLabels.join('\n')}`
+    : '';
+
+  const consistencyBlock = isFirstFrame
     ? `FRAME 1 — ESTABLISH FIXED LAYOUT:
 You are creating the MASTER FRAME that all other frames must copy exactly.
-Define and lock these elements permanently:
+${refOrderBlock ? `${refOrderBlock}\n` : ''}Define and lock these elements permanently:
 
 TEXT LAYOUT (must be pixel-identical in all frames):
 - HEADLINE: top-aligned, full width, large bold uppercase font, same size filling ~90% of the top area width
@@ -249,9 +269,7 @@ Lighting: bright, soft studio light, perfectly even from edge to edge — corner
 
     : `FRAME ${frameNumber} — COPY MASTER FRAME EXACTLY, SAME CAMERA AND LIGHTING:
 
-${frameRefCount >= 2
-  ? `TWO reference images are attached: the FIRST is Frame 1, the master — match its camera zoom, framing, composition, lighting and background color. The SECOND is the immediately preceding frame — use it only to continue the hero element's motion/state naturally.`
-  : `The reference image is Frame 1 — the MASTER FRAME.`}
+${refOrderBlock}
 Camera and lighting stay fixed to match the master frame: same zoom level, focal length, framing and crop, same light direction, color temperature and intensity. The hero object must occupy the SAME pixel area at the SAME distance from camera, lit exactly the same way as in the master frame. You must reproduce it with ONE change only.
 ${frameMetadata ? `
 EXTRACTED MEASUREMENTS FROM MASTER FRAME (use these EXACT values):
@@ -272,31 +290,27 @@ ONLY CHANGE: the position/state of the animated hero element (${
   frameName === 'frame_1' || frameName === 'intermediario'
     ? 'mid-action state'
     : 'final/revealed state'
-}) — never its size, zoom level, distance from camera, or the lighting.
+}) — its state can progress naturally as part of the mechanic (e.g. an envelope opening, a lid lifting, a ribbon unrolling), but never its size, zoom level, distance from camera, or the lighting. Any hero motion must be a small, continuous, incremental step from the previous frame — never a large jump.
 
-If you change ANYTHING about the text layout, font size, button size, colors, camera zoom/framing, or lighting compared to the reference image, that is a CRITICAL ERROR.
-The viewer will see these as an animation — any text movement or size change creates a distracting flicker.`;
+ANY OTHER OBJECT mentioned in the scene that is NOT the hero of the action (secondary props, background items, reward items not yet revealed) MUST stay at the EXACT SAME position, scale and orientation as in the reference frame(s) — zero movement, zero drift. Only the hero element is allowed to move or change state.
+
+If you change ANYTHING about the text layout, font size, button size, colors, camera zoom/framing, lighting, or the position of any non-hero object compared to the reference image, that is a CRITICAL ERROR.
+The viewer will see these as an animation — any unintended movement, text shift, or size change creates a distracting flicker.`;
 
   return [
     // 1. Direcionamento do usuário — prioridade máxima
     direcionamento
-      ? `=== DIRECT USER VISUAL DIRECTION — HIGHEST PRIORITY — OVERRIDE EVERYTHING BELOW IF CONFLICT ===\n"${direcionamento}"\nFollow every detail literally: colors, objects, style, composition, lighting, background. Do NOT deviate.\nFor this specific frame (${frameName}): apply the direction above to show the object in state: ${frameState}.`
+      ? `=== DIRECT USER VISUAL DIRECTION (may describe the FULL sequence of ${totalFrames ?? '?'} frames) — HIGHEST PRIORITY — OVERRIDE EVERYTHING BELOW IF CONFLICT ===\n"${direcionamento}"\nFollow every detail literally: colors, objects, style, composition, lighting, background. Do NOT deviate.\n⚠️ This is FRAME ${frameNumber}${isFirstFrame ? ' (the FIRST frame)' : isLastFrame ? ' (the LAST frame)' : ' (a MIDDLE frame)'} of the sequence. Apply ONLY the part of the direction above that describes FRAME ${frameNumber} (it may be labeled "Frame ${frameNumber}" or similar in the text) — show the object in state: ${frameState}. IGNORE the descriptions of the other frames in that text; they do not apply here.`
       : '',
 
     // 2. Descrição base
     `${styleDesc} illustration for a ${marca} luxury beauty email campaign banner.`,
-    `Hero: ${mecanica ?? 'campaign mechanic object'}, ${frameState}. Scene: ${frameDescription}.${rewardPhrase}`,
-    `Palette — ${paletaCores}. Background: ${brandDna.backgrounds}.${prohibNote}`,
-
-    // 3. Copy da campanha
-    headline || subheadline
-      ? `=== CAMPAIGN COPY (for color harmony reference only — DO NOT render text) ===
-Headline text that will be overlaid: "${headline}"
-Sub-headline text that will be overlaid: "${subheadline}"
-Use this copy ONLY to choose harmonious background colors and palette. Do NOT render any text in the image.`
-      : '',
-    recompensa ? `Reward/CTA: "${recompensa}"` : '',
-    `Background and palette must harmonize with copy above — complement, never compete.`,
+    isFirstFrame
+      ? `Hero: ${mecanica ?? 'campaign mechanic object'}, ${frameState}. Scene (full establishing description — defines the fixed layout every later frame must match): ${frameDescription}.${rewardPhrase}`
+      : `Hero: ${mecanica ?? 'campaign mechanic object'}, ${frameState}. ONLY THIS CHANGES vs the reference frame: ${frameDescription}.${rewardPhrase} Everything not mentioned here (background, secondary props, reward items not yet revealed) must remain pixel-identical to the reference image — do not re-imagine or reposition it.`,
+    direcionamento
+      ? `Palette — ${paletaCores}.${prohibNote}`
+      : `Palette — ${paletaCores}. Background: ${brandDna.backgrounds}.${prohibNote}`,
 
     // 4. Composição (só quando não há direcionamento)
     compositionBlock,
@@ -311,7 +325,7 @@ Use this copy ONLY to choose harmonious background colors and palette. Do NOT re
 - BOTTOM ZONE (bottom 20%): Leave COMPLETELY EMPTY — clean solid background only. CTA button will be overlaid here. NO objects in this zone.`,
 
     // 7. Restrições finais
-    `NO TEXT anywhere in the image — no letters, numbers, symbols, watermarks or UI elements. Pure illustration asset only. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
+    `ABSOLUTELY NO TEXT anywhere in the image — no letters, words, numbers, symbols, watermarks or UI elements of any kind, even if related to this campaign's marketing copy. This is a pure background/product illustration; all copy is added separately afterward in post-production. Ultra-detailed 4K quality, luxury brand standard. Aspect ratio: ${aspectRatio}.`,
   ].filter(Boolean).join('\n\n');
 }
 

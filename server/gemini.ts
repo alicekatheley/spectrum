@@ -66,6 +66,10 @@ ${playbookMarca}
 - Se houver menos que 3 cases análogos próximos no banco, indique de forma clara como "baixa confiança".
 - Se houver alguma violação nas diretivas de playbook pelo usuário, sinalize no bloco de riscos, mas garanta que o resultado visual e de copy gerados por você permaneça 100% calibrado dentro do Playbook.
 - Estruture o banner no formato ${aspectRatio} (proporção escolhida pelo usuário), ilustrado, instigante, preferencialmente formato GIF (com 3 frames detalhados: Inicial com o objeto intocado/fechado, Intermediário opcional com a ação ocorrendo, e Final com a revelação da recompensa e botão CTA visível em contraste). Ao descrever cada frame, considere o recorte visual da proporção ${aspectRatio}: posicionamento de elementos, hierarquia e o que será cortado nas bordas.
+- ⚠️ CONTINUIDADE VISUAL ENTRE FRAMES (REGRA CRÍTICA — FORMATO DE ESCRITA DOS FRAMES): os frames de um mesmo GIF são fotogramas de UMA ÚNICA cena, não cenas independentes. Para reduzir a chance de a IA de imagem "reinventar" a cena a cada frame, escreva os frames com escopo decrescente:
+  • FRAME 1 (estabelecimento): única descrição completa — objeto herói + TODOS os objetos secundários/props + cores + fundo + atmosfera + posição de cada elemento. Este frame define o layout que todos os outros devem copiar.
+  • FRAMES 2+ (somente o delta): descreva APENAS o que muda em relação ao frame anterior — o novo estado/posição do objeto herói da ação. NÃO redescreva objetos secundários, fundo, paleta ou atmosfera que já apareceram no Frame 1 — apenas cite-os de passagem como inalterados (ex: "a necessaire segue parada no canto inferior direito, sem alteração"), nunca com detalhamento completo de novo. Redescrever um objeto estático em detalhe a cada frame é o que faz a IA de imagem reinterpretar e reposicionar esse objeto por engano.
+  Objetos que não fazem parte da ação NUNCA podem mudar de posição entre frames; o objeto herói pode mudar de posição/estado apenas de forma incremental e contínua (nunca teletransportando).
 - A headline do banner deve ser sempre baseada no verbo de ação da mecânica escolhida (ex: "ABRA O PRESENTE", "PUXE O ADESIVO") em destaque tipográfico. O sub-headline deve expor a recompensa concreta + o prazo de urgência (ex: "Seu brinde te espera — válido até 23h59"). O CTA do botão deve conter um verbo único direto correspondente à mecânica ("ABRIR", "PUXAR", etc.).
 - Se o segmento alvo fornecido for desengajado (como Desengajados, Abertura 0x90), restrinja estritamente para mecânicas de baixíssimo atrito (ex: "abrir presente" antes de inventar mecânicas interativas longas como "jogo da velha" ou jogar).
 
@@ -131,6 +135,10 @@ ${refImageData ? '\n=== IMAGEM DE REFERÊNCIA VISUAL ANEXADA ===\nO usuário env
 === REGRAS DOS FRAMES VISUAIS ===
 - Gere exatamente ${qtdFrames} frames para este GIF
 - Os frames devem ser visualmente consistentes: mesmo objeto, mesma paleta, mesmo estilo, mesmo fundo
+- ⚠️ CONTINUIDADE VISUAL ENTRE FRAMES (REGRA CRÍTICA — FORMATO DE ESCRITA DOS FRAMES): trate os frames como fotogramas de UMA ÚNICA cena, não cenas independentes. Escreva com escopo decrescente:
+  • FRAME 1 (estabelecimento): única descrição completa — objeto herói + TODOS os objetos secundários/props + cores + fundo + atmosfera + posição de cada elemento.
+  • FRAMES 2+ (somente o delta): descreva APENAS o que muda em relação ao frame anterior (o novo estado/posição do objeto herói da ação). NÃO redescreva em detalhe objetos secundários, fundo, paleta ou atmosfera já estabelecidos no Frame 1 — cite-os no máximo de passagem como inalterados (ex: "a necessaire segue parada no canto inferior direito, sem alteração"). Redescrever um objeto estático em detalhe a cada frame é o que faz a IA de imagem reinterpretar e reposicionar esse objeto por engano.
+  Todo objeto que não é o foco da ação deve manter EXATAMENTE a mesma posição (x/y) e escala em todos os frames; o objeto herói só pode mudar de posição/estado de forma incremental/contínua, nunca um salto brusco.
 - Se o direcionamento descrever a lógica de cada frame, siga-a LITERALMENTE
 - Se o direcionamento for genérico ou vazio, crie uma progressão narrativa natural com ${qtdFrames} momentos distintos
 - Cada frame deve ser descrito individualmente com: objeto + cor + estado + posição + fundo + atmosfera
@@ -167,7 +175,7 @@ function buildResponseSchema(aspectRatio: string, tipoGeracao: string, qtdFrames
       estiloIlustracao: { type: Type.STRING, description: "Descrição do estilo visual. Ex: Ilustrado 3D ou 2D orgânico com presença humana" },
       frames: {
         type: Type.ARRAY,
-        description: `Array com EXATAMENTE ${qtdFrames} descrições de frames para o GIF — nem mais, nem menos. Cada item descreve um frame completo: objeto + estado + cor + posição + fundo + atmosfera.`,
+        description: `Array com EXATAMENTE ${qtdFrames} descrições de frames para o GIF — nem mais, nem menos. ESCOPO DECRESCENTE OBRIGATÓRIO: o item [0] (frame 1) é a ÚNICA descrição completa — objeto herói + todos os objetos secundários + cor + posição + fundo + atmosfera. Os itens seguintes descrevem SOMENTE o delta — apenas o que muda no objeto herói da ação — sem redescrever em detalhe objetos secundários/fundo/atmosfera já estabelecidos no item [0] (cite-os no máximo de passagem como inalterados). Isso evita que a IA de imagem redesenhe e desloque por engano objetos que deveriam ficar parados. Todo objeto que não é o foco da ação deve permanecer na MESMA posição em todos os frames — só o objeto da ação principal pode mudar, de forma incremental/contínua.`,
         items: { type: Type.STRING },
       },
       quantidadeFrames: {

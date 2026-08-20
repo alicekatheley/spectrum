@@ -278,6 +278,13 @@ app.post("/api/generate-image", async (req, res) => {
     const frameRefInputs: string[] = Array.isArray(rawFrameRefs) && rawFrameRefs.length > 0
       ? rawFrameRefs
       : (typeof referenceFrameUrl === 'string' && referenceFrameUrl.startsWith('data:') ? [referenceFrameUrl] : []);
+
+    // Imagens de referência do produto real (enviadas pelo usuário) — contadas aqui para que o
+    // prompt numere corretamente a ordem das imagens anexadas (produtos vêm ANTES dos frames no
+    // array final enviado ao PiApp — ver loop de upload abaixo).
+    const refImages: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
+      ? rawRefImages.slice(0, 4)
+      : (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:') ? [rawRefImage] : []);
     // Pra metadados de texto/botão, usar o frame imediatamente anterior (último da lista)
     const metadataSourceUrl = frameRefInputs[frameRefInputs.length - 1];
 
@@ -342,17 +349,14 @@ Extract:
       direcionamento:   typeof direcionamento === 'string' && direcionamento.trim() ? direcionamento.trim() : undefined,
       totalFrames:      typeof totalFrames === 'number' ? totalFrames : undefined,
       frameRefCount:    frameRefInputs.length,
+      productRefCount:  refImages.length,
       frameMetadata,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);
 
     const referenceImageUrls: string[] = [];
 
-    // 1. Imagens de referência do usuário (suporte a múltiplas)
-    const refImages: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
-      ? rawRefImages.slice(0, 4)
-      : (typeof rawRefImage === 'string' && rawRefImage.startsWith('data:') ? [rawRefImage] : []);
-
+    // 1. Imagens de referência do usuário (suporte a múltiplas) — refImages já computado acima
     for (const refImg of refImages) {
       if (typeof refImg === 'string' && refImg.startsWith('data:')) {
         try {
@@ -554,6 +558,8 @@ app.post("/api/generate-gif", async (req, res) => {
         compVariant,
         lightVariant,
         totalFrames: frames.length,
+        frameRefCount: masterFrameRefUrl ? 1 : 0,
+        productRefCount: sharedRefUrls.length,
       });
 
       const referenceImageUrls = masterFrameRefUrl ? [...sharedRefUrls, masterFrameRefUrl] : sharedRefUrls;
