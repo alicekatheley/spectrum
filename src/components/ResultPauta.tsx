@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
 import GifViewer from "./GifViewer";
+import { loadGifshot } from "../utils/loadGifshot";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
   HelpCircle, AlertTriangle, Sparkles, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image, Repeat, PenLine
@@ -10,7 +11,7 @@ import {
 interface ResultPautaProps {
   pauta: PautaGerada;
   onApprove: (id: string) => void;
-  onDiscard: (id: string) => void;
+  onDiscard: (id: string, motivo?: string) => void;
   onRefazer: (pauta: PautaGerada) => void;
   onOpenPreview: (pauta: PautaGerada, tab?: 'visual' | 'edit') => void;
   key?: string | number;
@@ -54,9 +55,20 @@ export default function ResultPauta({
   const [rawFrameImages, setRawFrameImages] = useState<Record<string, string>>({});
   const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [generatingFrame, setGeneratingFrame] = useState<string | null>(null);
+  // Ajuste pontual pra regenerar um frame já pronto (ex: "deixe o laço mais dourado") —
+  // instrução avulsa, não é salva na pauta, só usada nessa regeneração específica.
+  const [frameAdjustOpenFor, setFrameAdjustOpenFor] = useState<string | null>(null);
+  const [frameAdjustText, setFrameAdjustText] = useState<Record<string, string>>({});
+  // Guarda a PRIMEIRA versão gerada de cada frame — permite voltar a ela depois de um ou
+  // mais "Ajustar" que não ficaram bons. Só grava uma vez por frame (nunca sobrescreve).
+  const [originalFrameSnapshot, setOriginalFrameSnapshot] = useState<Record<string, { composed: string; raw?: string; publicUrl?: string }>>({});
   const [generatingGif, setGeneratingGif] = useState(false);
   const [animFrame, setAnimFrame] = useState(0);
   const autoGenStarted = useRef(false);
+  // Pautas do Agente de GIF (modo 'C') pedem um motivo opcional antes do descarte — vira sinal
+  // de aprendizado pro agente regenerar evitando o mesmo problema.
+  const [showDiscardReason, setShowDiscardReason] = useState(false);
+  const [discardReason, setDiscardReason] = useState('');
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -70,6 +82,7 @@ export default function ResultPauta({
   const generateFrameImage = async (
     frameIndex: number,
     referenceFrameUrls?: string[],
+    ajusteRegeneracao?: string,
   ): Promise<string | null> => {
     if (!pauta.visual) return null;
 
@@ -108,6 +121,7 @@ export default function ResultPauta({
           cta: pauta.copy.ctaBotao,
           referenceFrameUrls: referenceFrameUrls ?? [],
           direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
+          ajusteRegeneracao: ajusteRegeneracao ?? undefined,
         }),
       });
       if (!response.ok) {
@@ -211,6 +225,10 @@ export default function ResultPauta({
         } catch (saveErr) {
           console.warn('[save-frame] Falha ao salvar imagem composta:', saveErr);
         }
+        // Primeira geração deste frame — grava como "original" pra permitir reverter depois.
+        setOriginalFrameSnapshot(prev => prev[frameName]
+          ? prev
+          : { ...prev, [frameName]: { composed: finalDataUrl, raw: rawDataUrl, publicUrl: urlFinal } });
         onFrameGenerated(pauta.id, frameName, finalDataUrl, urlFinal);
         if (data.publicUrl) {
           setFramePublicUrls(prev => ({ ...prev, [frameName]: data.publicUrl }));
@@ -324,6 +342,14 @@ export default function ResultPauta({
   }, [loadedGifFrames.length]);
 
 
+  const revertFrameToOriginal = (frameName: string) => {
+    const snap = originalFrameSnapshot[frameName];
+    if (!snap) return;
+    if (snap.raw) setRawFrameImages(prev => ({ ...prev, [frameName]: snap.raw! }));
+    if (snap.publicUrl) setFramePublicUrls(prev => ({ ...prev, [frameName]: snap.publicUrl! }));
+    onFrameGenerated(pauta.id, frameName, snap.composed, snap.publicUrl);
+  };
+
   const downloadFrameComposto = (frameName: string, imageSrc: string) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -401,8 +427,7 @@ export default function ResultPauta({
       const framesBase64 = await Promise.all(framesParaGif.map(toBase64));
 
       // Usar gifshot para montar o GIF
-      // @ts-ignore
-      const gifshot = (await import('gifshot')).default ?? (await import('gifshot'));
+      const gifshot = await loadGifshot();
       const { resolveCanvasSize } = await import('../utils/composeFrame');
       const [rawW, rawH] = resolveCanvasSize(pautaAspectRatio);
       const scale = 600 / Math.max(rawW, rawH);
@@ -471,7 +496,7 @@ export default function ResultPauta({
   const acoesPautaJSX = (
     <>
       <div className="flex gap-2.5 flex-wrap">
-        {pauta.status === 'rascunho' && (
+        {pauta.status === 'rascunho' && !showDiscardReason && (
           <>
             <button
               id={`btn-approve-${pauta.id}`}
@@ -483,13 +508,43 @@ export default function ResultPauta({
             </button>
             <button
               id={`btn-discard-${pauta.id}`}
-              onClick={() => onDiscard(pauta.id)}
+              onClick={() => pauta.modo === 'C' ? setShowDiscardReason(true) : onDiscard(pauta.id)}
               className="bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors"
             >
               <XOctagon className="w-4 h-4" />
               Descartar
             </button>
           </>
+        )}
+
+        {pauta.status === 'rascunho' && showDiscardReason && (
+          <div className="w-full flex flex-col gap-2 bg-rose-50 border border-rose-200 rounded-xl p-4">
+            <label className="text-xs font-bold uppercase tracking-wider text-rose-700">
+              Por que reprovar este conceito do agente? (opcional, ajuda ele a não repetir)
+            </label>
+            <textarea
+              value={discardReason}
+              onChange={(e) => setDiscardReason(e.target.value)}
+              placeholder="Ex: mecânica muito parecida com uma que já usamos, racional fraco, etc."
+              className="w-full text-sm border border-rose-200 rounded-lg p-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-rose-300"
+              rows={2}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => { onDiscard(pauta.id, discardReason.trim() || undefined); setShowDiscardReason(false); setDiscardReason(''); }}
+                className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <XOctagon className="w-4 h-4" />
+                Confirmar Reprovação
+              </button>
+              <button
+                onClick={() => { setShowDiscardReason(false); setDiscardReason(''); }}
+                className="bg-white border border-slate-200 text-slate-500 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
         )}
 
         {pauta.status === 'aprovado' && (
@@ -995,19 +1050,52 @@ export default function ResultPauta({
                   const frameName = `frame_${i}`;
                   const src = frameImages[frameName];
                   if (!src) return null;
+                  const isAdjustOpen = frameAdjustOpenFor === frameName;
+                  const isRegenerating = generatingFrame === frameName;
+                  // Ajustar (edição pontual) precisa da imagem ATUAL deste frame como referência —
+                  // é o que ancora "mude só X, mantenha o resto igual". Preferir a versão crua
+                  // (sem texto); só cair pra composta se a crua não estiver disponível (ex: frame
+                  // veio do fluxo antigo /api/generate-gif, que não guarda rawFrameImages).
+                  const refsParaAjuste = [rawFrameImages[frameName] || frameImages[frameName]].filter(Boolean) as string[];
+                  const originalSnap = originalFrameSnapshot[frameName];
+                  const canRevert = !!originalSnap && originalSnap.composed !== src;
                   return (
                     <div key={frameName} className="flex flex-col gap-1 mt-1">
                       <div className="flex items-center justify-between">
                         <span className="text-[9px] uppercase font-bold text-slate-400">F{i + 1}</span>
-                        <button
-                          type="button"
-                          onClick={() => downloadFrameComposto(frameName, src)}
-                          className="text-[9px] font-bold flex items-center gap-0.5 text-indigo-500 hover:text-indigo-700 cursor-pointer"
-                          title="Baixar frame"
-                        >
-                          <Download className="w-2.5 h-2.5" />
-                          ⬇ Download
-                        </button>
+                        <div className="flex items-center gap-2.5">
+                          {canRevert && (
+                            <button
+                              type="button"
+                              onClick={() => revertFrameToOriginal(frameName)}
+                              disabled={generatingFrame !== null || generatingGif}
+                              className="text-[9px] font-bold flex items-center gap-0.5 text-amber-600 hover:text-amber-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="Descartar os ajustes e voltar à primeira versão gerada deste frame"
+                            >
+                              <RotateCcw className="w-2.5 h-2.5" />
+                              Original
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setFrameAdjustOpenFor(isAdjustOpen ? null : frameName)}
+                            disabled={generatingFrame !== null || generatingGif}
+                            className="text-[9px] font-bold flex items-center gap-0.5 text-slate-500 hover:text-slate-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Regenerar este frame com uma instrução de ajuste"
+                          >
+                            <PenLine className="w-2.5 h-2.5" />
+                            Ajustar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadFrameComposto(frameName, src)}
+                            className="text-[9px] font-bold flex items-center gap-0.5 text-indigo-500 hover:text-indigo-700 cursor-pointer"
+                            title="Baixar frame"
+                          >
+                            <Download className="w-2.5 h-2.5" />
+                            ⬇ Download
+                          </button>
+                        </div>
                       </div>
                       <img
                         src={src}
@@ -1015,6 +1103,44 @@ export default function ResultPauta({
                         className="rounded-lg border border-slate-200 max-w-full"
                         style={{ aspectRatio: pautaAspectRatio.replace(':', '/') }}
                       />
+                      {isAdjustOpen && (
+                        <div className="flex flex-col gap-1.5 bg-slate-50 border border-slate-200 rounded-lg p-2 mt-0.5">
+                          <textarea
+                            value={frameAdjustText[frameName] ?? ''}
+                            onChange={(e) => setFrameAdjustText(prev => ({ ...prev, [frameName]: e.target.value }))}
+                            placeholder='Ex: "deixe o laço mais dourado", "remova o brilho do fundo", "aproxime mais a caixa"'
+                            className="w-full text-[11px] border border-slate-200 rounded-md p-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            rows={2}
+                            disabled={isRegenerating}
+                          />
+                          <div className="flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const instrucao = (frameAdjustText[frameName] ?? '').trim();
+                                if (!instrucao) return;
+                                await generateFrameImage(i, refsParaAjuste, instrucao);
+                                setFrameAdjustOpenFor(null);
+                              }}
+                              disabled={isRegenerating || !(frameAdjustText[frameName] ?? '').trim()}
+                              className="text-[10px] font-bold px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {isRegenerating
+                                ? <><RefreshCw className="w-2.5 h-2.5 animate-spin" /> Regenerando...</>
+                                : <><Sparkles className="w-2.5 h-2.5" /> Regenerar com esse ajuste</>
+                              }
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setFrameAdjustOpenFor(null)}
+                              disabled={isRegenerating}
+                              className="text-[10px] font-bold px-3 py-1.5 rounded-md bg-white border border-slate-200 text-slate-500 cursor-pointer disabled:opacity-40"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

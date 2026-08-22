@@ -1,5 +1,9 @@
 export type Brand = 'Apice' | 'Barbours';
 
+// Contas da Insider com acesso configurado (Passo 3 do Modo C) — mais amplo que Brand porque
+// o conteúdo do agente não é amarrado a marca; qualquer pauta pode ir pra qualquer conta aqui.
+export type ContaInsider = 'Apice' | 'Barbours' | 'Rituaria' | 'Lescent' | 'Kokeshi' | 'Gocase';
+
 export type CampaignContext = 
   | 'lancamento' 
   | 'recompra' 
@@ -109,7 +113,8 @@ export interface RiscoAlerta {
 export interface PautaGerada {
   id: string;
   marca: Brand;
-  modo: 'A' | 'B';
+  // 'C' = gerada automaticamente pelo Agente de GIF (sem intervenção humana na criação).
+  modo: 'A' | 'B' | 'C';
   tipoGeracao: 'texto' | 'imagem' | 'texto_imagem';
   copy: PautaCopy;
   visual?: PautaVisual;
@@ -122,4 +127,38 @@ export interface PautaGerada {
   // não deve ser substituído pelo seletor global de aspect ratio da UI, que muda livremente
   // entre gerações e não reflete o formato já "assado" nas imagens já geradas desta pauta.
   aspectRatio?: string;
+  // URLs públicas dos frames gerados automaticamente pelo Agente de GIF (modo 'C'), já
+  // prontas pra exibição — não dependem do usuário clicar em "gerar imagem".
+  frameUrls?: Record<string, string>;
+}
+
+export interface TesteAbProposta {
+  id: string;
+  marca: Brand;
+  pautaId: string;
+  conteudoVarianteB: {
+    id: string | null;
+    nomeDesign: string | null;
+    storageUrl: string | null;
+    insiderOriginalUrl: string | null;
+  } | null;
+  racional: string;
+  status: 'pendente' | 'aceito' | 'rejeitado';
+  createdAt: string;
+  // Passo 3 — envios pra Insider (só possível depois de status === 'aceito'). A mesma
+  // comparação pode ser enviada pra várias contas Insider (uma linha por marca de destino) —
+  // o conteúdo do agente é genérico, não amarrado a uma marca específica.
+  envios: TesteAbEnvioInsider[];
+  // Campos legados (1º envio, antes de existir a tabela teste_ab_envios) — mantidos só
+  // pra não quebrar leituras antigas; usar `envios` daqui pra frente.
+  insiderCampaignId?: string | null;
+  enviadoInsiderEm?: string | null;
+  insiderDestinoMarca?: ContaInsider | null;
+}
+
+export interface TesteAbEnvioInsider {
+  marca: ContaInsider;
+  insiderCampaignId: string;
+  varianteAGifUrl?: string | null;
+  enviadoEm: string;
 }

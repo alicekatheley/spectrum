@@ -4,6 +4,7 @@ import { X, Download, FileText, Check, Sparkles, Edit3, Clipboard, HelpCircle, A
 import BannerSimulador from "./BannerSimulador";
 import { downloadFile, generatePautaBriefingText } from "../utils";
 import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont } from "../utils/composeFrame";
+import { loadGifshot } from "../utils/loadGifshot";
 
 function SliderRow({
   label, value, min, max, step, unit, onChange,
@@ -93,10 +94,20 @@ export default function PreviewModal({
   const previewCssAspectRatio = pautaAspectRatio.includes(':') ? pautaAspectRatio.replace(':', '/') : `${canvasWidthPx} / ${canvasHeightPx}`;
 
   const safeMarcaPreview = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Pautas do Agente (modo 'C') salvam os frames crus como inicial/intermediario/final, não
+  // frame_0/frame_1/frame_2 (convenção do Modo A/B) — mesmo bug do handleReajustarCopy: sem
+  // este mapeamento a prévia ao vivo tentava carregar um arquivo que não existe (404 silencioso,
+  // <img> nunca troca de src sozinha) e a camada de texto CSS ficava desenhando por cima do
+  // nada (ou da imagem já composta com texto, se ela for usada de fallback em outro lugar),
+  // duplicando o texto na tela.
+  const RAW_NAMES_AGENTE_PREVIEW = ['inicial', 'intermediario', 'final'];
   const rawPreviewSrc = (() => {
     const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
     if (!SUPABASE_URL) return undefined;
-    return `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarcaPreview}/${pauta.id}/frame_${activePreviewIndex}.png`;
+    const rawFileName = pauta.modo === 'C'
+      ? (RAW_NAMES_AGENTE_PREVIEW[activePreviewIndex] ?? `frame_${activePreviewIndex}`)
+      : `frame_${activePreviewIndex}`;
+    return `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarcaPreview}/${pauta.id}/${rawFileName}.png`;
   })();
 
   useEffect(() => {
@@ -477,10 +488,16 @@ export default function PreviewModal({
         buttonFontSizePx: buttonFontSizePx ?? undefined,
       };
 
+      // Pautas do Agente (modo 'C') salvam os frames crus como inicial/intermediario/final,
+      // não frame_0/frame_1/frame_2 (convenção do Modo A/B) — sem este mapeamento o fetch da
+      // imagem crua sempre dava 404 pra pautas do agente e a recomposição falhava silenciosa.
+      const RAW_NAMES_AGENTE = ['inicial', 'intermediario', 'final'];
       let algumaFalha = false;
       for (const frameName of framesExistentes) {
         try {
-          const rawUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${frameName}.png`;
+          const frameIndex = Number(frameName.replace('frame_', ''));
+          const rawFileName = pauta.modo === 'C' ? (RAW_NAMES_AGENTE[frameIndex] ?? frameName) : frameName;
+          const rawUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${rawFileName}.png`;
           const resp = await fetch(rawUrl);
           if (!resp.ok) throw new Error('imagem original não encontrada no Storage');
           const blob = await resp.blob();
@@ -599,8 +616,7 @@ export default function PreviewModal({
         });
       };
       const framesBase64 = await Promise.all(framesParaGif.map(toBase64));
-      // @ts-ignore
-      const gifshot = (await import('gifshot')).default ?? (await import('gifshot'));
+      const gifshot = await loadGifshot();
       const { resolveCanvasSize } = await import('../utils/composeFrame');
       const [rawW, rawH] = resolveCanvasSize(pautaAspectRatio);
       const scale = 600 / Math.max(rawW, rawH);
@@ -756,8 +772,8 @@ export default function PreviewModal({
                 >
                   <img
                     src={
-                      activeTab === 'edit'
-                        ? rawPreviewSrc ?? frameImages[`frame_${activePreviewIndex}`] ?? frameImages[Object.keys(frameImages).sort()[0]]
+                      activeTab === 'edit' && rawPreviewSrc && !rawPreviewFailed
+                        ? rawPreviewSrc
                         : frameImages[`frame_${activePreviewIndex}`] ?? frameImages[Object.keys(frameImages).sort()[0]]
                     }
                     onError={() => setRawPreviewFailed(true)}
@@ -782,7 +798,7 @@ export default function PreviewModal({
                             lineHeight: 1.15,
                           }}
                         >
-                          {editedCopy.headlineBanner || 'HEADLINE'}
+                          {(editedCopy.headlineBanner || 'HEADLINE').toUpperCase()}
                         </span>
                       </div>
                       <div
@@ -799,7 +815,7 @@ export default function PreviewModal({
                             lineHeight: 1.2,
                           }}
                         >
-                          {editedCopy.subHeadlineBanner || 'sub-headline'}
+                          {(editedCopy.subHeadlineBanner || 'sub-headline').toUpperCase()}
                         </span>
                       </div>
                       <div

@@ -19,12 +19,14 @@ let _crmAiMarcas: Record<string, MarcaDnaContext> = {};
 let _crmAiHits: Record<string, EmailHitContext[]> = {};
 let _crmAiEstilos: string[] = [];
 let _crmAiMecanicasCanonical: string[] = [];
+let _conteudosGifAprendizado: any[] = [];
 
 export const getDatabaseDisparos = () => _databaseDisparos;
 export const getMecanicasCatalog = () => _mecanicasCatalog;
 export const getCrmAiMarcas = () => _crmAiMarcas;
 export const getCrmAiHits = () => _crmAiHits;
 export const getCrmAiEstilos = () => _crmAiEstilos;
+export const getConteudosGifAprendizado = () => _conteudosGifAprendizado;
 
 // ─── Loaders ─────────────────────────────────────────────────────────────────
 export async function loadDisparosFromSupabase() {
@@ -126,6 +128,41 @@ export function buildVisualHitsBlock(marca: string): string {
     `  ${i + 1}. Mecânica: "${h.mecanicaNome}" | Receita: ${h.receita} | Abertura: ${h.taxaAbertura} | CTOR: ${h.ctor}\n     Visual: ${h.descricaoVisual.replace(/\n+/g, ' ')}`
   );
   return `\n=== TOP EMAILS DE MAIOR RECEITA DA MARCA ${marca.toUpperCase()} (use como referência visual obrigatória) ===\n${lines.join('\n\n')}\n`;
+}
+
+export async function loadConteudosGifAprendizado() {
+  if (!supabase) return;
+  // status_analise aqui reflete revisão humana do TEXTO da análise (mecanica_texto/composicao_texto),
+  // não uma curadoria de "esse GIF é bom" — hoje nenhuma linha tem status 'aprovado' porque esse
+  // fluxo de revisão nunca foi usado. O sinal real de "já foi analisado" é mecanica_texto IS NOT NULL;
+  // só excluímos 'descartado' (análise marcada como errada/inútil).
+  const { data, error } = await supabase
+    .from('conteudos_links')
+    .select('id, marca, nome_design, storage_url, mecanica_texto, composicao_texto, frames')
+    .neq('status_analise', 'descartado')
+    .eq('tipo_midia', 'gif')
+    .not('mecanica_texto', 'is', null);
+  if (error || !data) {
+    console.warn('[Supabase] conteudos_links (aprendizado) não carregado:', error?.message);
+    return;
+  }
+  _conteudosGifAprendizado = data;
+  console.log(`[Supabase] ${_conteudosGifAprendizado.length} GIFs analisados carregados como aprendizado do agente.`);
+}
+
+// crm_ai.ia_outputs só tem policy de INSERT pra role anon — leitura precisa de RPC SECURITY DEFINER.
+export async function getFeedbackAgenteGif(limitN = 20): Promise<{ aprovados: any[]; reprovados: any[] }> {
+  if (!supabase) return { aprovados: [], reprovados: [] };
+  const { data, error } = await supabase.rpc('crm_ai_get_conceito_feedback', { limit_n: limitN });
+  if (error) {
+    console.warn('[crm_ai] Falha ao carregar feedback do agente de GIF:', error.message);
+    return { aprovados: [], reprovados: [] };
+  }
+  const rows = (data as any[]) ?? [];
+  return {
+    aprovados: rows.filter(r => r.aprovado === true),
+    reprovados: rows.filter(r => r.aprovado === false),
+  };
 }
 
 export async function autoRegisterMecanica(nome: string) {

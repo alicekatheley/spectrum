@@ -205,10 +205,13 @@ export async function loadFont(familiaFonte: string, peso: string): Promise<stri
   }
 }
 
-// Corrige vinheta/gradiente escuro que o modelo de geração de imagem às vezes aplica no
-// topo/rodapé (apesar da instrução de prompt pra evitar isso). Mede o brilho médio em faixas
-// horizontais e "levanta" as faixas mais escuras que a faixa mais clara via blend 'screen' —
-// faixas já uniformes recebem alpha ~0 e ficam praticamente intocadas.
+// Corrige vinheta vertical (clara OU escura) que o modelo de imagem às vezes aplica no topo/
+// rodapé mesmo com a instrução de iluminação uniforme no prompt. Mede o brilho médio em faixas
+// horizontais e aproxima cada faixa da mediana: faixas mais escuras que a mediana recebem um leve
+// "screen" branco, faixas mais claras/estouradas recebem um leve "multiply" preto — faixas já
+// uniformes (perto da mediana) ficam praticamente intocadas. Existia uma versão anterior desta
+// função que só clareava (nunca escurecia), o que empurrava qualquer glow/halo que o modelo
+// gerasse ainda mais pro branco — esta versão corrige nos dois sentidos.
 function flattenVerticalVignette(ctx: CanvasRenderingContext2D, img: CanvasImageSource, width: number, height: number) {
   const ROWS = 24;
   const sampleCanvas = document.createElement('canvas');
@@ -229,25 +232,37 @@ function flattenVerticalVignette(ctx: CanvasRenderingContext2D, img: CanvasImage
   }
 
   const sorted = [...rowLuma].sort((a, b) => a - b);
-  const target = sorted[Math.floor(sorted.length * 0.75)]; // faixa clara de referência (p75)
-  const MAX_ALPHA = 0.5;
-
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
-  rowLuma.forEach((luma, i) => {
-    const deficit = Math.max(0, target - luma);
-    const alpha = Math.min(MAX_ALPHA, deficit / 255);
-    grad.addColorStop(i / (ROWS - 1), `rgba(255,255,255,${alpha.toFixed(3)})`);
-  });
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const MAX_ALPHA = 0.35;
+  const bandH = height / ROWS;
 
   ctx.save();
-  ctx.globalCompositeOperation = 'screen';
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
+  rowLuma.forEach((luma, i) => {
+    const diff = luma - median;
+    if (Math.abs(diff) < 4) return; // já uniforme, não mexe
+    const y = i * bandH;
+    if (diff < 0) {
+      const alpha = Math.min(MAX_ALPHA, -diff / 255);
+      ctx.globalCompositeOperation = 'screen';
+      ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+    } else {
+      const alpha = Math.min(MAX_ALPHA, diff / 255);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = `rgba(0,0,0,${alpha.toFixed(3)})`;
+    }
+    ctx.fillRect(0, y - 1, width, bandH + 2);
+  });
   ctx.restore();
 }
 
 export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
-  const { imageDataUrl, headline, subheadline, cta, marca, aspectRatio } = opts;
+  const { imageDataUrl, cta, marca, aspectRatio } = opts;
+  // Convenção visual do playbook: headline e sub-headline sempre em caixa alta no banner final
+  // (mesmo padrão já aplicado via CSS em BannerSimulador/ResultPauta) — força aqui pq canvas
+  // não tem text-transform, então se o texto salvo vier em minúsculas (regeneração de copy,
+  // edição manual etc.) o resultado final não pode "vazar" a capitalização original.
+  const headline = (opts.headline ?? '').toUpperCase();
+  const subheadline = (opts.subheadline ?? '').toUpperCase();
   const isApice = marca === 'Apice';
   const ev = opts.estiloVisual ?? {};
 
@@ -293,7 +308,7 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // 1. Imagem base
       ctx.drawImage(img, 0, 0, WIDTH, HEIGHT);
 
-      // 2. Corrige vinheta escura que o modelo de imagem eventualmente gera no topo/rodapé.
+      // 2. Corrige vinheta clara ou escura que o modelo de imagem eventualmente gera.
       flattenVerticalVignette(ctx, img, WIDTH, HEIGHT);
 
       // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem

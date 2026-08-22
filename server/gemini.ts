@@ -308,6 +308,135 @@ Gere um formato JSON contendo um array de ideias de pautas (com o tamanho exato 
   return JSON.parse(response.text || "[]");
 }
 
+export async function generateGifAgentConcept(params: {
+  marca: string;
+  conteudosAprendizado: any[];
+  feedbackAprovados: any[];
+  feedbackRejeitados: any[];
+  motivoRejeicaoAnterior?: string;
+}): Promise<any> {
+  const { marca, conteudosAprendizado, feedbackAprovados, feedbackRejeitados, motivoRejeicaoAnterior } = params;
+
+  const playbookMarca = buildPlaybook(marca);
+  const aspectRatio = '1:1';
+
+  // Amostra aleatória (não os 272 de uma vez) — mandar a lista completa em todo prompt
+  // estoura a quota de tokens/minuto do tier gratuito do Gemini rapidinho, já que o agente
+  // dispara várias gerações em sequência (cota diária + regeneração por reprovação).
+  const AMOSTRA_MAX = 25;
+  const amostraGifs = conteudosAprendizado.length > AMOSTRA_MAX
+    ? [...conteudosAprendizado].sort(() => Math.random() - 0.5).slice(0, AMOSTRA_MAX)
+    : conteudosAprendizado;
+
+  const gifsBlock = amostraGifs.length > 0
+    ? amostraGifs.map((c, i) =>
+        `  ${i + 1}. [${c.marca}] "${c.nome_design}" — Mecânica: ${c.mecanica_texto}\n     Composição: ${c.composicao_texto}`
+      ).join('\n\n')
+    : '  Nenhum GIF analisado disponível ainda.';
+
+  const aprovadosBlock = feedbackAprovados.length > 0
+    ? feedbackAprovados.map((f, i) => {
+        const op = f.recomendacao_estruturada?.operacional;
+        return `  ${i + 1}. Mecânica aprovada: "${op?.mecanicaEscolhida ?? '?'}" — Racional: ${op?.justificativaMecanica ?? '?'}`;
+      }).join('\n')
+    : '  Nenhum conceito aprovado ainda — este é um dos primeiros.';
+
+  const reprovadosBlock = feedbackRejeitados.length > 0
+    ? feedbackRejeitados.map((f, i) => {
+        const op = f.recomendacao_estruturada?.operacional;
+        return `  ${i + 1}. Mecânica REPROVADA: "${op?.mecanicaEscolhida ?? '?'}"${f.feedback_usuario ? ` — Motivo da reprovação: "${f.feedback_usuario}"` : ''}`;
+      }).join('\n')
+    : '  Nenhum conceito reprovado ainda.';
+
+  const systemInstruction = `Você é o Agente Autônomo de Criação de GIFs para CRM da marca ${marca}. Sua função é propor, sem intervenção humana no momento da criação, UM novo conceito de GIF de email marketing (mecânica + racional + copy + frames visuais), inspirado no que já funcionou historicamente, mas com uma mecânica e racional GENUINAMENTE NOVOS — nunca repita literalmente uma mecânica já existente na lista de GIFs analisados ou já aprovada/reprovada abaixo.
+
+${playbookMarca}
+
+=== REGRAS INVIOLÁVEIS DE ASSUNTO (ENTREGABILIDADE) ===
+1. NUNCA use Caps Lock no assunto inteiro.
+2. NUNCA use mais de 2 emojis por assunto.
+3. NUNCA use as palavras ou símbolos "%", "OFF", "GRÁTIS", "R$" no assunto.
+4. O Pré-header deve ser SEMPRE E EXCLUSIVAMENTE o texto fixo "Mas, vou precisar cancelar em breve".
+
+=== GIFS ANALISADOS QUE JÁ FUNCIONARAM (grounding — de qualquer marca do grupo, use como entendimento de padrões visuais e de mecânica que geram engajamento, mas NÃO copie) ===
+${gifsBlock}
+
+=== CONCEITOS JÁ AVALIADOS POR HUMANOS NESTE PROGRAMA DO AGENTE ===
+Aprovados (reforce o padrão que funcionou, mas não repita a mesma mecânica):
+${aprovadosBlock}
+
+Reprovados (NÃO proponha de novo; evite o mesmo problema apontado no motivo):
+${reprovadosBlock}
+${motivoRejeicaoAnterior ? `\n=== ESTA É UMA REGENERAÇÃO IMEDIATA APÓS REPROVAÇÃO ===\nO conceito anterior gerado nesta mesma rodada foi reprovado com o motivo: "${motivoRejeicaoAnterior}". Gere um conceito claramente diferente que evite esse problema específico.\n` : ''}
+Gere exatamente 1 conceito de GIF com 3 frames (inicial, intermediário, final), seguindo o formato ${aspectRatio}, com racional de por que essa mecânica nova deve funcionar para ${marca}. Em "previsao.casesReferencia" cite o(s) nome(s) de GIF (campo nome_design) da lista de grounding que mais inspiraram o conceito.`;
+
+  const instructionsPrompt = `Proponha o novo conceito de GIF autônomo para a marca ${marca}, em formato JSON, respeitando à risca o esquema de tipos definido.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: instructionsPrompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: buildResponseSchema(aspectRatio, 'imagem', 3),
+    }
+  });
+
+  const parsed = JSON.parse(response.text || "[]");
+  return Array.isArray(parsed) ? parsed[0] : parsed;
+}
+
+export async function generateAbTestProposal(params: {
+  marca: string;
+  pautaAprovada: any;
+  candidatosHistoricos: any[];
+}): Promise<{ conteudoId: string | null; racional: string }> {
+  const { marca, pautaAprovada, candidatosHistoricos } = params;
+
+  const AMOSTRA_MAX = 25;
+  const amostraCandidatos = candidatosHistoricos.length > AMOSTRA_MAX
+    ? [...candidatosHistoricos].sort(() => Math.random() - 0.5).slice(0, AMOSTRA_MAX)
+    : candidatosHistoricos;
+
+  const candidatosBlock = amostraCandidatos.map((c, i) =>
+    `  ${i + 1}. id="${c.id}" [${c.marca}] "${c.nome_design}" — Mecânica: ${c.mecanica_texto}\n     Composição: ${c.composicao_texto}`
+  ).join('\n\n');
+
+  const systemInstruction = `Você é um estrategista de testes A/B de CRM. Dado um novo conceito de GIF recém-aprovado, escolha, dentre os GIFs históricos analisados abaixo, o melhor "adversário" para um teste A/B — seja por ser da mesma família de mecânica (testar uma variação de execução) ou por representar a hipótese oposta que vale confrontar. Justifique a escolha de forma objetiva e prática para quem vai rodar o teste no Insider.`;
+
+  const instructionsPrompt = `Novo conceito aprovado (marca ${marca}):
+Mecânica: ${pautaAprovada.operacional?.mecanicaEscolhida}
+Racional: ${pautaAprovada.operacional?.justificativaMecanica}
+Recompensa: ${pautaAprovada.operacional?.recompensaEscolhida}
+Assunto: ${pautaAprovada.copy?.assunto}
+
+Candidatos históricos disponíveis para parear no teste A/B:
+${candidatosBlock}
+
+Escolha exatamente um "id" da lista de candidatos (campo conteudoId) e escreva o racional da comparação (campo racional). Responda em JSON.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: instructionsPrompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          conteudoId: { type: Type.STRING, description: "id exato de um dos candidatos históricos listados" },
+          racional: { type: Type.STRING, description: "Racional da comparação A/B" },
+        },
+        required: ["conteudoId", "racional"],
+      },
+    }
+  });
+
+  const parsed = JSON.parse(response.text || "{}");
+  const validId = candidatosHistoricos.some(c => c.id === parsed.conteudoId) ? parsed.conteudoId : null;
+  return { conteudoId: validId, racional: parsed.racional ?? '' };
+}
+
 export async function generateVariationContent(pauta: any): Promise<any> {
   const { marca, operacional } = pauta;
   const isApice = marca === 'Apice';

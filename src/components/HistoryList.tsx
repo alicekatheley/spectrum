@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { PautaGerada } from "../types";
 import { TrendingUp, Trash, ListFilter, Download, Calendar, List, Search, X } from "lucide-react";
-import { downloadFile } from "../utils";
+import { downloadFile, modoLabel } from "../utils";
 
 interface HistoryListProps {
   history: PautaGerada[];
@@ -84,7 +84,7 @@ export default function HistoryList({
     const rows = listToExport.map(p => [
       p.id,
       p.marca,
-      p.modo === 'A' ? 'Descoberta Livre' : 'Briefing Assistido',
+      modoLabel(p.modo),
       p.operacional.diaRecomendado,
       p.operacional.horarioRecomendado,
       p.copy.assunto.replace(/"/g, '""'),

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Brand, PautaGerada, InputModoA, InputModoB } from "./types";
+import { Brand, ContaInsider, PautaGerada, InputModoA, InputModoB, TesteAbProposta } from "./types";
 import { getPautas, upsertPautas, clearPautas } from "./lib/pautas-service";
 import { supabase, isEmailAllowed } from "./lib/supabase";
 import LoginPage from "./components/LoginPage";
@@ -9,11 +9,13 @@ import FormModoB from "./components/FormModoB";
 import ResultPauta from "./components/ResultPauta";
 import { DEFAULT_IMAGE_MODEL } from "./components/ImageModelSelector";
 import HistoryList from "./components/HistoryList";
+import ModoCPanel from "./components/ModoCPanel";
 import HistoryGallery from "./components/HistoryGallery";
 import PreviewModal from "./components/PreviewModal";
 import WeeklyPlanner from "./components/WeeklyPlanner";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
-import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X } from "lucide-react";
+import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot } from "lucide-react";
+import { loadGifshot } from "./utils/loadGifshot";
 
 export default function App() {
   return (
@@ -32,7 +34,7 @@ function AppInner() {
 
   const [currentBrand, setCurrentBrand] = useState<Brand>('Apice');
   const [currentMode, setCurrentMode] = useState<'A' | 'B'>('A');
-  const [mainTab, setMainTab] = useState<'geracao' | 'historico'>('geracao');
+  const [mainTab, setMainTab] = useState<'geracao' | 'historico' | 'agente'>('geracao');
   const [history, setHistory] = useState<PautaGerada[]>([]);
   const [loading, setLoading] = useState(false);
   const [activePreviewPauta, setActivePreviewPauta] = useState<PautaGerada | null>(null);
@@ -166,12 +168,28 @@ function AppInner() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Semeia allFrameImages com os frames já prontos das pautas do Agente de GIF (modo 'C') —
+  // essas pautas chegam do backend já com frameUrls preenchido, sem precisar do usuário clicar
+  // em "gerar imagem".
+  const seedFrameUrlsFromPautas = (pautas: PautaGerada[]) => {
+    const withFrames = pautas.filter(p => (p as any).frameUrls && Object.keys((p as any).frameUrls).length > 0);
+    if (withFrames.length === 0) return;
+    setAllFrameImages(prev => {
+      const next = { ...prev };
+      for (const p of withFrames) {
+        next[p.id] = { ...((p as any).frameUrls), ...(next[p.id] ?? {}) };
+      }
+      return next;
+    });
+  };
+
   // Carrega histórico: Supabase primeiro, fallback para localStorage
   useEffect(() => {
     const init = async () => {
       const remote = await getPautas();
       if (remote && remote.length > 0) {
         setHistory(remote);
+        seedFrameUrlsFromPautas(remote);
         return;
       }
       try {
@@ -196,6 +214,255 @@ function AppInner() {
     };
     init();
   }, []);
+
+  // Sem botão manual: o Agente de GIF roda no backend (cron) e escreve direto em pautas_geradas.
+  // Esse polling é o único jeito do front descobrir pautas modo 'C' novas sem precisar recarregar
+  // a página. Não reescreve o localStorage (fallback só é reconstruído num reload completo).
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const remote = await getPautas();
+      if (!remote) return;
+      setHistory(prev => {
+        const knownIds = new Set(prev.map(p => p.id));
+        const novas = remote.filter(p => !knownIds.has(p.id));
+        if (novas.length === 0) return prev;
+        seedFrameUrlsFromPautas(novas);
+        return [...novas, ...prev];
+      });
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Propostas de teste A/B geradas pelo agente após aprovação de uma pauta modo 'C'.
+  const [testesAb, setTestesAb] = useState<TesteAbProposta[]>([]);
+  const fetchTestesAb = async () => {
+    try {
+      const resp = await fetch('/api/teste-ab');
+      const resData = await resp.json();
+      if (resData.status === 'success' && Array.isArray(resData.data)) {
+        setTestesAb(resData.data.map((row: any): TesteAbProposta => ({
+          id: row.id,
+          marca: row.marca,
+          pautaId: row.pauta_id,
+          conteudoVarianteB: row.conteudos_links
+            ? {
+                id: row.variante_b_conteudo_id,
+                nomeDesign: row.conteudos_links.nome_design,
+                storageUrl: row.conteudos_links.storage_url,
+                insiderOriginalUrl: row.conteudos_links.insider_original_url,
+              }
+            : (row.variante_b_conteudo_id ? { id: row.variante_b_conteudo_id, nomeDesign: null, storageUrl: null, insiderOriginalUrl: null } : null),
+          racional: row.racional,
+          status: row.status,
+          createdAt: row.created_at,
+          envios: Array.isArray(row.teste_ab_envios) ? row.teste_ab_envios.map((e: any) => ({
+            marca: e.marca,
+            insiderCampaignId: e.insider_campaign_id,
+            varianteAGifUrl: e.variante_a_gif_url ?? null,
+            enviadoEm: e.enviado_em,
+          })) : [],
+          insiderCampaignId: row.insider_campaign_id ?? null,
+          enviadoInsiderEm: row.enviado_insider_em ?? null,
+          insiderDestinoMarca: row.insider_destino_marca ?? null,
+        })));
+      }
+    } catch (err) {
+      console.warn('[teste-ab] Falha ao buscar propostas:', err);
+    }
+  };
+  useEffect(() => {
+    fetchTestesAb();
+    const interval = setInterval(fetchTestesAb, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Aprovar a comparação do teste A/B (o usuário concorda com o conteúdo histórico escolhido
+  // pelo agente) — é só um update de status, sem chamada de IA, então faz direto no Supabase.
+  const handleAceitarAb = async (proposta: TesteAbProposta) => {
+    setTestesAb(prev => prev.map(t => t.id === proposta.id ? { ...t, status: 'aceito' } : t));
+    if (!supabase) return;
+    const { error } = await supabase.from('teste_ab_propostas').update({ status: 'aceito' }).eq('id', proposta.id);
+    if (error) console.warn('[teste-ab] Falha ao aceitar comparação:', error.message);
+  };
+
+  // "Não faz sentido" — o usuário reprova o conteúdo histórico escolhido; o backend busca um
+  // novo candidato (excluindo os já reprovados) e atualiza a mesma proposta.
+  const [regenerandoAbId, setRegenerandoAbId] = useState<string | null>(null);
+  const handleRejeitarAb = async (proposta: TesteAbProposta) => {
+    setRegenerandoAbId(proposta.id);
+    try {
+      const resp = await fetch('/api/teste-ab-regenerar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propostaId: proposta.id }),
+      });
+      const resData = await resp.json();
+      if (resData.status === 'success') {
+        await fetchTestesAb();
+      } else {
+        console.warn('[teste-ab-regenerar] Falha:', resData.error);
+        alert('Não consegui encontrar outro conteúdo do histórico agora. Tenta de novo em alguns segundos.');
+      }
+    } catch (err) {
+      console.warn('[teste-ab-regenerar] Erro de rede:', err);
+    } finally {
+      setRegenerandoAbId(null);
+    }
+  };
+
+  // Passo 3 — envia a comparação aceita pra Insider como campanha "experiment" (A/B nativo).
+  // A Insider só aceita um GIF de verdade por URL (não frames separados), então primeiro
+  // codifica os 3 frames compostos num .gif real (gifshot, mesma lib do botão "Baixar GIF"
+  // já existente), sobe pro Storage, e só então chama o backend (que tem a chave da Insider).
+  const [enviandoInsiderId, setEnviandoInsiderId] = useState<string | null>(null);
+  const handleEnviarInsider = async (
+    proposta: TesteAbProposta,
+    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string },
+  ) => {
+    const { destinoMarca, linkCampanha, assunto, nomeCampanha } = opts;
+    if (!supabase) { alert('Supabase não configurado.'); return; }
+    const pautaA = history.find(p => p.id === proposta.pautaId);
+    const frameImages = allFrameImages[proposta.pautaId] ?? {};
+    const keys = Object.keys(frameImages).sort();
+    if (!pautaA || keys.length < 2) {
+      alert('Os frames dessa pauta ainda não estão prontos — aguarde a composição terminar.');
+      return;
+    }
+
+    setEnviandoInsiderId(proposta.id);
+    try {
+      const toBase64 = async (src: string): Promise<string> => {
+        if (src.startsWith('data:')) return src;
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      };
+      const framesBase64 = await Promise.all(keys.map(k => toBase64(frameImages[k])));
+
+      const gifshot = await loadGifshot();
+      const { resolveCanvasSize } = await import('./utils/composeFrame');
+      const [rawW, rawH] = resolveCanvasSize(pautaA.aspectRatio);
+      const scale = 600 / Math.max(rawW, rawH);
+      const gifWidth = Math.round(rawW * scale);
+      const gifHeight = Math.round(rawH * scale);
+
+      const gifDataUrl: string = await new Promise((resolve, reject) => {
+        gifshot.createGIF({
+          images: framesBase64,
+          gifWidth, gifHeight,
+          interval: 0.7,
+          numFrames: framesBase64.length,
+          frameDuration: 1,
+          sampleInterval: 10,
+          numWorkers: 2,
+        }, (obj: any) => {
+          if (obj.error) reject(new Error(obj.error));
+          else resolve(obj.image);
+        });
+      });
+
+      const base64Data = gifDataUrl.split(',')[1];
+      const binaryStr = atob(base64Data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      const path = `insider-gifs/${proposta.pautaId}.gif`;
+      const { error: upErr } = await supabase.storage
+        .from('campaign-images')
+        .upload(path, bytes, { contentType: 'image/gif', upsert: true });
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage.from('campaign-images').getPublicUrl(path);
+
+      const resp = await fetch('/api/teste-ab-enviar-insider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propostaId: proposta.id, gifUrlVarianteA: urlData.publicUrl, destinoMarca, linkCampanha, assunto, nomeCampanha }),
+      });
+      const resData = await resp.json();
+      if (resData.status === 'success') {
+        const novoEnvio = { marca: destinoMarca, insiderCampaignId: resData.insiderCampaignId, varianteAGifUrl: urlData.publicUrl, enviadoEm: new Date().toISOString() };
+        setTestesAb(prev => prev.map(t => t.id === proposta.id
+          ? { ...t, envios: [...t.envios.filter(e => e.marca !== destinoMarca), novoEnvio] }
+          : t));
+      } else {
+        alert(resData.error || 'Falha ao enviar pra Insider.');
+      }
+    } catch (err: any) {
+      console.warn('[teste-ab-enviar-insider] Erro:', err);
+      alert('Erro ao enviar pra Insider: ' + (err.message ?? 'erro desconhecido'));
+    } finally {
+      setEnviandoInsiderId(null);
+    }
+  };
+
+  // Passo 2 — baixa o GIF animado (já composto) de uma pauta aprovada do agente, sem precisar
+  // abrir o modal de teste A/B. Mesma técnica de composição de handleEnviarInsider/ResultPauta.
+  const [baixandoGifId, setBaixandoGifId] = useState<string | null>(null);
+  const handleDownloadGifAgente = async (pauta: PautaGerada) => {
+    if (baixandoGifId) return; // evita disparar 2 gerações de GIF em paralelo (botão sem debounce)
+    const frameImages = allFrameImages[pauta.id] ?? {};
+    const keys = Object.keys(frameImages).sort();
+    if (keys.length < 2) {
+      alert('Os frames dessa pauta ainda não estão prontos — aguarde a composição terminar.');
+      return;
+    }
+    setBaixandoGifId(pauta.id);
+    try {
+      const toBase64 = async (src: string): Promise<string> => {
+        if (src.startsWith('data:')) return src;
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      };
+      const framesBase64 = await Promise.all(keys.map(k => toBase64(frameImages[k])));
+
+      const gifshot = await loadGifshot();
+      const { resolveCanvasSize } = await import('./utils/composeFrame');
+      const [rawW, rawH] = resolveCanvasSize(pauta.aspectRatio);
+      const scale = 600 / Math.max(rawW, rawH);
+      const gifWidth = Math.round(rawW * scale);
+      const gifHeight = Math.round(rawH * scale);
+
+      // gifshot processa via Web Workers e, se algo travar internamente ali, o callback nunca
+      // é chamado — sem esse timeout o botão fica girando pra sempre sem feedback nenhum.
+      const gifDataUrl = await Promise.race([
+        new Promise<string>((resolve, reject) => {
+          gifshot.createGIF({
+            images: framesBase64,
+            gifWidth, gifHeight,
+            interval: 0.7,
+            numFrames: framesBase64.length,
+            frameDuration: 1,
+            sampleInterval: 10,
+            numWorkers: 2,
+          }, (obj: any) => {
+            if (obj.error) reject(new Error(obj.error));
+            else resolve(obj.image);
+          });
+        }),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Tempo esgotado gerando o GIF — tenta de novo.')), 25000)),
+      ]);
+
+      const link = document.createElement('a');
+      link.download = `agente-${pauta.marca}-${pauta.operacional?.mecanicaEscolhida ?? 'gif'}.gif`.replace(/\s+/g, '-');
+      link.href = gifDataUrl;
+      link.click();
+    } catch (err: any) {
+      console.warn('[handleDownloadGifAgente] Erro:', err);
+      alert('Erro ao baixar o GIF: ' + (err.message ?? 'erro desconhecido'));
+    } finally {
+      setBaixandoGifId(null);
+    }
+  };
 
   // Reconstrói URLs do Supabase Storage pra pautas sem frames carregados neste navegador —
   // inclui pautas geradas por OUTRAS pessoas, já que o Storage é compartilhado mesmo que
@@ -435,6 +702,22 @@ function AppInner() {
     } catch (err) {
       console.warn('[approve-pauta] Erro de rede ao salvar aprovação:', err);
     }
+
+    if (pautaAprovada.modo === 'C') {
+      try {
+        const resp = await fetch('/api/feedback-agente-gif', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pauta: pautaAprovada, aprovado: true }),
+        });
+        const resData = await resp.json().catch(() => ({}));
+        if (resData?.testeAb) {
+          fetchTestesAb();
+        }
+      } catch (err) {
+        console.warn('[feedback-agente-gif] Erro de rede ao registrar aprovação:', err);
+      }
+    }
   };
 
   const handleUpdatePautaDay = (pautaId: string, newDay: string) => {
@@ -465,7 +748,7 @@ function AppInner() {
     setActivePreviewPauta(updatedPauta);
   };
 
-  const handleDiscardPauta = (id: string) => {
+  const handleDiscardPauta = (id: string, motivo?: string) => {
     const updated = history.map((item) => {
       if (item.id === id) {
         return { ...item, status: 'descartado' as const };
@@ -473,6 +756,15 @@ function AppInner() {
       return item;
     });
     saveHistory(updated);
+
+    const pautaDescartada = history.find(p => p.id === id);
+    if (pautaDescartada?.modo === 'C') {
+      fetch('/api/feedback-agente-gif', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pauta: pautaDescartada, aprovado: false, motivo }),
+      }).catch(err => console.warn('[feedback-agente-gif] Erro de rede ao registrar reprovação:', err));
+    }
   };
 
   const handleClearHistory = () => {
@@ -520,7 +812,77 @@ function AppInner() {
   };
 
 
-  const filteredHistory = history.filter((p) => {
+  // O histórico do Agente (modo 'C') tem aba própria — nunca aparece no Histórico de Pautas
+  // geral, pra não misturar contagens/KPIs de geração manual com geração autônoma.
+  const historyNaoAgente = history.filter((p) => p.modo !== 'C');
+  const agentePautas = history.filter((p) => p.modo === 'C');
+  const agenteRascunho = agentePautas.filter((p) => p.status === 'rascunho');
+  const agenteAprovadas = agentePautas.filter((p) => p.status === 'aprovado');
+
+  // As pautas do Agente são geradas 100% no backend (worker.ts), que não tem acesso a canvas/DOM
+  // pra desenhar headline/subtítulo/CTA sobre o frame (isso só existe client-side, via
+  // composeFrame — o mesmo usado quando o usuário gera imagem manualmente no Modo A/B). Sem este
+  // passo, os GIFs do agente saem sem nenhum texto desenhado, mesmo com o copy certo nos dados.
+  // Roda uma vez por pauta (marca via composedAgentPautasRef) e persiste o resultado composto em
+  // frame_urls, pra não recompor de novo em outra sessão/reload.
+  const composedAgentPautasRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pendentes = agentePautas.filter((p) => {
+      if (composedAgentPautasRef.current.has(p.id)) return false;
+      const frameUrls = (p as any).frameUrls as Record<string, string> | undefined;
+      if (!frameUrls || Object.keys(frameUrls).length === 0) return false;
+      const primeiraUrl = Object.values(frameUrls)[0];
+      // Já composto? A versão com texto vive em .../campaign-images/frames/{id}/...
+      if (primeiraUrl.includes('/campaign-images/frames/')) return false;
+      return true;
+    });
+    if (pendentes.length === 0) return;
+    pendentes.forEach((p) => composedAgentPautasRef.current.add(p.id));
+
+    (async () => {
+      const { composeFrame } = await import('./utils/composeFrame');
+      for (const pauta of pendentes) {
+        try {
+          const frameUrls = (pauta as any).frameUrls as Record<string, string>;
+          const composed: Record<string, string> = {};
+          const entradas = Object.entries(frameUrls).sort(([a], [b]) => a.localeCompare(b));
+          for (const [frameName, rawUrl] of entradas) {
+            const composedDataUrl = await composeFrame({
+              imageDataUrl: rawUrl,
+              headline: pauta.copy.headlineBanner,
+              subheadline: pauta.copy.subHeadlineBanner,
+              cta: pauta.copy.ctaBotao,
+              marca: pauta.marca,
+              aspectRatio: pauta.aspectRatio || '1:1',
+            });
+            let finalUrl: string | undefined;
+            try {
+              const saveRes = await fetch('/api/save-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pautaId: pauta.id, frameName, imageDataUrl: composedDataUrl }),
+              });
+              if (saveRes.ok) {
+                const { publicUrl } = await saveRes.json();
+                finalUrl = publicUrl;
+              }
+            } catch (err) {
+              console.warn('[agente-gif] Falha ao salvar frame composto:', err);
+            }
+            composed[frameName] = finalUrl ?? composedDataUrl;
+            handleFrameGenerated(pauta.id, frameName, composedDataUrl, finalUrl);
+          }
+          upsertPautas([{ ...pauta, frameUrls: composed } as PautaGerada]).catch((err) =>
+            console.warn('[agente-gif] Falha ao persistir frames compostos:', err)
+          );
+        } catch (err) {
+          console.warn('[agente-gif] Falha ao compor texto sobre os frames desta pauta:', err);
+        }
+      }
+    })();
+  }, [agentePautas]);
+
+  const filteredHistory = historyNaoAgente.filter((p) => {
     const matchBrand = brandFilter === "all" || p.marca === brandFilter;
     const matchStatus = statusFilter === "all" || p.status === statusFilter;
     const matchModo = modoFilter === "all" || p.modo === modoFilter;
@@ -635,6 +997,24 @@ function AppInner() {
           >
             <Clock className="w-4 h-4 text-indigo-450" />
             Histórico de Pautas
+          </button>
+
+          <button
+            id="tab-btn-agente"
+            onClick={() => setMainTab('agente')}
+            className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative ${
+              mainTab === 'agente'
+                ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-lg'
+                : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]/50'
+            }`}
+          >
+            <Bot className="w-4 h-4 text-indigo-450" />
+            Modo C: Agente Inteligente
+            {agenteRascunho.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                {agenteRascunho.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -835,12 +1215,12 @@ function AppInner() {
             </div>
 
           </div>
-        ) : (
+        ) : mainTab === 'historico' ? (
           <div className="w-full flex flex-col gap-8 animate-fade-in text-left">
-            
-            {/* Dashboard KPIs consolidado */}
+
+            {/* Dashboard KPIs consolidado — pautas do Agente (modo C) ficam de fora, têm aba própria */}
             <HistoryList
-              history={history}
+              history={historyNaoAgente}
               onClearHistory={handleClearHistory}
               brandFilter={brandFilter}
               setBrandFilter={setBrandFilter}
@@ -879,7 +1259,7 @@ function AppInner() {
                   />
                 )}
 
-                {timeRangeFilteredHistory.length === 0 && history.length > 0 && (
+                {timeRangeFilteredHistory.length === 0 && historyNaoAgente.length > 0 && (
                   <div className="bg-[var(--shell-panel-soft)] text-center py-12 px-8 border border-[var(--shell-border)] border-dashed rounded-[2.5rem] text-[var(--shell-text-muted)] max-w-2xl mx-auto w-full">
                     <span className="text-3xl mb-3 block">🔍</span>
                     <h4 className="text-base font-bold text-[var(--shell-text)]">Nenhuma pauta encontrada nesse período/filtros</h4>
@@ -893,7 +1273,7 @@ function AppInner() {
                   </div>
                 )}
 
-                {history.length === 0 && (
+                {historyNaoAgente.length === 0 && (
                   <div className="bg-[var(--shell-panel-soft)] text-center py-20 px-8 border border-[var(--shell-border)] border-dashed rounded-[2.5rem] text-[var(--shell-text-muted)] max-w-2xl mx-auto w-full">
                     <span className="text-5xl mb-4 block animate-bounce">🤖</span>
                     <h4 className="text-lg font-bold text-[var(--shell-text)]">Seu histórico de pautas geradas está vazio</h4>
@@ -912,6 +1292,20 @@ function AppInner() {
             )}
 
           </div>
+        ) : (
+          <ModoCPanel
+            agentePautas={agentePautas}
+            allFrameImages={allFrameImages}
+            onOpenPautaDetail={(id) => setGalleryOpenPautaId(id)}
+            testesAb={testesAb}
+            onAceitarAb={handleAceitarAb}
+            onRejeitarAb={handleRejeitarAb}
+            regenerandoAbId={regenerandoAbId}
+            onEnviarInsider={handleEnviarInsider}
+            enviandoInsiderId={enviandoInsiderId}
+            onDownloadGif={handleDownloadGifAgente}
+            baixandoGifId={baixandoGifId}
+          />
         )}
 
       </div>

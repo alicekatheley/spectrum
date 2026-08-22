@@ -1,5 +1,11 @@
 import { PautaGerada } from "./types";
 
+export function modoLabel(modo: PautaGerada['modo']): string {
+  if (modo === 'A') return 'Descoberta Livre';
+  if (modo === 'C') return 'Agente (GIF)';
+  return 'Briefing Assistido';
+}
+
 /**
  * Helper to download any string content as a client-side file
  */
@@ -25,7 +31,7 @@ PROPOSTA DE PAUTA DE CRM - PLAYBOOK DE CRM HITS
 ===========================================================
 ID DA PAUTA: ${pauta.id}
 CONCEITO DE ENVIO: ${pauta.marca}
-MÉTODO DE CRIAÇÃO: Modo ${pauta.modo} - ${pauta.modo === 'A' ? 'Descoberta Livre' : 'Briefing Assistido'}
+MÉTODO DE CRIAÇÃO: Modo ${pauta.modo} - ${modoLabel(pauta.modo)}
 DATA DE GERAÇÃO: ${dataLocal}
 STATUS: ${pauta.status.toUpperCase()}
 ===========================================================

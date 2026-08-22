@@ -1,5 +1,5 @@
 {
-  "name": "Gerador de Emails Hits",
+  "name": "Spectrum",
   "description": "Gerador inteligente de pautas de CRM (email) com banners gamificados e estimativas baseadas no histórico de hits das marcas Apice e Barbours.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

@@ -15,7 +15,6 @@
     "sb:types": "supabase gen types typescript --project-id krxuwejvkdkrjrppcwsw --schema public > src/lib/database.types.ts"
   },
   "dependencies": {
-    "hono": "^4.4.0",
     "@google/genai": "^1.29.0",
     "@supabase/supabase-js": "^2.106.1",
     "@tailwindcss/vite": "^4.1.14",
@@ -24,8 +23,10 @@
     "express": "^4.21.2",
     "gif.js": "^0.2.0",
     "gifshot": "^0.4.5",
+    "hono": "^4.4.0",
     "lucide-react": "^0.546.0",
     "motion": "11.12.0",
+    "node-cron": "^4.6.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "sharp": "^0.35.0",
@@ -34,6 +35,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/node-cron": "^3.0.11",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "supabase": "^2.101.0",

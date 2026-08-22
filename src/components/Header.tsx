@@ -1,4 +1,4 @@
-import { Sparkles, BookOpen, Clock, Heart, Award, ShieldAlert, Sun, Moon } from "lucide-react";
+import { BookOpen, Clock, Heart, Award, ShieldAlert, Sun, Moon } from "lucide-react";
 import { Brand } from "../types";
 import { useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
@@ -22,11 +22,11 @@ export default function Header({ currentBrand, setCurrentBrand, userEmail, onLog
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
         <div>
           <div className="flex items-center gap-3 mb-2">
-            <div className={`p-2 rounded-xl ${currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-[#688D65]' : 'bg-[#BF0F26]/20 text-[#BF0F26]'} transition-all duration-300`}>
-              <Sparkles className="w-6 h-6 animate-pulse" />
+            <div className="rounded-xl overflow-hidden w-10 h-10 shrink-0">
+              <img src="/favicon.svg" alt="Spectrum" className="w-full h-full object-cover" />
             </div>
             <h1 className="text-2xl font-sans font-bold tracking-tight text-[var(--shell-text)]">
-              Gerador de Emails Hits
+              Spectrum
             </h1>
           </div>
           <p className="text-[var(--shell-text-muted)] text-sm max-w-xl leading-relaxed">

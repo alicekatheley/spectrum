@@ -163,6 +163,7 @@ export function buildImagePrompt({
   estiloIlustracao, paleta, mecanica, recompensa,
   aspectRatio, compVariant, lightVariant,
   headline, subheadline, cta, direcionamento, totalFrames, frameRefCount = 0, productRefCount = 0, frameMetadata,
+  ajusteRegeneracao,
 }: {
   frameName: string;
   frameDescription: string;
@@ -182,6 +183,7 @@ export function buildImagePrompt({
   totalFrames?: number;
   frameRefCount?: number;
   productRefCount?: number;
+  ajusteRegeneracao?: string;
   frameMetadata?: {
     backgroundColor?: string;
     headlineFontSize?: string;
@@ -238,17 +240,28 @@ export function buildImagePrompt({
   for (let i = 0; i < productRefCount; i++) {
     refLabels.push(`[${refLabels.length + 1}] REAL PRODUCT REFERENCE PHOTO — this shows the actual physical product(s) that must appear in the scene. Reproduce it EXACTLY: same color, texture, material, proportions, logo/branding/pull-tab text. Never restyle, redesign or substitute it.`);
   }
-  if (frameRefCount >= 1) {
-    refLabels.push(`[${refLabels.length + 1}] FRAME 1 (the master frame) — match its camera zoom, framing, composition, lighting and background color.`);
-  }
-  if (frameRefCount >= 2) {
-    refLabels.push(`[${refLabels.length + 1}] the immediately preceding frame — use ONLY to continue the hero element's motion/state naturally, not for background/composition.`);
+  if (ajusteRegeneracao) {
+    // Modo de ajuste pontual: a referência de frame anexada é a imagem ATUAL deste mesmo
+    // frame (antes da edição), não o mestre nem o frame anterior — o rótulo precisa refletir
+    // isso, senão o modelo trata como "outro frame da sequência" em vez de "edite esta imagem".
+    if (frameRefCount >= 1) {
+      refLabels.push(`[${refLabels.length + 1}] THE CURRENT VERSION OF THIS EXACT FRAME, BEFORE THE EDIT — reproduce it pixel-for-pixel except for the specific change requested above. This is not a different frame in a sequence — it is this frame's starting point.`);
+    }
+  } else {
+    if (frameRefCount >= 1) {
+      refLabels.push(`[${refLabels.length + 1}] FRAME 1 (the master frame) — match its camera zoom, framing, composition, lighting and background color.`);
+    }
+    if (frameRefCount >= 2) {
+      refLabels.push(`[${refLabels.length + 1}] the immediately preceding frame — use ONLY to continue the hero element's motion/state naturally, not for background/composition.`);
+    }
   }
   const refOrderBlock = refLabels.length > 0
     ? `REFERENCE IMAGES ATTACHED, IN THIS EXACT ORDER:\n${refLabels.join('\n')}`
     : '';
 
-  const consistencyBlock = isFirstFrame
+  const consistencyBlock = ajusteRegeneracao
+    ? (frameRefCount >= 1 ? `${refOrderBlock}\nReproduce the attached reference image closely — same background, composition, framing, lighting and every object's position — except for the specific change requested above.` : '')
+    : isFirstFrame
     ? `FRAME 1 — ESTABLISH FIXED LAYOUT:
 You are creating the MASTER FRAME that all other frames must copy exactly.
 ${refOrderBlock ? `${refOrderBlock}\n` : ''}Define and lock these elements permanently:
@@ -265,12 +278,12 @@ IMPORTANT: Choose specific values now and stick to them:
 
 The hero object (ribbon/scissors/etc) occupies the MIDDLE area only.
 Camera zoom, distance and framing: choose them now and lock them — every subsequent frame must use this EXACT same zoom level and framing, zero variation.
-Lighting: bright, soft studio light, perfectly even from edge to edge — corners and borders exactly as bright and saturated as the center.`
+Lighting: soft, natural studio light with a gentle, even falloff toward the edges — a plain, clean gradient or solid background. No visible light rays, sunburst, lens flare, glow bursts, or radiating beams of light anywhere in the image; any residual vignette is corrected separately after generation, so keep the lighting simple and photographic, not stylized.`
 
     : `FRAME ${frameNumber} — COPY MASTER FRAME EXACTLY, SAME CAMERA AND LIGHTING:
 
 ${refOrderBlock}
-Camera and lighting stay fixed to match the master frame: same zoom level, focal length, framing and crop, same light direction, color temperature and intensity. The hero object must occupy the SAME pixel area at the SAME distance from camera, lit exactly the same way as in the master frame. You must reproduce it with ONE change only.
+Camera and lighting stay fixed to match the master frame: same zoom level, focal length, framing and crop, same light direction, color temperature and intensity. Reproduce the master frame's exact exposure, brightness and contrast — do NOT re-apply or increase brightness/evenness independently; copy it as-is, even if it looks slightly uneven. The hero object must occupy the SAME pixel area at the SAME distance from camera, lit exactly the same way as in the master frame. You must reproduce it with ONE change only.
 ${frameMetadata ? `
 EXTRACTED MEASUREMENTS FROM MASTER FRAME (use these EXACT values):
 - Background color: ${frameMetadata.backgroundColor ?? 'match reference'}
@@ -298,6 +311,11 @@ If you change ANYTHING about the text layout, font size, button size, colors, ca
 The viewer will see these as an animation — any unintended movement, text shift, or size change creates a distracting flicker.`;
 
   return [
+    // 0. Ajuste pontual de regeneração deste frame específico — prioridade absoluta
+    ajusteRegeneracao
+      ? `=== ⚠️ ONE-OFF RE-GENERATION REQUEST FOR THIS EXACT FRAME — ABSOLUTE HIGHEST PRIORITY, OVERRIDE EVERYTHING BELOW IF CONFLICT ===\n"${ajusteRegeneracao}"\nApply this change to FRAME ${frameNumber} specifically. Keep everything else about the frame — product identity, position, composition, background, lighting — exactly as it already was, changing ONLY what this instruction asks for.`
+      : '',
+
     // 1. Direcionamento do usuário — prioridade máxima
     direcionamento
       ? `=== DIRECT USER VISUAL DIRECTION (may describe the FULL sequence of ${totalFrames ?? '?'} frames) — HIGHEST PRIORITY — OVERRIDE EVERYTHING BELOW IF CONFLICT ===\n"${direcionamento}"\nFollow every detail literally: colors, objects, style, composition, lighting, background. Do NOT deviate.\n⚠️ This is FRAME ${frameNumber}${isFirstFrame ? ' (the FIRST frame)' : isLastFrame ? ' (the LAST frame)' : ' (a MIDDLE frame)'} of the sequence. Apply ONLY the part of the direction above that describes FRAME ${frameNumber} (it may be labeled "Frame ${frameNumber}" or similar in the text) — show the object in state: ${frameState}. IGNORE the descriptions of the other frames in that text; they do not apply here.`

@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { PautaGerada } from '../types';
+import type { PautaGerada, TesteAbProposta } from '../types';
 
 // Maps a DB row (snake_case) to the PautaGerada interface
 function fromDb(row: Record<string, unknown>): PautaGerada {
@@ -17,6 +17,7 @@ function fromDb(row: Record<string, unknown>): PautaGerada {
     dataCriacao: (row.data_criacao ?? row.dataCriacao) as string,
     inputOriginal: row.input_original ?? undefined,
     aspectRatio: (row.aspect_ratio ?? undefined) as string | undefined,
+    frameUrls: (row.frame_urls ?? undefined) as Record<string, string> | undefined,
   } as any;
 }
 
@@ -36,6 +37,7 @@ function toDb(p: PautaGerada) {
     data_criacao: p.dataCriacao,
     input_original: (p as any).inputOriginal ?? null,
     aspect_ratio: (p as any).aspectRatio ?? null,
+    frame_urls: (p as any).frameUrls ?? null,
   };
 }
 

@@ -1,11 +1,13 @@
 import express from "express";
 import path from "path";
+import cron from "node-cron";
 import { createServer as createViteServer } from "vite";
 import {
   supabase, supabaseCrmAi,
   getDatabaseDisparos, getMecanicasCatalog, getCrmAiMarcas, getCrmAiEstilos,
   buildVisualHitsBlock, autoRegisterMecanica,
   loadDisparosFromSupabase, loadMecanicasFromSupabase, loadCrmAiContext,
+  loadConteudosGifAprendizado, getConteudosGifAprendizado, getFeedbackAgenteGif,
 } from "./supabase.ts";
 import {
   VALID_IMAGE_RATIOS, VALID_IMAGE_MODELS, DEFAULT_IMAGE_MODEL,
@@ -15,7 +17,10 @@ import {
   getBrandDna, buildImagePrompt, uploadReferenceToPiApp, generateImageViaPiApp,
 } from "./piapp.ts";
 import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique } from "./validators.ts";
-import { generatePautaContent, generateVariationContent, ai as geminiAi } from "./gemini.ts";
+import {
+  generatePautaContent, generateVariationContent, generateGifAgentConcept, generateAbTestProposal,
+  ai as geminiAi,
+} from "./gemini.ts";
 
 export const app = express();
 const PORT = 3000;
@@ -234,6 +239,7 @@ app.post("/api/generate-image", async (req, res) => {
       referenceFrameUrls: rawFrameRefs,
       direcionamento,
       totalFrames,
+      ajusteRegeneracao,
     } = req.body;
 
     if (!frameDescription || typeof frameDescription !== 'string') {
@@ -350,6 +356,7 @@ Extract:
       totalFrames:      typeof totalFrames === 'number' ? totalFrames : undefined,
       frameRefCount:    frameRefInputs.length,
       productRefCount:  refImages.length,
+      ajusteRegeneracao: typeof ajusteRegeneracao === 'string' && ajusteRegeneracao.trim() ? ajusteRegeneracao.trim() : undefined,
       frameMetadata,
     });
     console.log(`[generate-image] Prompt (${(prompt.split(' ').length)} words): ${prompt.slice(0, 120)}…`);
@@ -469,6 +476,249 @@ Extract:
   }
 });
 
+// Gera os 3 frames de um GIF em sequência (não em paralelo): frame 1 é a "master frame" e serve
+// de referência visual pros frames 2 e 3, pra manter objeto/posição/layout consistentes entre eles.
+// Extraído da rota /api/generate-gif pra ser reaproveitado pelo pipeline automático do agente.
+async function generateGifFramesSequential(opts: {
+  marca: string;
+  pautaId?: string;
+  aspectRatio: string;
+  imageModel: string;
+  estiloIlustracao?: string;
+  paleta?: { cores?: string[] };
+  mecanica?: string;
+  recompensa?: string;
+  frameInicial: string;
+  frameIntermediario: string;
+  frameFinal: string;
+  sharedRefUrls?: string[];
+  styleIndex?: number;
+}): Promise<{
+  results: Array<{ frameName: string; imageBytes: string; mimeType: string; publicUrl: string | null }>;
+  imageModel: string;
+  compVariant: string;
+  lightVariant: string;
+}> {
+  const { marca, pautaId, frameInicial, frameIntermediario, frameFinal } = opts;
+  const brandDna = getBrandDna(marca);
+  if (!brandDna) throw new Error(`marca inválida: ${marca}`);
+
+  const aspectRatio = opts.aspectRatio;
+  let imageModel = opts.imageModel;
+  const sharedRefUrls = opts.sharedRefUrls ?? [];
+
+  const styleIndex = typeof opts.styleIndex === 'number' && opts.styleIndex >= 0
+    ? opts.styleIndex % COMPOSITION_VARIANTS.length
+    : Math.floor(Math.random() * COMPOSITION_VARIANTS.length);
+  const compVariant = COMPOSITION_VARIANTS[styleIndex];
+  const lightVariant = LIGHTING_VARIANTS[(styleIndex + 2) % LIGHTING_VARIANTS.length];
+
+  const frames = [
+    { frameName: 'inicial',       frameDescription: frameInicial },
+    { frameName: 'intermediario', frameDescription: frameIntermediario },
+    { frameName: 'final',         frameDescription: frameFinal },
+  ];
+
+  if (sharedRefUrls.length > 0 && imageModel === 'wavespeed-gpt-image-2-t2i') {
+    imageModel = 'wavespeed-gpt-image-2-edit';
+    console.log('[generate-gif] Referência de imagem detectada — trocando para wavespeed-gpt-image-2-edit');
+  }
+
+  console.log(`[generate-gif] Gerando ${frames.length} frames sequencialmente para ${marca} (${aspectRatio}, ${imageModel})`);
+
+  const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
+  let masterFrameRefUrl: string | undefined;
+
+  for (const { frameName, frameDescription } of frames) {
+    const prompt = buildImagePrompt({
+      frameName,
+      frameDescription,
+      marca,
+      brandDna,
+      estiloIlustracao: opts.estiloIlustracao,
+      paleta:           opts.paleta,
+      mecanica:         opts.mecanica,
+      recompensa:       opts.recompensa,
+      aspectRatio,
+      compVariant,
+      lightVariant,
+      totalFrames: frames.length,
+      frameRefCount: masterFrameRefUrl ? 1 : 0,
+      productRefCount: sharedRefUrls.length,
+    });
+
+    const referenceImageUrls = masterFrameRefUrl ? [...sharedRefUrls, masterFrameRefUrl] : sharedRefUrls;
+    const result = await generateImageViaPiApp(
+      prompt, aspectRatio, imageModel,
+      referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
+    );
+    frameResults.push({ frameName, ...result });
+
+    if (!masterFrameRefUrl) {
+      try {
+        masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`);
+        console.log(`[generate-gif] Frame "${frameName}" definido como master frame de referência.`);
+      } catch (err: any) {
+        console.warn('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
+      }
+    }
+  }
+
+  const results = await Promise.all(
+    frameResults.map(async ({ frameName, imageBytes, mimeType }) => {
+      let publicUrl: string | null = null;
+      if (supabase && typeof pautaId === 'string' && pautaId) {
+        try {
+          const safeMarca = marca.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const storagePath = `${safeMarca}/${pautaId}/${frameName}.png`;
+          const imgBuffer = Buffer.from(imageBytes, 'base64');
+          const { error: uploadError } = await supabase.storage
+            .from('campaign-images')
+            .upload(storagePath, imgBuffer, { contentType: mimeType, upsert: true });
+          if (!uploadError) {
+            const { data: urlData } = supabase.storage.from('campaign-images').getPublicUrl(storagePath);
+            publicUrl = urlData.publicUrl;
+            console.log(`[generate-gif] Frame ${frameName} salvo no Storage: ${publicUrl}`);
+          }
+        } catch (storageErr: any) {
+          console.warn(`[generate-gif] Storage falhou para ${frameName}:`, storageErr.message);
+        }
+      }
+      return { frameName, imageBytes, mimeType, publicUrl };
+    })
+  );
+
+  return { results, imageModel, compVariant, lightVariant };
+}
+
+// ─── Agente Autônomo de GIF ────────────────────────────────────────────────────
+// Gera pautas modo 'C' automaticamente (10/dia via cron, mais regeneração imediata
+// quando uma pauta é reprovada). Sem separação por marca no grounding (v1): o pool de
+// conteudos_links usado como aprendizado é geral, só a marca de destino da pauta é
+// escolhida em round-robin pra satisfazer o playbook/schema existentes.
+const AGENTE_MARCAS: Array<'Apice' | 'Barbours'> = ['Apice', 'Barbours'];
+let _agenteMarcaIndex = 0;
+
+async function runAgenteGifPipeline(motivoRejeicaoAnterior?: string): Promise<any | null> {
+  if (!supabase) return null;
+  try {
+    const marca = AGENTE_MARCAS[_agenteMarcaIndex % AGENTE_MARCAS.length];
+    _agenteMarcaIndex++;
+
+    const conteudosAprendizado = getConteudosGifAprendizado();
+    const { aprovados, reprovados } = await getFeedbackAgenteGif();
+
+    const concept = await generateGifAgentConcept({
+      marca,
+      conteudosAprendizado,
+      feedbackAprovados: aprovados,
+      feedbackRejeitados: reprovados,
+      motivoRejeicaoAnterior,
+    });
+
+    if (!concept?.copy || !concept?.operacional) {
+      console.warn('[agente-gif] Conceito retornado pelo Gemini veio incompleto, descartando esta rodada.');
+      return null;
+    }
+
+    const combinedRiscos = [...(concept.riscos || [])];
+    const { assunto: assuntoSanitizado, riscos: riscosFinais } = sanitizeAssunto(concept.copy.assunto || "", marca, combinedRiscos);
+    concept.copy.assunto = assuntoSanitizado;
+    concept.copy.preHeader = "Mas, vou precisar cancelar em breve";
+    concept.copy.headlineBanner = sanitizeBannerText(concept.copy.headlineBanner || "");
+    concept.copy.subHeadlineBanner = sanitizeBannerText(concept.copy.subHeadlineBanner || "");
+
+    const pautaId = `pauta-agente-${Date.now()}`;
+    const aspectRatio = '1:1';
+    const frames: string[] = concept.visual?.frames ?? [];
+    const frameInicial = frames[0];
+    const frameIntermediario = frames[1] ?? frames[0];
+    const frameFinal = frames[frames.length - 1] ?? frames[0];
+
+    let frameUrls: Record<string, string> | undefined;
+    if (PIAPP_API_KEY && frameInicial && frameFinal) {
+      try {
+        const { results } = await generateGifFramesSequential({
+          marca,
+          pautaId,
+          aspectRatio,
+          imageModel: DEFAULT_IMAGE_MODEL,
+          estiloIlustracao: concept.visual?.estiloIlustracao,
+          paleta: concept.visual?.paletaRecomendada,
+          mecanica: concept.operacional?.mecanicaEscolhida,
+          recompensa: concept.operacional?.recompensaEscolhida,
+          frameInicial,
+          frameIntermediario,
+          frameFinal,
+        });
+        // Chaves "frame_0"/"frame_1"/"frame_2" (não "inicial"/"intermediario"/"final") pra casar
+        // com a convenção de nomes que o GifViewer/reconstrução do front já ordena corretamente
+        // (ordem alfabética == ordem cronológica). `results` já vem na ordem inicial→final.
+        const urls: Record<string, string> = {};
+        results.forEach((r, i) => { if (r.publicUrl) urls[`frame_${i}`] = r.publicUrl; });
+        if (Object.keys(urls).length > 0) frameUrls = urls;
+      } catch (err: any) {
+        console.warn('[agente-gif] Falha ao gerar frames automaticamente (pauta fica sem imagem):', err.message);
+      }
+    }
+
+    const pauta = {
+      id: pautaId,
+      marca,
+      modo: 'C',
+      tipo_geracao: 'imagem',
+      copy: concept.copy,
+      visual: concept.visual,
+      operacional: concept.operacional,
+      previsao: concept.previsao,
+      riscos: risksUnique(riscosFinais),
+      status: 'rascunho',
+      data_criacao: new Date().toISOString(),
+      aspect_ratio: aspectRatio,
+      frame_urls: frameUrls ?? null,
+    };
+
+    const { error } = await supabase.from('pautas_geradas').upsert(pauta, { onConflict: 'id' });
+    if (error) {
+      console.warn('[agente-gif] Falha ao salvar pauta gerada:', error.message);
+      return null;
+    }
+
+    console.log(`[agente-gif] Nova pauta gerada automaticamente: ${pauta.id} (${marca}) — mecânica "${pauta.operacional?.mecanicaEscolhida}"`);
+    return pauta;
+  } catch (err: any) {
+    console.error('[agente-gif] Erro no pipeline automático:', err.message);
+    return null;
+  }
+}
+
+async function ensureDailyAgenteGifQuota() {
+  if (!supabase) return;
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const { count, error } = await supabase
+    .from('pautas_geradas')
+    .select('id', { count: 'exact', head: true })
+    .eq('modo', 'C')
+    .gte('data_criacao', startOfDay.toISOString());
+  if (error) {
+    console.warn('[agente-gif] Falha ao checar cota diária:', error.message);
+    return;
+  }
+
+  const faltam = 5 - (count ?? 0);
+  if (faltam <= 0) return;
+
+  console.log(`[agente-gif] Gerando ${faltam} pauta(s) automaticamente para completar a cota diária de 5.`);
+  for (let i = 0; i < faltam; i++) {
+    await runAgenteGifPipeline();
+    // Espaça bem as chamadas — o tier gratuito do Gemini limita tokens de entrada por minuto,
+    // e cada rodada carrega um bloco grande de grounding (GIFs analisados + feedback histórico).
+    await new Promise(r => setTimeout(r, 20000));
+  }
+}
+
 app.post("/api/generate-gif", async (req, res) => {
   try {
     if (!PIAPP_API_KEY) {
@@ -495,25 +745,12 @@ app.post("/api/generate-gif", async (req, res) => {
     if (!frameInicial || !frameIntermediario || !frameFinal) {
       return res.status(400).json({ error: "frameInicial, frameIntermediario e frameFinal são obrigatórios." });
     }
-    const brandDna = getBrandDna(marca);
-    if (!brandDna) {
+    if (!getBrandDna(marca)) {
       return res.status(400).json({ error: "marca inválida. Use 'Apice' ou 'Barbours'." });
     }
 
     const aspectRatio = VALID_IMAGE_RATIOS.includes(rawRatio) ? rawRatio : '1:1';
-    let imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
-
-    const styleIndex = typeof rawStyleIndex === 'number' && rawStyleIndex >= 0
-      ? rawStyleIndex % COMPOSITION_VARIANTS.length
-      : Math.floor(Math.random() * COMPOSITION_VARIANTS.length);
-    const compVariant = COMPOSITION_VARIANTS[styleIndex];
-    const lightVariant = LIGHTING_VARIANTS[(styleIndex + 2) % LIGHTING_VARIANTS.length];
-
-    const frames = [
-      { frameName: 'inicial',       frameDescription: frameInicial as string },
-      { frameName: 'intermediario', frameDescription: frameIntermediario as string },
-      { frameName: 'final',         frameDescription: frameFinal as string },
-    ];
+    const imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
 
     const sharedRefUrls: string[] = [];
     const refImagesInput: string[] = Array.isArray(rawRefImages) && rawRefImages.length > 0
@@ -532,83 +769,21 @@ app.post("/api/generate-gif", async (req, res) => {
       }
     }
 
-    if (sharedRefUrls.length > 0 && imageModel === 'wavespeed-gpt-image-2-t2i') {
-      imageModel = 'wavespeed-gpt-image-2-edit';
-      console.log('[generate-gif] Referência de imagem detectada — trocando para wavespeed-gpt-image-2-edit');
-    }
-
-    console.log(`[generate-gif] Gerando ${frames.length} frames sequencialmente para ${marca} (${aspectRatio}, ${imageModel})`);
-
-    // Gerados em sequência (não em paralelo): frame 1 é a "master frame" e serve de referência
-    // visual pros frames 2 e 3, pra manter objeto/posição/layout consistentes entre eles.
-    const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
-    let masterFrameRefUrl: string | undefined;
-
-    for (const { frameName, frameDescription } of frames) {
-      const prompt = buildImagePrompt({
-        frameName,
-        frameDescription,
-        marca:            marca as string,
-        brandDna,
-        estiloIlustracao: estiloIlustracao as string | undefined,
-        paleta:           paleta as { cores?: string[] } | undefined,
-        mecanica:         mecanica as string | undefined,
-        recompensa:       recompensa as string | undefined,
-        aspectRatio,
-        compVariant,
-        lightVariant,
-        totalFrames: frames.length,
-        frameRefCount: masterFrameRefUrl ? 1 : 0,
-        productRefCount: sharedRefUrls.length,
-      });
-
-      const referenceImageUrls = masterFrameRefUrl ? [...sharedRefUrls, masterFrameRefUrl] : sharedRefUrls;
-      const result = await generateImageViaPiApp(
-        prompt, aspectRatio, imageModel,
-        referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
-      );
-      frameResults.push({ frameName, ...result });
-
-      if (!masterFrameRefUrl) {
-        try {
-          masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`);
-          console.log(`[generate-gif] Frame "${frameName}" definido como master frame de referência.`);
-        } catch (err: any) {
-          console.warn('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
-        }
-      }
-    }
-
-    const results = await Promise.all(
-      frameResults.map(async ({ frameName, imageBytes, mimeType }) => {
-        let publicUrl: string | null = null;
-        if (supabase && typeof pautaId === 'string' && pautaId) {
-          try {
-            const safeMarca = (marca as string).toLowerCase().replace(/[^a-z0-9]/g, '');
-            const storagePath = `${safeMarca}/${pautaId}/${frameName}.png`;
-            const imgBuffer = Buffer.from(imageBytes, 'base64');
-            const { error: uploadError } = await supabase.storage
-              .from('campaign-images')
-              .upload(storagePath, imgBuffer, { contentType: mimeType, upsert: true });
-            if (!uploadError) {
-              const { data: urlData } = supabase.storage.from('campaign-images').getPublicUrl(storagePath);
-              publicUrl = urlData.publicUrl;
-              console.log(`[generate-gif] Frame ${frameName} salvo no Storage: ${publicUrl}`);
-            }
-          } catch (storageErr: any) {
-            console.warn(`[generate-gif] Storage falhou para ${frameName}:`, storageErr.message);
-          }
-        }
-        return { frameName, imageBytes, mimeType, publicUrl };
-      })
-    );
+    const {
+      results, imageModel: finalImageModel, compVariant, lightVariant,
+    } = await generateGifFramesSequential({
+      marca, pautaId, aspectRatio, imageModel,
+      estiloIlustracao, paleta, mecanica, recompensa,
+      frameInicial, frameIntermediario, frameFinal,
+      sharedRefUrls, styleIndex: typeof rawStyleIndex === 'number' && rawStyleIndex >= 0 ? rawStyleIndex : undefined,
+    });
 
     if (supabase) {
       const crmAiMarcas = getCrmAiMarcas();
       const marcaId = crmAiMarcas[marca]?.marcaId ?? (marca === 'Apice' ? 1 : 2);
       const gifInitialPrompt = buildImagePrompt({
         frameName: 'inicial', frameDescription: frameInicial as string,
-        marca: marca as string, brandDna,
+        marca: marca as string, brandDna: getBrandDna(marca)!,
         estiloIlustracao: estiloIlustracao as string | undefined,
         paleta: paleta as { cores?: string[] } | undefined,
         mecanica: mecanica as string | undefined,
@@ -619,12 +794,12 @@ app.post("/api/generate-gif", async (req, res) => {
         p_marca_id:   marcaId,
         p_tipo_canal: 'frame',
         p_analisado:  `GIF batch: inicial, intermediario, final`,
-        p_prompt:     frameResults[0] ? gifInitialPrompt : '',
-        p_modelo:     imageModel,
+        p_prompt:     results[0] ? gifInitialPrompt : '',
+        p_modelo:     finalImageModel,
         p_parametros: { aspectRatio, mecanica: mecanica ?? null, recompensa: recompensa ?? null, pautaId: pautaId ?? null, batch: true },
         p_imagens:    results.map(r => ({
           frame:        r.frameName,
-          model:        imageModel,
+          model:        finalImageModel,
           aspect_ratio: aspectRatio,
           mime_type:    r.mimeType,
           gerado_em:    new Date().toISOString(),
@@ -854,6 +1029,99 @@ app.post("/api/approve-pauta", async (req, res) => {
   }
 });
 
+// Feedback humano (aprovar/reprovar) de uma pauta modo 'C' gerada pelo agente. Vira sinal de
+// aprendizado (crm_ai.ia_outputs, tipo_canal='conceito') pra próximas rodadas de geração.
+// Reprovação dispara regeneração imediata; aprovação dispara a proposta de teste A/B.
+app.post("/api/feedback-agente-gif", async (req, res) => {
+  try {
+    if (!supabaseCrmAi) {
+      return res.status(500).json({ error: "Supabase não configurado." });
+    }
+
+    const { pauta, aprovado, motivo } = req.body;
+    if (!pauta || !pauta.id || typeof aprovado !== 'boolean') {
+      return res.status(400).json({ error: "pauta e aprovado (boolean) são obrigatórios." });
+    }
+
+    const marcaId = pauta.marca === 'Apice' ? 1 : 2;
+
+    const { error: feedbackError } = await supabaseCrmAi.from('ia_outputs').insert({
+      marca_id: marcaId,
+      tipo_canal: 'conceito',
+      o_que_foi_analisado: `Conceito de GIF gerado pelo agente (${pauta.marca}) — mecânica "${pauta.operacional?.mecanicaEscolhida ?? ''}"`,
+      fontes_referenciadas: pauta.previsao?.casesReferencia ? { conteudosInspiradores: pauta.previsao.casesReferencia } : null,
+      modelo: 'gemini-2.5-flash',
+      parametros: { pautaId: pauta.id, marca: pauta.marca },
+      recomendacao_estruturada: {
+        copy: pauta.copy,
+        visual: pauta.visual,
+        operacional: pauta.operacional,
+        previsao: pauta.previsao,
+        riscos: pauta.riscos,
+      },
+      aprovado,
+      feedback_usuario: typeof motivo === 'string' && motivo.trim() ? motivo.trim() : null,
+    });
+
+    if (feedbackError) {
+      console.error('[feedback-agente-gif] Erro ao salvar feedback:', feedbackError.message);
+      return res.status(500).json({ error: 'Erro ao salvar feedback.', details: feedbackError.message });
+    }
+
+    let testeAb: any = null;
+    if (aprovado) {
+      try {
+        const candidatos = getConteudosGifAprendizado();
+        if (candidatos.length > 0 && supabase) {
+          const proposta = await generateAbTestProposal({ marca: pauta.marca, pautaAprovada: pauta, candidatosHistoricos: candidatos });
+          const { data, error: insertErr } = await supabase
+            .from('teste_ab_propostas')
+            .insert({
+              marca: pauta.marca,
+              pauta_id: pauta.id,
+              variante_b_conteudo_id: proposta.conteudoId,
+              racional: proposta.racional,
+            })
+            .select('*')
+            .single();
+          if (insertErr) console.warn('[feedback-agente-gif] Falha ao salvar proposta de A/B:', insertErr.message);
+          else testeAb = data;
+        }
+      } catch (abErr: any) {
+        console.warn('[feedback-agente-gif] Falha ao gerar proposta de A/B:', abErr.message);
+      }
+    } else {
+      // Regeneração imediata, fora da cota diária — não bloqueia a resposta ao usuário.
+      runAgenteGifPipeline(typeof motivo === 'string' ? motivo : undefined)
+        .catch((err: any) => console.warn('[feedback-agente-gif] Falha na regeneração imediata:', err.message));
+    }
+
+    res.json({ success: true, testeAb });
+  } catch (err: any) {
+    console.error('[feedback-agente-gif] Erro inesperado:', err);
+    res.status(500).json({ error: 'Erro interno.', details: err.message });
+  }
+});
+
+app.get("/api/teste-ab", async (req, res) => {
+  try {
+    if (!supabase) return res.json({ status: "success", data: [] });
+    const { data, error } = await supabase
+      .from('teste_ab_propostas')
+      .select('*, conteudos_links(nome_design, storage_url, marca)')
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.warn('[teste-ab] Falha ao buscar propostas (provavelmente embed sem cache de FK):', error.message);
+      const fallback = await supabase.from('teste_ab_propostas').select('*').order('created_at', { ascending: false });
+      return res.json({ status: "success", data: fallback.data ?? [] });
+    }
+    res.json({ status: "success", data });
+  } catch (err: any) {
+    console.error('[teste-ab] Erro inesperado:', err);
+    res.status(500).json({ error: 'Erro interno.', details: err.message });
+  }
+});
+
 const isProduction = process.env.NODE_ENV === "production";
 
 export async function startServer() {
@@ -874,6 +1142,14 @@ export async function startServer() {
   await loadDisparosFromSupabase();
   await loadMecanicasFromSupabase();
   await loadCrmAiContext();
+  await loadConteudosGifAprendizado();
+
+  // Agente autônomo de GIF: 10 pautas/dia via cron às 08h, mais catch-up no boot
+  // (cobre o caso do processo de dev não estar rodando no horário agendado).
+  cron.schedule('0 8 * * *', () => {
+    ensureDailyAgenteGifQuota().catch((err: any) => console.error('[agente-gif] Erro no cron diário:', err.message));
+  });
+  ensureDailyAgenteGifQuota().catch((err: any) => console.error('[agente-gif] Erro no catch-up de boot:', err.message));
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Express Server] Iniciado em http://localhost:${PORT}`);
