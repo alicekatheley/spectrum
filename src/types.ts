@@ -4,7 +4,53 @@ export type Brand = 'Apice' | 'Barbours';
 // o conteúdo do agente não é amarrado a marca; qualquer pauta pode ir pra qualquer conta aqui.
 export type ContaInsider = 'Apice' | 'Barbours' | 'Rituaria' | 'Lescent' | 'Kokeshi' | 'Gocase';
 
-export type CampaignContext = 
+// Marcas atendidas pela aba de Geração de Calendários — conjunto mais amplo que `Brand`,
+// que segue restrito às duas marcas com playbook de conteúdo.
+export type MarcaCalendario = 'Apice' | 'Barbours' | 'Rituaria' | 'Gocase' | 'Kokeshi' | 'Lescent';
+
+export type RecomendacaoVolume = 'aumentar' | 'manter' | 'reduzir';
+
+export type DiaSemana = 'DOM' | 'SEG' | 'TER' | 'QUA' | 'QUI' | 'SEX' | 'SAB';
+
+export interface CalendarioOferta {
+  nome: string;
+  receitaPorMil: number;
+}
+
+export interface CalendarioCelula {
+  data: string; // YYYY-MM-DD
+  diaSemana: DiaSemana;
+  // C1 = disparo principal do dia; C2 = disparo complementar (reforço da mesma oferta
+  // ou uma oferta nova), ausente quando o dia tem só um envio.
+  c1: CalendarioOferta;
+  c2: (CalendarioOferta & { tipo: 'novo' | 'reforco' }) | null;
+  recomendacao: RecomendacaoVolume;
+}
+
+export interface CalendarioSemana {
+  label: string; // 'S1', 'S2', ...
+  celulas: CalendarioCelula[];
+}
+
+export interface CalendarioGerado {
+  id: string;
+  marca: MarcaCalendario;
+  dataInicio: string;
+  dataFim: string;
+  semanas: CalendarioSemana[];
+  criadoEm: string;
+}
+
+export interface InputCalendario {
+  marca: MarcaCalendario;
+  dataInicio: string;
+  dataFim: string;
+  eventosEspeciais: string;
+  volumeMensagens: string;
+  diretrizes: string;
+}
+
+export type CampaignContext =
   | 'lancamento' 
   | 'recompra' 
   | 'reativacao' 

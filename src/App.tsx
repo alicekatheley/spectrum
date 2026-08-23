@@ -13,6 +13,8 @@ import ModoCPanel from "./components/ModoCPanel";
 import HistoryGallery from "./components/HistoryGallery";
 import PreviewModal from "./components/PreviewModal";
 import WeeklyPlanner from "./components/WeeklyPlanner";
+import Sidebar, { AppSection } from "./components/Sidebar";
+import CalendarioWorkspace from "./components/calendario/CalendarioWorkspace";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot } from "lucide-react";
 import { loadGifshot } from "./utils/loadGifshot";
@@ -32,6 +34,7 @@ function AppInner() {
   const [authLoading, setAuthLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState(false);
 
+  const [section, setSection] = useState<AppSection>('conteudos');
   const [currentBrand, setCurrentBrand] = useState<Brand>('Apice');
   const [currentMode, setCurrentMode] = useState<'A' | 'B'>('A');
   const [mainTab, setMainTab] = useState<'geracao' | 'historico' | 'agente'>('geracao');
@@ -958,9 +961,19 @@ function AppInner() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--shell-bg)] text-[var(--shell-text)] py-10 px-4 sm:px-6 lg:px-8 font-sans antialiased selection:bg-[#688D65]/30">
-      <div className="max-w-7xl mx-auto flex flex-col gap-8">
-        
+    <div className="min-h-screen bg-[var(--shell-bg)] text-[var(--shell-text)] font-sans antialiased selection:bg-[#688D65]/30">
+      <Sidebar section={section} setSection={setSection} />
+
+      <div className="ml-16 lg:ml-60 py-10 px-4 sm:px-6 lg:px-8">
+      <div className={`${section === 'calendarios' ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col gap-8`}>
+
+        {section === 'calendarios' ? (
+          <CalendarioWorkspace
+            userEmail={session?.user?.email}
+            onLogout={() => supabase?.auth.signOut()}
+          />
+        ) : (
+        <>
         {/* Top Header & Brand Selector */}
         <Header
           currentBrand={currentBrand}
@@ -1307,7 +1320,10 @@ function AppInner() {
             baixandoGifId={baixandoGifId}
           />
         )}
+        </>
+        )}
 
+      </div>
       </div>
 
       {activePreviewPauta && (
