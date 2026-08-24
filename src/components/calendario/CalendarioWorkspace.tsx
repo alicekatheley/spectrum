@@ -1,9 +1,11 @@
-import { useState } from "react";
-import { CalendarDays, Lock, Moon, Sun } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CalendarDays, Loader2, Lock, Moon, RefreshCw, Sun } from "lucide-react";
 import { CalendarioGerado, MarcaCalendario, ModoCalendario } from "../../types";
 import { useTheme } from "../../contexts/ThemeContext";
-import { gerarCalendarioDemo, MARCAS_SEM_MODELO } from "../../utils/calendarioDemo";
+import { gerarCalendarioDemo, MARCAS_SEM_MODELO, procedenciaDoCatalogo } from "../../utils/calendarioDemo";
+import { EdicaoSlot, chaveSlot, editarSlot, removerSlot } from "../../utils/editarCalendario";
 import CalendarioGrid from "./CalendarioGrid";
+import EditorSlot from "./EditorSlot";
 import PainelResultado from "./PainelResultado";
 
 interface CalendarioWorkspaceProps {
@@ -20,17 +22,29 @@ const MARCAS: { key: MarcaCalendario; label: string; cor: string }[] = [
   { key: 'Lescent', label: 'Lescent', cor: '#242323' },
 ];
 
-const MODOS: { key: ModoCalendario; label: string; resumo: string }[] = [
+const MODOS: { key: ModoCalendario; label: string; resumo: string; parametro: string }[] = [
   {
     key: 'receita_maxima',
     label: 'Receita máxima',
-    resumo: 'Maximiza receita no período respeitando o teto de volume. A eficiência é o que cede.',
+    resumo: 'Usa o teto de volume saudável da base e distribui entre os dias fortes. A eficiência é o que cede.',
+    parametro: 'Onde ele para: no teto de saúde da base. Volume acima disso não é decisão de calendário.',
   },
   {
     key: 'eficiencia',
     label: 'Eficiência (R$/mil)',
-    resumo: 'Maximiza receita por mil envios sem furar o piso de receita. Corta os 3ºs slots primeiro.',
+    resumo: 'Corta os 3ºs disparos primeiro e reduz volume — comprando R$/mil com receita, na taxa medida.',
+    parametro: 'Onde ele para: no corte de 15% do volume. Com piso de receita declarado, para antes.',
   },
+];
+
+const DIAS_SEMANA: { dow: number; label: string }[] = [
+  { dow: 0, label: 'Dom' },
+  { dow: 1, label: 'Seg' },
+  { dow: 2, label: 'Ter' },
+  { dow: 3, label: 'Qua' },
+  { dow: 4, label: 'Qui' },
+  { dow: 5, label: 'Sex' },
+  { dow: 6, label: 'Sáb' },
 ];
 
 const AVISO_INTEGRACAO = 'Ação ainda não conectada à base de dados — integração pendente.';
@@ -41,6 +55,8 @@ const CARD = 'bg-[var(--shell-panel)] border border-[var(--shell-border)] rounde
 const TITULO_CARD = 'text-sm font-bold uppercase tracking-widest text-[var(--shell-text)]';
 const BOTAO_SECUNDARIO =
   'bg-[var(--shell-panel-soft)] hover:bg-[var(--shell-border)] text-[var(--shell-text)] border border-[var(--shell-border)] px-5 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed';
+const OPCIONAL =
+  'text-[10px] font-mono uppercase tracking-wider text-[var(--shell-text-muted)] opacity-70 normal-case';
 
 /** Campo numérico opcional: string vazia vira `undefined`, não 0. */
 function paraNumero(texto: string): number | undefined {
@@ -48,6 +64,11 @@ function paraNumero(texto: string): number | undefined {
   if (!limpo) return undefined;
   const valor = Number(limpo);
   return Number.isFinite(valor) ? valor : undefined;
+}
+
+interface Mensagem {
+  papel: 'usuario' | 'ia';
+  texto: string;
 }
 
 export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioWorkspaceProps) {
@@ -61,13 +82,20 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [metaReceita, setMetaReceita] = useState('');
-  const [volumeMaximo, setVolumeMaximo] = useState('');
   const [metaRpm, setMetaRpm] = useState('');
   const [pisoReceita, setPisoReceita] = useState('');
+  const [diasAgressivos, setDiasAgressivos] = useState<number[]>([]);
   const [eventosEspeciais, setEventosEspeciais] = useState('');
   const [calendario, setCalendario] = useState<CalendarioGerado | null>(null);
 
-  const [perguntaIa, setPerguntaIa] = useState('');
+  const [slotSelecionado, setSlotSelecionado] = useState<string | null>(null);
+  const [erroEdicao, setErroEdicao] = useState<string | null>(null);
+
+  const [conversa, setConversa] = useState<Mensagem[]>([]);
+  const [pergunta, setPergunta] = useState('');
+  const [carregandoIa, setCarregandoIa] = useState(false);
+  const [erroIa, setErroIa] = useState<string | null>(null);
+
   const [novaOferta, setNovaOferta] = useState('');
   const [agressividade, setAgressividade] = useState('2');
   const [aviso, setAviso] = useState<string | null>(null);
@@ -75,30 +103,116 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
   const marcaSemModelo = MARCAS_SEM_MODELO.includes(marca);
   const periodoValido = Boolean(dataInicio && dataFim && dataInicio <= dataFim);
   const podeGerar = periodoValido && !marcaSemModelo;
+  const slotAberto = calendario?.slots.find((s) => chaveSlot(s) === slotSelecionado) ?? null;
+
+  // Deriva da marca DO CALENDÁRIO, não da marca selecionada no formulário: depois de gerar,
+  // o usuário pode trocar o seletor sem gerar de novo, e o aviso tem de continuar descrevendo
+  // o plano que está na tela.
+  const procedencia = calendario ? procedenciaDoCatalogo(calendario.marca) : 'sintetico';
+
+  /**
+   * Chama a leitura assistida. O calendário vai inteiro no corpo: a IA explica um plano que
+   * já existe e não tem de onde tirar um número que não esteja ali (REGRA 1).
+   */
+  const consultarIa = async (cal: CalendarioGerado, texto?: string) => {
+    setCarregandoIa(true);
+    setErroIa(null);
+    try {
+      const resposta = await fetch('/api/calendario/explicar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ calendario: cal, pergunta: texto, eventosEspeciais }),
+      });
+      const corpo = await resposta.json();
+      if (!resposta.ok) throw new Error(corpo?.error ?? 'Falha na leitura.');
+      setConversa((atual) => [...atual, { papel: 'ia', texto: corpo.data.texto }]);
+    } catch (e: any) {
+      setErroIa(e?.message ?? 'Não foi possível falar com a leitura assistida.');
+    } finally {
+      setCarregandoIa(false);
+    }
+  };
 
   const handleGerar = () => {
     if (!podeGerar) return;
     setAviso(null);
-    setCalendario(
-      gerarCalendarioDemo({
-        marca,
-        modo,
-        dataInicio,
-        dataFim,
-        metaReceita: paraNumero(metaReceita),
-        volumeMaximo: paraNumero(volumeMaximo),
-        metaRpm: paraNumero(metaRpm),
-        pisoReceita: paraNumero(pisoReceita),
-        eventosEspeciais,
-      }),
-    );
+    setSlotSelecionado(null);
+    setErroEdicao(null);
+    const gerado = gerarCalendarioDemo({
+      marca,
+      modo,
+      dataInicio,
+      dataFim,
+      metaReceita: paraNumero(metaReceita),
+      metaRpm: paraNumero(metaRpm),
+      pisoReceita: paraNumero(pisoReceita),
+      diasAgressivos,
+      eventosEspeciais,
+    });
+    setCalendario(gerado);
+    setConversa([]);
+    void consultarIa(gerado);
+  };
+
+  const handleEditar = (edicao: EdicaoSlot) => {
+    if (!calendario || !slotAberto) return;
+    const proximo = editarSlot(calendario, chaveSlot(slotAberto), edicao);
+    if (!proximo) {
+      setErroEdicao(
+        'Alteração recusada: o horário ou a família já estão ocupados neste dia (H2 é rígida e não cede na edição).',
+      );
+      return;
+    }
+    setErroEdicao(null);
+    setCalendario(proximo);
+    // A chave do slot é (data, hora, oferta): editar hora ou oferta a invalida, então o
+    // painel precisa ser reapontado para a nova identidade em vez de simplesmente fechar.
+    const novaChave = [
+      slotAberto.data,
+      edicao.hora ?? slotAberto.hora,
+      edicao.oferta?.trim() || slotAberto.oferta,
+    ].join('|');
+    setSlotSelecionado(proximo.slots.some((s) => chaveSlot(s) === novaChave) ? novaChave : null);
+  };
+
+  const handleRemover = () => {
+    if (!calendario || !slotSelecionado) return;
+    const proximo = removerSlot(calendario, slotSelecionado);
+    if (!proximo) {
+      setErroEdicao('Não dá para esvaziar o dia: um dia sem disparo nenhum sai do plano, não é um dia editado.');
+      return;
+    }
+    setErroEdicao(null);
+    setCalendario(proximo);
+    setSlotSelecionado(null);
+  };
+
+  const handlePerguntar = () => {
+    if (!calendario || !pergunta.trim() || carregandoIa) return;
+    const texto = pergunta.trim();
+    setConversa((atual) => [...atual, { papel: 'usuario', texto }]);
+    setPergunta('');
+    void consultarIa(calendario, texto);
   };
 
   const trocarMarca = (nova: MarcaCalendario) => {
     setMarca(nova);
     setCalendario(null);
+    setSlotSelecionado(null);
+    setConversa([]);
     setAviso(null);
   };
+
+  const alternarDia = (dow: number) =>
+    setDiasAgressivos((atual) =>
+      atual.includes(dow) ? atual.filter((d) => d !== dow) : [...atual, dow].sort(),
+    );
+
+  // Rola para a resposta nova sem puxar a página inteira.
+  const fimDaConversa = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (conversa.length > 1) fimDaConversa.current?.scrollIntoView({ block: 'nearest' });
+  }, [conversa.length]);
 
   return (
     <div className="flex flex-col gap-8 animate-fade-in text-left">
@@ -114,7 +228,8 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
           </h1>
           <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed mt-1">
             Define o período e o objetivo; o modelo monta a grade de slots — dia, horário, oferta,
-            família e volume — a partir dos índices medidos no histórico da marca.
+            família e volume — a partir dos índices medidos no histórico da marca. Depois de
+            gerado, tudo é editável.
           </p>
         </div>
 
@@ -204,19 +319,20 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
               <span className={LABEL}>Objetivo</span>
               <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed max-w-3xl">
                 Receita e eficiência não têm ótimo comum: cortar 10% do volume derruba a receita em
-                ~3,2% e sobe o R$/mil em ~7,6%. Os dois modos são posições na mesma curva — a
-                fronteira completa vem junto com o calendário.
+                ~3,2% e sobe o R$/mil em ~7,6%. Os dois modos são posições na mesma curva, e cada um
+                tem um ponto onde para — nenhum dos dois vai até o infinito. A fronteira completa
+                vem junto com o calendário.
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {MODOS.map(({ key, label, resumo }) => {
+              {MODOS.map(({ key, label, resumo, parametro }) => {
                 const ativo = modo === key;
                 return (
                   <button
                     key={key}
                     id={`calendario-modo-${key.replace('_', '-')}`}
                     onClick={() => setModo(key)}
-                    className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                    className={`text-left p-4 rounded-2xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
                       ativo
                         ? 'border-indigo-500/60 bg-indigo-500/10'
                         : 'border-[var(--shell-border)] bg-[var(--shell-panel-soft)] hover:border-[var(--shell-text-muted)]/40'
@@ -229,7 +345,10 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                     >
                       {label}
                     </span>
-                    <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed mt-1">{resumo}</p>
+                    <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed">{resumo}</p>
+                    <p className="text-[11px] text-[var(--shell-text-muted)] opacity-75 leading-relaxed border-t border-[var(--shell-border)] pt-1.5 mt-0.5">
+                      {parametro}
+                    </p>
                   </button>
                 );
               })}
@@ -265,86 +384,124 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                 </div>
               </div>
 
-              {/* Entradas do modo — A pede meta de receita + teto; B pede meta de RPM + piso. */}
-              {modo === 'receita_maxima' ? (
-                <>
+              {/* Metas: opcionais, e a tela precisa dizer isso antes de o usuário digitar.
+                  Meta obrigatória vira número que se persegue; meta opcional continua sendo
+                  o que ela é — uma régua contra a qual o plano é lido. */}
+              <div className="flex flex-col gap-3 border-t border-[var(--shell-border)] pt-5">
+                <div className="flex flex-col gap-1">
+                  <span className={LABEL}>Metas — todas opcionais</span>
+                  <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
+                    Deixe em branco e o plano sai igual: nenhuma meta muda uma decisão do modelo.
+                    O que ela faz é dar a régua — se o plano não chegar lá, o gap é declarado com
+                    as alavancas em ordem de custo, nunca fechado inflando volume em silêncio.
+                  </p>
+                </div>
+
+                {modo === 'receita_maxima' ? (
                   <div className="flex flex-col gap-1.5">
-                    <label htmlFor="calendario-meta-receita" className={LABEL}>Meta de receita (R$):</label>
+                    <label htmlFor="calendario-meta-receita" className={LABEL}>
+                      Meta de receita (R$) <span className={OPCIONAL}>· opcional</span>
+                    </label>
                     <input
                       id="calendario-meta-receita"
                       type="text"
                       inputMode="numeric"
                       value={metaReceita}
                       onChange={(e) => setMetaReceita(e.target.value)}
-                      placeholder="Ex: 250000"
+                      placeholder="Em branco: sem régua de receita"
                       className={CAMPO}
                     />
-                    <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
-                      Meta não é comando. Se o plano não alcançar, o modelo declara o gap e lista as
-                      alavancas em ordem de custo — nunca infla volume em silêncio.
-                    </p>
                   </div>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="calendario-meta-rpm" className={LABEL}>
+                        Meta de R$/mil envios <span className={OPCIONAL}>· opcional</span>
+                      </label>
+                      <input
+                        id="calendario-meta-rpm"
+                        type="text"
+                        inputMode="decimal"
+                        value={metaRpm}
+                        onChange={(e) => setMetaRpm(e.target.value)}
+                        placeholder="Em branco: sem régua de eficiência"
+                        className={CAMPO}
+                      />
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="calendario-volume-maximo" className={LABEL}>Volume máximo (envios):</label>
-                    <input
-                      id="calendario-volume-maximo"
-                      type="text"
-                      inputMode="numeric"
-                      value={volumeMaximo}
-                      onChange={(e) => setVolumeMaximo(e.target.value)}
-                      placeholder="Em branco, usa o teto de saúde da base"
-                      className={CAMPO}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="calendario-meta-rpm" className={LABEL}>Meta de R$/mil envios:</label>
-                    <input
-                      id="calendario-meta-rpm"
-                      type="text"
-                      inputMode="decimal"
-                      value={metaRpm}
-                      onChange={(e) => setMetaRpm(e.target.value)}
-                      placeholder="Ex: 34,5"
-                      className={CAMPO}
-                    />
-                  </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="calendario-piso-receita" className={LABEL}>
+                        Piso de receita (R$) <span className={OPCIONAL}>· opcional</span>
+                      </label>
+                      <input
+                        id="calendario-piso-receita"
+                        type="text"
+                        inputMode="numeric"
+                        value={pisoReceita}
+                        onChange={(e) => setPisoReceita(e.target.value)}
+                        placeholder="Em branco: o corte para nos 15% padrão"
+                        className={CAMPO}
+                      />
+                      <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
+                        Este é o limite de quanto a eficiência pode cobrar em receita. Sem ele, o
+                        modo corta 15% do volume — o corte medido, onde só 40% dos e-mails extras
+                        alcançam alguém novo. Com ele, o corte para assim que a receita encosta no
+                        piso.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="calendario-piso-receita" className={LABEL}>Piso de receita (R$):</label>
-                    <input
-                      id="calendario-piso-receita"
-                      type="text"
-                      inputMode="numeric"
-                      value={pisoReceita}
-                      onChange={(e) => setPisoReceita(e.target.value)}
-                      placeholder="Tipicamente a receita do período anterior"
-                      className={CAMPO}
-                    />
-                    <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
-                      O corte começa pelos 3ºs slots: só 40% dos e-mails extras alcançam alguém novo,
-                      os outros 60% são repetição.
-                    </p>
-                  </div>
-                </>
-              )}
+              {/* Dias mais agressivos */}
+              <div className="flex flex-col gap-2 border-t border-[var(--shell-border)] pt-5">
+                <span className={LABEL}>
+                  Dias mais agressivos <span className={OPCIONAL}>· opcional</span>
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {DIAS_SEMANA.map(({ dow, label }) => {
+                    const marcado = diasAgressivos.includes(dow);
+                    return (
+                      <button
+                        key={dow}
+                        id={`calendario-agressivo-${dow}`}
+                        type="button"
+                        onClick={() => alternarDia(dow)}
+                        aria-pressed={marcado}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                          marcado
+                            ? 'border-indigo-500/60 bg-indigo-500/15 text-[var(--shell-text)]'
+                            : 'border-[var(--shell-border)] bg-[var(--shell-panel-soft)] text-[var(--shell-text-muted)] hover:text-[var(--shell-text)]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
+                  Dias marcados entram na frente da fila do 3º disparo. A marcação reordena a fila;
+                  ela não cria vaga: o teto semanal e as células sem suporte histórico continuam
+                  valendo, e o modelo avisa quando um dia marcado não pôde ser atendido.
+                </p>
+              </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="calendario-eventos" className={LABEL}>Eventos especiais no período:</label>
+              <div className="flex flex-col gap-1.5 border-t border-[var(--shell-border)] pt-5">
+                <label htmlFor="calendario-eventos" className={LABEL}>
+                  Eventos especiais no período <span className={OPCIONAL}>· opcional</span>
+                </label>
                 <textarea
                   id="calendario-eventos"
                   rows={3}
                   value={eventosEspeciais}
                   onChange={(e) => setEventosEspeciais(e.target.value)}
-                  placeholder="Ex: dia 28 teremos lançamento de body creams."
+                  placeholder={'Ex: dia 28 teremos lançamento X.\nDia 30 teremos cupom da madrugada às 22h.'}
                   className={`${CAMPO} resize-y`}
                 />
                 <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
-                  Contexto para a leitura do plano. Não entra em cálculo nenhum — volume, oferta e
-                  horário saem dos índices, nunca de texto livre.
+                  Campo aberto. Não entra em cálculo nenhum — volume, oferta e horário saem dos
+                  índices, nunca de texto livre. Serve para a leitura assistida comentar o encaixe
+                  do que você já sabe que vai acontecer.
                 </p>
               </div>
 
@@ -362,12 +519,68 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
             <div className={`${CARD} @container flex flex-col gap-5 min-h-[420px]`}>
               {calendario ? (
                 <>
-                  <CalendarioGrid calendario={calendario} />
-                  <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed border-t border-[var(--shell-border)] pt-4">
-                    Cada card é um dia; cada linha, um slot — horário, oferta, família e volume
-                    planejado. Slots marcados como não validados usam alavancas que não sobreviveram
-                    ao teste fora da amostra.
-                  </p>
+                  {/* Fica acima da grade, não no rodapé: quem lê o nome de uma oferta precisa
+                      saber de onde ele veio ANTES de interpretar o plano, não depois. Os dois
+                      estados têm avisos diferentes porque merecem confiança diferente. */}
+                  {procedencia === 'sintetico' && (
+                    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">
+                        Catálogo sintético
+                      </p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-[var(--shell-text-muted)]">
+                        Os nomes de oferta e família (“Oferta A1”, “Família B”) são posições
+                        vazias, não o catálogo da marca — e o volume e o RPM de base também são
+                        arbitrários, o que torna arbitrárias as receitas em reais desta tela. O que
+                        já é real aqui é a <strong className="text-[var(--shell-text)]">estrutura</strong>:
+                        as restrições, os índices de dia, a elasticidade de volume e a decomposição.
+                        Leia a forma do plano — quantos disparos, em que dias, em que ordem — e
+                        ignore os valores absolutos até o catálogo real entrar.
+                      </p>
+                    </div>
+                  )}
+
+                  {procedencia === 'ditado' && (
+                    <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">
+                        Catálogo ditado, não extraído
+                      </p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-[var(--shell-text-muted)]">
+                        As ofertas e famílias desta marca foram informadas por quem opera o CRM,
+                        não lidas do histórico. Os nomes são reais; a lista é de memória, então
+                        é incompleta por construção e não se atualiza sozinha quando o catálogo
+                        muda. O <strong className="text-[var(--shell-text)]">volume e o RPM de base
+                        continuam arbitrários</strong> — as receitas em reais desta tela ainda não
+                        significam nada. O corte em famílias é uma proposta: como família é a
+                        unidade de fadiga, cortar fino demais faz o modelo subestimar repetição.
+                      </p>
+                    </div>
+                  )}
+
+                  <CalendarioGrid
+                    calendario={calendario}
+                    slotSelecionado={slotSelecionado}
+                    onSelecionar={(chave) => {
+                      setErroEdicao(null);
+                      setSlotSelecionado((atual) => (atual === chave ? null : chave));
+                    }}
+                  />
+
+                  {slotAberto ? (
+                    <EditorSlot
+                      calendario={calendario}
+                      slot={slotAberto}
+                      erro={erroEdicao}
+                      onAplicar={handleEditar}
+                      onRemover={handleRemover}
+                      onFechar={() => setSlotSelecionado(null)}
+                    />
+                  ) : (
+                    <p className="text-xs text-[var(--shell-text-muted)] leading-relaxed border-t border-[var(--shell-border)] pt-4">
+                      Cada card é um dia; cada linha, um disparo. Clique em qualquer um para ver a
+                      receita e a eficiência esperadas, a família a que pertence — e para editar
+                      horário, oferta, família ou volume.
+                    </p>
+                  )}
                 </>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-8 py-16 border border-dashed border-[var(--shell-border)] rounded-2xl">
@@ -389,99 +602,139 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
             </p>
           )}
 
-          {/* Checagem de campanhas recentes */}
-          <div className={`${CARD} flex flex-col gap-4`}>
-            <h2 className={TITULO_CARD}>Checagem de campanhas recentes vs. benchmark</h2>
-            <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-4xl">
-              Compara campanhas de 3–9 dias atrás — já maturadas na janela de atribuição de 36h —
-              contra o R$/mil histórico do mesmo slot. A última semana é sempre descartada: ainda
-              está dentro da janela e aparece com erro alto por artefato.
-            </p>
-            <button
-              id="calendario-btn-verificar"
-              onClick={() => setAviso(AVISO_INTEGRACAO)}
-              className={`${BOTAO_SECUNDARIO} self-start`}
-            >
-              Verificar campanhas recentes
-            </button>
-          </div>
-
-          {/* Painéis de IA — prosa apenas */}
-          <div className={`${CARD} flex flex-col gap-5`}>
-            <div className="flex flex-col gap-1">
-              <h2 className={TITULO_CARD}>Leitura assistida (IA)</h2>
-              <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-4xl">
-                A IA explica o calendário, nomeia ofertas e descreve trade-offs. Ela não estima
-                R$/mil, não pondera índices e não decide volume — todo número da tela sai do modelo
-                determinístico. A separação é estrutural, não uma questão de disciplina.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label htmlFor="calendario-pergunta" className={LABEL}>
-                Perguntar sobre o calendário gerado:
-              </label>
-              <textarea
-                id="calendario-pergunta"
-                rows={3}
-                value={perguntaIa}
-                onChange={(e) => setPerguntaIa(e.target.value)}
-                placeholder="Ex: por que quarta recebeu mais volume que sexta?"
-                className={`${CAMPO} resize-y`}
-              />
-              <button
-                id="calendario-btn-explicar"
-                onClick={() => setAviso(AVISO_INTEGRACAO)}
-                disabled={!perguntaIa.trim() || !calendario}
-                className={`${BOTAO_SECUNDARIO} self-start`}
-              >
-                Explicar
-              </button>
-              {!calendario && (
-                <p className="text-[11px] text-[var(--shell-text-muted)] opacity-70">
-                  Disponível depois de gerar um calendário — a IA lê o plano, não o inventa.
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 border-t border-[var(--shell-border)] pt-5">
-              <label htmlFor="calendario-nova-oferta" className={LABEL}>
-                Encaixar uma oferta nova:
-              </label>
-              <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
-                A IA diz a qual família a oferta pertence e como ela se compara às existentes. A
-                alocação em si — dia, horário e volume — vem de uma nova geração, não da IA.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  id="calendario-nova-oferta"
-                  type="text"
-                  value={novaOferta}
-                  onChange={(e) => setNovaOferta(e.target.value)}
-                  placeholder="Nome da oferta (ex: Kit Verão)"
-                  className={`${CAMPO} sm:flex-1`}
-                />
-                <select
-                  id="calendario-agressividade"
-                  value={agressividade}
-                  onChange={(e) => setAgressividade(e.target.value)}
-                  className={`${CAMPO} sm:w-56 cursor-pointer`}
-                  title="Escada 1–4 de quanto a concessão custa em CMV"
-                >
-                  <option value="1">Agressividade 1 — sem concessão</option>
-                  <option value="2">Agressividade 2 — brinde/mimo</option>
-                  <option value="3">Agressividade 3 — desconto percentual</option>
-                  <option value="4">Agressividade 4 — reais OFF</option>
-                </select>
+          {/* Leitura assistida — só existe depois que existe um plano para ler.
+              Antes da geração este bloco não tinha função nenhuma além de ocupar a tela com
+              a promessa de algo que ainda não podia acontecer. */}
+          {calendario && (
+            <div className={`${CARD} flex flex-col gap-5`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <h2 className={TITULO_CARD}>Leitura assistida (IA)</h2>
+                  <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-4xl">
+                    A IA lê o calendário acima e explica as escolhas. Ela não estima R$/mil, não
+                    pondera índices e não decide volume — todo número da tela sai do modelo
+                    determinístico, e ela só tem acesso ao resultado dele. A separação é
+                    estrutural, não uma questão de disciplina.
+                  </p>
+                </div>
                 <button
-                  id="calendario-btn-merchan"
-                  onClick={() => setAviso(AVISO_INTEGRACAO)}
-                  disabled={!novaOferta.trim()}
-                  className={`${BOTAO_SECUNDARIO} shrink-0`}
+                  id="calendario-btn-reler"
+                  onClick={() => calendario && void consultarIa(calendario)}
+                  disabled={carregandoIa}
+                  title="Reler o calendário atual, já com as edições"
+                  className="shrink-0 p-2.5 rounded-xl bg-[var(--shell-panel-soft)] hover:bg-[var(--shell-border)] border border-[var(--shell-border)] text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] transition-all cursor-pointer disabled:opacity-40"
                 >
-                  Classificar oferta
+                  <RefreshCw className={`w-4 h-4 ${carregandoIa ? 'animate-spin' : ''}`} />
                 </button>
               </div>
+
+              <div className="flex flex-col gap-3 max-h-[460px] overflow-y-auto pr-1">
+                {conversa.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                      m.papel === 'usuario'
+                        ? 'bg-indigo-500/10 border border-indigo-500/30 text-[var(--shell-text)] self-end max-w-[85%]'
+                        : 'bg-[var(--shell-panel-soft)] border border-[var(--shell-border)] text-[var(--shell-text-muted)]'
+                    }`}
+                  >
+                    {m.texto}
+                  </div>
+                ))}
+
+                {carregandoIa && (
+                  <div className="flex items-center gap-2 text-sm text-[var(--shell-text-muted)] px-4 py-3">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Lendo o calendário…
+                  </div>
+                )}
+
+                {erroIa && (
+                  <p className="text-[11px] text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-xl px-4 py-3">
+                    {erroIa}
+                  </p>
+                )}
+
+                <div ref={fimDaConversa} />
+              </div>
+
+              <div className="flex flex-col gap-2 border-t border-[var(--shell-border)] pt-5">
+                <label htmlFor="calendario-pergunta" className={LABEL}>
+                  Perguntar sobre este calendário:
+                </label>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <textarea
+                    id="calendario-pergunta"
+                    rows={2}
+                    value={pergunta}
+                    onChange={(e) => setPergunta(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handlePerguntar();
+                      }
+                    }}
+                    placeholder="Ex: por que a mensagem de quarta saiu às 20h e não de manhã?"
+                    className={`${CAMPO} resize-y sm:flex-1`}
+                  />
+                  <button
+                    id="calendario-btn-explicar"
+                    onClick={handlePerguntar}
+                    disabled={!pergunta.trim() || carregandoIa}
+                    className={`${BOTAO_SECUNDARIO} shrink-0 self-start`}
+                  >
+                    Perguntar
+                  </button>
+                </div>
+                <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
+                  Para mudar o plano, mude os parâmetros e gere de novo — direcionamento em texto
+                  livre não move número nenhum aqui, e fingir que move seria o jeito mais rápido
+                  de a tela deixar de ser confiável. Pergunte à IA qual parâmetro mexer.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Encaixar uma oferta nova — seção própria. É outra pergunta: não é sobre o plano
+              que existe, é sobre uma peça que ainda não está nele. */}
+          <div className={`${CARD} flex flex-col gap-4`}>
+            <div className="flex flex-col gap-1">
+              <h2 className={TITULO_CARD}>Encaixar uma oferta nova</h2>
+              <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-4xl">
+                A IA diz a qual família a oferta pertence e como ela se compara às existentes —
+                classificação, que é trabalho de linguagem. A alocação em si (dia, horário e
+                volume) vem de uma nova geração, porque é trabalho de modelo.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                id="calendario-nova-oferta"
+                type="text"
+                value={novaOferta}
+                onChange={(e) => setNovaOferta(e.target.value)}
+                placeholder="Nome da oferta (ex: Kit Verão)"
+                className={`${CAMPO} sm:flex-1`}
+              />
+              <select
+                id="calendario-agressividade"
+                value={agressividade}
+                onChange={(e) => setAgressividade(e.target.value)}
+                className={`${CAMPO} sm:w-56 cursor-pointer`}
+                title="Escada 1–4 de quanto a concessão custa em CMV"
+              >
+                <option value="1">Agressividade 1 — sem concessão</option>
+                <option value="2">Agressividade 2 — brinde/mimo</option>
+                <option value="3">Agressividade 3 — desconto percentual</option>
+                <option value="4">Agressividade 4 — reais OFF</option>
+              </select>
+              <button
+                id="calendario-btn-merchan"
+                onClick={() => setAviso(AVISO_INTEGRACAO)}
+                disabled={!novaOferta.trim()}
+                className={`${BOTAO_SECUNDARIO} shrink-0`}
+              >
+                Classificar oferta
+              </button>
             </div>
           </div>
         </>

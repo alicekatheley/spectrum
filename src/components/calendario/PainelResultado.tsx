@@ -80,6 +80,16 @@ export default function PainelResultado({ calendario }: { calendario: Calendario
             Uma alavanca por vez, em ordem de transferência decrescente. As marcadas como não
             validadas ficam no plano porque não custam nada, mas entram na previsão com expoente zero.
           </p>
+          {/* Previsão e fronteira acompanham cada edição; a decomposição, não. Ela responde
+              "como o MODELO chegou ao plano" — e depois de uma edição manual a resposta deixa
+              de ser inteiramente dele. Reescrevê-la creditaria ao modelo uma decisão humana. */}
+          {calendario.editadoManualmente && (
+            <p className="text-[11px] text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-lg px-3 py-2 leading-relaxed mt-1">
+              O calendário foi editado à mão. A previsão e a fronteira acima já refletem as
+              edições; esta decomposição descreve o plano como o modelo o gerou, antes delas — e
+              continua assim de propósito, para não atribuir ao modelo uma escolha que não foi dele.
+            </p>
+          )}
         </div>
 
         <ul className="flex flex-col">

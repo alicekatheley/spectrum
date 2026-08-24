@@ -18,7 +18,12 @@ import {
 } from "./piapp.ts";
 import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique } from "./validators.ts";
 import {
+  carregarContextoModelo, getContextoModelo, getContextoMarca, getStatusBigQuery,
+  campanhasNaoClassificadas,
+} from "./bigquery.ts";
+import {
   generatePautaContent, generateVariationContent, generateGifAgentConcept, generateAbTestProposal,
+  explicarCalendario,
   ai as geminiAi,
 } from "./gemini.ts";
 
@@ -921,6 +926,91 @@ app.post("/api/generate-variation", async (req, res) => {
   }
 });
 
+// Leitura assistida do calendário. A IA recebe um plano PRONTO e o explica — ela não gera,
+// ─── Contexto do modelo (BigQuery) ───────────────────────────────────────────
+// Estado da conexão. A tela usa isto para decidir se pode gerar — e para dizer POR QUE
+// não pode, quando não pode.
+app.get("/api/calendario/status", (req, res) => {
+  res.json({ status: "success", data: getStatusBigQuery() });
+});
+
+/**
+ * Catálogo real, índices e viabilidade. É a rota que substitui o catálogo inventado.
+ *
+ * O 503 aqui não é preguiça de tratamento: sem estes dados o gerador NÃO TEM o que
+ * usar, e a única alternativa a falhar é inventar — que é exatamente o defeito que
+ * este endpoint existe para consertar. Falhar alto é o comportamento correto.
+ */
+app.get("/api/calendario/contexto", (req, res) => {
+  const ctx = getContextoModelo();
+  if (!ctx) {
+    const { erro } = getStatusBigQuery();
+    return res.status(503).json({
+      error: "Contexto do modelo indisponível: sem conexão com o BigQuery.",
+      detalhe: erro,
+    });
+  }
+  const marca = typeof req.query.marca === "string" ? req.query.marca : null;
+  if (!marca) return res.json({ status: "success", data: ctx });
+
+  const doMarca = getContextoMarca(marca);
+  if (!doMarca) {
+    // Gocase cai aqui, e é o caso mais importante de distinguir: ela não está em
+    // marca_config porque a tabela de pedidos é Spree e não tem UTM — atribuição
+    // impossível (§2.9). Não é fila de trabalho, é bloqueio de origem.
+    return res.status(404).json({
+      error: `Marca "${marca}" não está no modelo.`,
+      marcasDisponiveis: Object.keys(ctx),
+    });
+  }
+  res.json({ status: "success", data: doMarca });
+});
+
+/**
+ * O que o classificador de ofertas está perdendo. Diagnóstico de manutenção do
+ * catálogo, não insumo do plano — por isso rota própria, sob demanda.
+ */
+app.get("/api/calendario/nao-classificadas", async (req, res) => {
+  const marca = typeof req.query.marca === "string" ? req.query.marca : "";
+  if (!marca) return res.status(400).json({ error: "Informe ?marca=" });
+  try {
+    const dados = await campanhasNaoClassificadas(marca);
+    res.json({
+      status: "success",
+      data: dados,
+      total: dados.reduce((a, d) => a + Number(d.envios), 0),
+    });
+  } catch (err: any) {
+    res.status(503).json({ error: err.message });
+  }
+});
+
+// não realoca e não estima. Se um dia esta rota passar a devolver números, o erro estará
+// aqui, não no prompt: o payload de entrada já contém todos os números que a resposta pode
+// citar (REGRA 1 do modelo).
+app.post("/api/calendario/explicar", async (req, res) => {
+  try {
+    const { calendario, pergunta, eventosEspeciais } = req.body;
+    if (!calendario?.slots?.length) {
+      return res.status(400).json({ error: "Nenhum calendário gerado para explicar." });
+    }
+    // Sem chave, o SDK cai silenciosamente nas credenciais do gcloud e volta com um 403 de
+    // escopo — erro que não tem nada a ver com a causa e manda quem for depurar para o lado
+    // errado. Falhar aqui, dizendo o que falta, custa três linhas.
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({
+        error: "GEMINI_API_KEY não configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.",
+      });
+    }
+
+    const texto = await explicarCalendario({ calendario, pergunta, eventosEspeciais });
+    res.json({ status: "success", data: { texto } });
+  } catch (err: any) {
+    console.error("Erro na leitura do calendário:", err);
+    res.status(500).json({ error: "Erro ao ler o calendário.", details: err.message });
+  }
+});
+
 app.post("/api/save-frame", async (req, res) => {
   try {
     const { pautaId, frameName, imageDataUrl } = req.body;
@@ -1155,6 +1245,15 @@ export async function startServer() {
   await loadMecanicasFromSupabase();
   await loadCrmAiContext();
   await loadConteudosGifAprendizado();
+  await carregarContextoModelo();
+
+  // Os índices são regerados por job no BigQuery; recarregar de manhã evita que um
+  // processo de dev longo fique servindo um snapshot de semanas atrás sem avisar.
+  cron.schedule('30 7 * * *', () => {
+    carregarContextoModelo().catch((err: any) =>
+      console.error('[BigQuery] Erro ao recarregar contexto:', err.message),
+    );
+  });
 
   // Agente autônomo de GIF: 10 pautas/dia via cron às 08h, mais catch-up no boot
   // (cobre o caso do processo de dev não estar rodando no horário agendado).

@@ -8,3 +8,19 @@ coverage/
 !.env.example
 .mcp.json
 .claude/settings.local.json
+# Checkouts de worktree do Claude Code: são clones da própria árvore, versionar
+# aqui duplicaria o repo dentro dele mesmo.
+.claude/worktrees/
+
+# Credenciais de service account do Google Cloud.
+# Os padrões cobrem o nome que o console gera (projeto-hash.json) e a pasta usada
+# quando se guarda mais de uma. Deixe a chave FORA do repositório mesmo assim: um
+# .gitignore protege contra `git add` distraído, não contra `git add -f`, não vale
+# nada em quem clonar sem ele, e não desfaz nada se a chave já tiver sido commitada.
+gogroup-crm-*.json
+**/gogroup-crm-*.json
+*-service-account*.json
+**/*-service-account*.json
+service-account*.json
+credentials/
+**/credentials/

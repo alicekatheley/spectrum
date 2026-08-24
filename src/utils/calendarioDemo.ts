@@ -35,6 +35,12 @@ const ALPHA = 0.31;
 
 const DIAS: DiaSemana[] = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
 
+// DIAS é o enum do schema (§9.1) e é sem acento de propósito — é chave de dado, não texto.
+// Avisos e restrições, porém, são frases lidas por gente: "Sabado" e "Terca" num aviso são
+// erro de português, não detalhe técnico. São dois usos diferentes, por isso duas listas —
+// nunca DIAS em prosa, nunca DIAS_EXTENSO no campo diaSemana.
+const DIAS_EXTENSO: string[] = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
 // Pesos de volume dentro do dia, entre slots (Fase 3).
 const PESOS_SLOT: Record<number, number[]> = {
   1: [1.0],
@@ -60,80 +66,184 @@ const INDICE_DIA: number[] = [0.82, 1.05, 1.18, 1.29, 1.12, 0.95, 0.78];
 // Domingo = 0 em 137 dias, logo Domingo é célula bloqueada (H3).
 const SUPORTE_3_OFERTAS: number[] = [0, 1, 8, 5, 8, 2, 2];
 
+/**
+ * Procedência do catálogo. São três estados diferentes e a tela precisa distingui-los,
+ * porque a confiança que cada um merece é diferente:
+ *
+ *  'sintetico' — inventado por mim. Não descreve a marca. Ler só a forma do plano.
+ *  'ditado'    — ditado por quem opera a marca. Os nomes são reais; a LISTA é de memória,
+ *                então é incompleta por construção e envelhece sozinha.
+ *  'dados'     — derivado do histórico no BigQuery. Ainda não existe (Fase 3).
+ */
+type Procedencia = 'sintetico' | 'ditado' | 'dados';
+
 interface ConfigMarca {
   diasAtivos: number[]; // H5 — dias inativos permanecem inativos
   maxDiasCom3: number; // H1 — teto operacional por semana (§1.3)
   familias: { nome: string; ofertas: string[]; agressividade: number }[];
   volumeSemana: number; // volume_maximo_semana (§7.3)
   rpmBase: number; // âncora: RPM real das últimas 4 semanas (§4.4)
+  procedencia: Procedencia;
 }
 
 const TODOS_OS_DIAS = [0, 1, 2, 3, 4, 5, 6];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CATÁLOGO SINTÉTICO — nenhuma linha daqui descreve as marcas de verdade.
+//
+// A versão anterior tinha rótulos como "Lançamento Linha Ruby" e "R$ 50 OFF": nomes
+// plausíveis, e por isso mesmo o pior tipo de placeholder. A tela ficava indistinguível
+// de uma tela que sabe o que a marca vende, e o erro só aparecia para quem conhecia o
+// catálogo real — Barbour's não lança à noite, Lescent nunca fez R$ 50 OFF, Kokeshi não
+// lança todo dia. Um rótulo obviamente falso é lido como pendência; um rótulo plausível
+// e errado é lido como fato. A troca abaixo é deliberada: prefere-se parecer inacabado
+// a parecer informado.
+//
+// O que é sintético aqui: nomes de família, nomes de oferta, volumeSemana e rpmBase.
+// O que é do modelo e continua valendo: a ESTRUTURA — H2 (uma família por dia), o
+// escalonamento de agressividade que alimenta I2, o teto semanal H1 e os dias ativos H5.
+// Trocar os rótulos por dados reais não muda o comportamento do gerador, só o texto.
+//
+// Ao ligar a Fase 3, esta constante inteira sai e o catálogo passa a vir do BigQuery.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rótulos posicionais: A1, A2… Não são ofertas, são casas vazias com endereço. */
+const familiasSinteticas = (n: number): ConfigMarca['familias'] =>
+  ['A', 'B', 'C', 'D', 'E'].slice(0, n).map((letra, i) => ({
+    nome: `Família ${letra}`,
+    ofertas: [`Oferta ${letra}1`, `Oferta ${letra}2`],
+    // Agressividade escalonada 1..4: o que importa para I2 é a ORDEM entre as famílias,
+    // não o rótulo. Essa parte sobrevive à troca pelo catálogo real.
+    agressividade: (i % 4) + 1,
+  }));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LESCENT — catálogo DITADO pelo operador da marca, não derivado de dados.
+//
+// O corte em famílias segue duas regras que vieram do próprio operador:
+//  (a) formato separa família: cair em % e cair em reais são coisas diferentes;
+//  (b) escopo separa família: 100ml, 25ml, site inteiro e produto específico são
+//      percebidos como ofertas distintas mesmo com o mesmo desconto nominal.
+//
+// Isso puxa o catálogo para MAIS famílias, e granularidade não é neutra: família é a
+// unidade de fadiga (H2 + I2, coeficiente 0,52). Quanto mais fino o corte, menos fadiga
+// o modelo enxerga — "Cupom 15%" e "Cupom 18%" em dias seguidos contam como famílias
+// diferentes e o cliente vê a mesma coisa. O corte abaixo é uma PROPOSTA de granularidade,
+// não uma conclusão; é o item que mais precisa de revisão antes de valer alguma coisa.
+// ─────────────────────────────────────────────────────────────────────────────
+const FAMILIAS_LESCENT: ConfigMarca['familias'] = [
+  // Agressividade 1 — sem concessão de preço.
+  { nome: 'Amostra', ofertas: ['Escolha sua amostra'], agressividade: 1 },
+
+  // Agressividade 2 — brinde agregado, preço intacto.
+  {
+    nome: 'Necessaire',
+    ofertas: [
+      'Necessaire + brinde surpresa',
+      'Necessaire + porta perfume',
+      'Necessaire + amostras',
+      'Escolha sua necessaire',
+    ],
+    agressividade: 2,
+  },
+
+  // Expresso é MECÂNICA (urgência intradiária: três janelas no mesmo dia, preço subindo
+  // a cada uma), não um nível de desconto. Está separado de "Cupom" de propósito: o
+  // cliente percebe urgência, não só desconto. Dividido em valor vs. percentual porque
+  // o operador apontou que o formato difere — um derruba o preço, o outro a porcentagem.
+  { nome: 'Expresso valor', ofertas: ['Expresso 100ml', 'Expresso 25ml'], agressividade: 3 },
+  {
+    nome: 'Expresso percentual',
+    ofertas: ['Expresso 18%', 'Expresso 15%', 'Expresso 12%'],
+    agressividade: 3,
+  },
+
+  // Agressividade 3 — desconto percentual sem urgência.
+  {
+    nome: 'Cupom percentual',
+    ofertas: ['Cupom 12%', 'Cupom 15%', 'Cupom 18%', 'Cupom 20%'],
+    agressividade: 3,
+  },
+  {
+    nome: 'Cupom percentual por linha',
+    ofertas: ['12% em 25ml / 15% em 100ml'],
+    agressividade: 3,
+  },
+
+  // Agressividade 4 — desconto em reais. Os valores são 10/15/18/20/25; os R$ 30 e R$ 50
+  // da versão anterior eram invenção minha e nunca existiram.
+  {
+    nome: 'Reais OFF',
+    ofertas: ['R$ 10 OFF', 'R$ 15 OFF', 'R$ 18 OFF', 'R$ 20 OFF', 'R$ 25 OFF'],
+    agressividade: 4,
+  },
+  // Cupom de dois níveis com gatilho de valor mínimo. Fica em família própria porque a
+  // mecânica é outra: exige carrinho mínimo, então não é comparável a um reais OFF direto.
+  {
+    nome: 'Reais OFF escalonado',
+    ofertas: ['R$ 10 em 59 / R$ 15 em 79'],
+    agressividade: 4,
+  },
+];
 
 const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
   Lescent: {
     diasAtivos: TODOS_OS_DIAS,
     maxDiasCom3: 3,
+    // ATENÇÃO: estes dois continuam inventados mesmo com o catálogo ditado. São eles que
+    // produzem os reais na tela, então a receita da Lescent segue arbitrária.
     volumeSemana: 1_200_000,
     rpmBase: 28.4,
-    familias: [
-      { nome: 'Necessaire', ofertas: ['Necessaire Bege', 'Necessaire Preta'], agressividade: 2 },
-      { nome: 'Expresso', ofertas: ['Expresso 24h', 'Expresso Fim de Semana'], agressividade: 1 },
-      { nome: 'Cupom', ofertas: ['Cupom 15%', 'Cupom 18%'], agressividade: 3 },
-      { nome: 'Reais OFF', ofertas: ['R$ 30 OFF', 'R$ 50 OFF'], agressividade: 4 },
-      { nome: 'Amostras', ofertas: ['Kit Amostras', 'Amostra Surpresa'], agressividade: 1 },
-    ],
+    familias: FAMILIAS_LESCENT,
+    procedencia: 'ditado',
   },
   Barbours: {
     diasAtivos: [1, 2, 3, 4, 5, 6],
     maxDiasCom3: 3,
     volumeSemana: 860_000,
     rpmBase: 34.1,
-    familias: [
-      { nome: 'Caixa', ofertas: ['Caixa Presente', 'Caixa Assinatura'], agressividade: 2 },
-      { nome: 'Cupom', ofertas: ['Cupom 15%', 'Cupom 20%'], agressividade: 3 },
-      { nome: 'Lancamento', ofertas: ['Lançamento Linha Ruby'], agressividade: 1 },
-      { nome: 'Reais OFF', ofertas: ['R$ 40 OFF', 'R$ 60 OFF'], agressividade: 4 },
-      { nome: 'Brinde', ofertas: ['Brinde Exclusivo'], agressividade: 2 },
-    ],
+    familias: familiasSinteticas(5),
+    procedencia: 'sintetico',
   },
   Apice: {
     diasAtivos: [1, 2, 3, 4, 5],
     maxDiasCom3: 2,
     volumeSemana: 540_000,
     rpmBase: 22.7,
-    familias: [
-      { nome: 'Tratamento', ofertas: ['Kit Tratamento', 'Reconstrução Capilar'], agressividade: 1 },
-      { nome: 'Cupom', ofertas: ['Cupom 12%', 'Cupom 18%'], agressividade: 3 },
-      { nome: 'Combo', ofertas: ['Combo Shampoo + Máscara'], agressividade: 2 },
-      { nome: 'Amostras', ofertas: ['Kit Amostras'], agressividade: 1 },
-    ],
+    familias: familiasSinteticas(4),
+    procedencia: 'sintetico',
   },
   Rituaria: {
     diasAtivos: [1, 2, 3, 4, 5, 6],
     maxDiasCom3: 2,
     volumeSemana: 310_000,
     rpmBase: 19.3,
-    familias: [
-      { nome: 'Ritual', ofertas: ['Ritual Noturno', 'Ritual Matinal'], agressividade: 1 },
-      { nome: 'Cupom', ofertas: ['Cupom 15%'], agressividade: 3 },
-      { nome: 'Combo', ofertas: ['Combo Essencial'], agressividade: 2 },
-      { nome: 'Brinde', ofertas: ['Brinde Surpresa'], agressividade: 2 },
-    ],
+    familias: familiasSinteticas(4),
+    procedencia: 'sintetico',
   },
   Kokeshi: {
     diasAtivos: [1, 2, 3, 4, 5],
     maxDiasCom3: 2,
     volumeSemana: 270_000,
     rpmBase: 17.8,
-    familias: [
-      { nome: 'Necessaire', ofertas: ['Necessaire Kokeshi'], agressividade: 2 },
-      { nome: 'Cupom', ofertas: ['Cupom 10%', 'Cupom 20%'], agressividade: 3 },
-      { nome: 'Lancamento', ofertas: ['Lançamento Coleção'], agressividade: 1 },
-      { nome: 'Amostras', ofertas: ['Kit Amostras'], agressividade: 1 },
-    ],
+    familias: familiasSinteticas(4),
+    procedencia: 'sintetico',
   },
 };
+
+/** Ligado enquanto o catálogo acima for sintético. A tela precisa dizer isso. */
+export function procedenciaDoCatalogo(marca: MarcaCalendario): Procedencia {
+  return CONFIG[marca as MarcaAtiva]?.procedencia ?? 'sintetico';
+}
+
+/**
+ * Nomes das famílias declaradas para a marca. Existe para o verificador poder afirmar
+ * cobertura: sem saber o que foi DECLARADO, ele só consegue conferir o que foi usado, e
+ * "família nenhuma ficou de fora" é justamente uma afirmação sobre a diferença entre os dois.
+ */
+export function familiasDaMarca(marca: MarcaCalendario): string[] {
+  return (CONFIG[marca as MarcaAtiva]?.familias ?? []).map((f) => f.nome);
+}
 
 function hash(texto: string): number {
   let h = 2166136261;
@@ -188,23 +298,105 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
   const restricoesRelaxadas: string[] = [];
   const avisos: string[] = [];
 
+  const indiceFamilia = new Map<string, number>();
+  cfg.familias.forEach((f, i) => {
+    indiceFamilia.set(f.nome, Number((0.8 + ((semente >> (i + 2)) % 42) / 100).toFixed(3)));
+  });
+  const mediaFamilia = [...indiceFamilia.values()].reduce((a, b) => a + b, 0) / cfg.familias.length;
+  const qualidadeFamilia = (nome: string) =>
+    Math.pow((indiceFamilia.get(nome) ?? mediaFamilia) / mediaFamilia, 0.52);
+
+  // DEFEITO CONHECIDO (não corrigido aqui, ver conversa): volume_maximo_semana fixa o total
+  // de envios INDEPENDENTEMENTE do número de slots, e PESOS_SLOT só reparte esse total. Ou
+  // seja, o 3º disparo não traz envio novo — ele parte o mesmo volume em três (42/32/26 em
+  // vez de 58/42), tirando peso da melhor família para dar à terceira melhor. Consequência:
+  // um dia com 3 ofertas pode render MENOS que o mesmo dia com 2, e o modo "receita máxima"
+  // não é garantidamente máximo.
+  //
+  // Na realidade 3 e-mails para a mesma base são MAIS envios que 2, não os mesmos repartidos.
+  // A correção certa é o volume depender da contagem de slots (limitado pelo teto), e não o
+  // contrário. Isso mexe em todos os números da tela, então não entra junto com o catálogo.
+
   // ── FASE 2c — quais dias recebem o 3º slot, por semana ────────────────────
   // Candidatos: só dias com suporte histórico (H3). Ranqueados por I1 e limitados
   // ao teto operacional (H1), que é semanal por natureza e se aplica por semana
   // dentro do período, nunca ao período inteiro (§10.7).
+  //
+  // "Dias mais agressivos" entra AQUI e só aqui. Neste modelo, agressividade no nível do dia
+  // é o número de ofertas — é a única alavanca de intensidade diária que a Fase 1 mediu. O
+  // pedido do usuário reordena a fila de candidatos; ele não cria vaga nova. O teto semanal
+  // (H1) e a célula sem suporte histórico (H3) continuam valendo, senão a marcação viraria
+  // uma porta para furar as duas restrições que mais seguram o plano.
+  const agressivos = new Set(input.diasAgressivos ?? []);
   const diasCom3 = new Set<string>();
   for (const semana of semanas) {
     const candidatos = semana
-      .filter((d) => SUPORTE_3_OFERTAS[d.getDay()] > 0)
-      .sort((a, b) => INDICE_DIA[b.getDay()] - INDICE_DIA[a.getDay()])
+      // Duas condições, e a segunda é fácil de esquecer: além de ter suporte histórico (H3),
+      // o dia precisa ter uma TERCEIRA janela na grade operacional (§7.3). Sábado e domingo
+      // têm só duas. Sem esta linha o 3º disparo cai numa hora já ocupada — e o sintoma não é
+      // um erro, é um sábado com dois envios às 10h, que só aparece quando alguém olha.
+      .filter((d) => SUPORTE_3_OFERTAS[d.getDay()] > 0 && GRADE[d.getDay()].length >= 3)
+      .sort((a, b) => {
+        const marcadoA = agressivos.has(a.getDay()) ? 1 : 0;
+        const marcadoB = agressivos.has(b.getDay()) ? 1 : 0;
+        if (marcadoA !== marcadoB) return marcadoB - marcadoA;
+        return INDICE_DIA[b.getDay()] - INDICE_DIA[a.getDay()];
+      })
       .slice(0, cfg.maxDiasCom3);
     for (const d of candidatos) diasCom3.add(paraISO(d));
+  }
+
+  // Dias marcados que o modelo não pode atender precisam ser ditos, não ignorados em silêncio.
+  if (agressivos.size > 0) {
+    restricoesAplicadas.push(
+      `Preferência do usuário: ${[...agressivos].map((d) => DIAS_EXTENSO[d]).join(', ')} na frente da fila do 3º disparo`,
+    );
+    const inativos = [...agressivos].filter((d) => !cfg.diasAtivos.includes(d));
+    if (inativos.length > 0) {
+      avisos.push(
+        `${inativos.map((d) => DIAS_EXTENSO[d]).join(', ')} marcado(s) como agressivo(s), mas a marca não opera nesse(s) dia(s) — H5 não é negociável e a marcação foi ignorada.`,
+      );
+    }
+    const semSuporte = [...agressivos].filter(
+      (d) => cfg.diasAtivos.includes(d) && SUPORTE_3_OFERTAS[d] === 0,
+    );
+    if (semSuporte.length > 0) {
+      avisos.push(
+        `${semSuporte.map((d) => DIAS_EXTENSO[d]).join(', ')} nunca teve 3 ofertas no histórico (n=0): não há o que estimar, e a marcação não abre a célula (H3).`,
+      );
+    }
+    // Sábado e domingo caem aqui: o histórico até suporta 3 ofertas, mas a grade operacional
+    // só tem duas janelas. É uma recusa por operação, não por dados — e as duas razões levam
+    // a decisões diferentes do lado do usuário (abrir uma janela nova vs. não ter o que medir),
+    // então elas não podem sair com a mesma frase.
+    const semJanela = [...agressivos].filter(
+      (d) =>
+        cfg.diasAtivos.includes(d) && SUPORTE_3_OFERTAS[d] > 0 && GRADE[d].length < 3,
+    );
+    if (semJanela.length > 0) {
+      avisos.push(
+        `${semJanela.map((d) => DIAS_EXTENSO[d]).join(', ')}: a grade operacional tem só ${semJanela
+          .map((d) => GRADE[d].length)
+          .join('/')} janela(s) nesse(s) dia(s), então não cabe um 3º disparo sem repetir horário. A marcação foi mantida na fila, mas não gerou slot.`,
+      );
+    }
+    if (eficiencia) {
+      avisos.push(
+        'Modo eficiência não tem 3º disparo em dia nenhum — a marcação de dias agressivos não muda este plano. Ela volta a valer no modo receita máxima.',
+      );
+    }
   }
 
   // Modo B corta os 3ºs slots antes de qualquer outra coisa: a Fase 1 mede que só 40%
   // dos e-mails extras alcançam alguém novo — os outros 60% são repetição, o volume de
   // pior eficiência marginal do plano (§6.3).
-  const nSlotsPorDia = (iso: string) => (!eficiencia && diasCom3.has(iso) ? 3 : 2);
+  // O Math.min não é redundante com o filtro de candidatos acima: ele é a garantia de que
+  // nenhum caminho futuro até este ponto consiga pedir mais disparos do que existem janelas
+  // na grade. Sem ele, o excedente não estoura — ele silenciosamente reusa a primeira hora
+  // (horas[s % horas.length]) e produz dois envios no mesmo horário, que é um plano inválido
+  // com aparência de plano válido.
+  const nSlotsPorDia = (iso: string) =>
+    Math.min(!eficiencia && diasCom3.has(iso) ? 3 : 2, GRADE[deISO(iso).getDay()].length);
 
   // ── FASE 3 — alocação de volume por dia ───────────────────────────────────
   // O índice de dia entra na receita como A_d = I1^0,90 (o coeficiente que transferiu no
@@ -216,9 +408,11 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
   const pesoDia = dias.map((d) => Math.pow(INDICE_DIA[d.getDay()], 0.9 / (1 - ALPHA)));
   const somaPesos = pesoDia.reduce((a, b) => a + b, 0);
 
-  const volumeBase = input.volumeMaximo ?? Math.round((cfg.volumeSemana * dias.length) / cfg.diasAtivos.length);
-  // No modo B o corte de volume é o que compra RPM, na taxa -0,69 medida.
-  const volumeTotal = eficiencia ? Math.round(volumeBase * 0.85) : volumeBase;
+  const volumeBase = Math.round((cfg.volumeSemana * dias.length) / cfg.diasAtivos.length);
+  // No modo B o corte de volume é o que compra RPM, na taxa -0,69 medida. 15% é onde o corte
+  // para por padrão; o piso de receita, se declarado, pode fazê-lo parar antes (ver adiante).
+  const CORTE_EFICIENCIA = 0.15;
+  let volumeTotal = eficiencia ? Math.round(volumeBase * (1 - CORTE_EFICIENCIA)) : volumeBase;
 
   // Âncora (§4.4): o RPM real das últimas 4 semanas, no volume DIÁRIO de referência da
   // marca. Duas decisões aqui não são cosméticas:
@@ -247,13 +441,6 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
   const mediaQualidadeDia =
     cfg.diasAtivos.reduce((a, d) => a + qualidadeDia(d), 0) / cfg.diasAtivos.length;
 
-  const indiceFamilia = new Map<string, number>();
-  cfg.familias.forEach((f, i) => {
-    indiceFamilia.set(f.nome, Number((0.8 + ((semente >> (i + 2)) % 42) / 100).toFixed(3)));
-  });
-  const mediaFamilia = [...indiceFamilia.values()].reduce((a, b) => a + b, 0) / cfg.familias.length;
-  const qualidadeFamilia = (nome: string) =>
-    Math.pow((indiceFamilia.get(nome) ?? mediaFamilia) / mediaFamilia, 0.52);
   const mediaQualidadeFamilia =
     cfg.familias.reduce((a, f) => a + qualidadeFamilia(f.nome), 0) / cfg.familias.length;
 
@@ -262,6 +449,9 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
   const usoOfertaNaSemana = new Map<string, number>();
   // Último disparo de cada família, para o gap real da §1.4.
   const ultimoUso = new Map<string, { dia: number; hora: number }>();
+  // Quantas vezes cada família já saiu NESTE plano. Não é métrica, é insumo da escolha:
+  // sem ela o rodízio não tem como saber que está repetindo as mesmas famílias.
+  const usosFamilia = new Map<string, number>();
   // Receita da etapa intermediária da decomposição (só I1 ligado, família ainda neutra).
   let receitaSoDia = 0;
   let receitaPlanoExata = 0;
@@ -295,9 +485,8 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
       const hora = n === 2 ? [horas[0], horas[horas.length - 1]][s] : horas[s % horas.length];
 
       // Fase 4 — rodízio de família. Duas regras, nesta ordem: H2 elimina quem já saiu hoje
-      // (rígida, nunca relaxada); o descanso elimina quem disparou nas últimas 48h. Entre as
-      // que sobram, vence o maior índice — é isto que faz do rodízio uma alavanca e não um
-      // sorteio. Se o descanso não deixar ninguém, ele cede antes de H2.
+      // (rígida, nunca relaxada); o descanso elimina quem disparou nas últimas 48h. Se o
+      // descanso não deixar ninguém, ele cede antes de H2.
       const elegiveis = cfg.familias.filter((f) => !familiasUsadasHoje.has(f.nome));
       const descansadas = elegiveis.filter((f) => {
         const uso = ultimoUso.get(f.nome);
@@ -309,9 +498,28 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
         restricoesRelaxadas.push('S1: descanso de 48h entre disparos da mesma família');
       }
       const pool = descansadas.length > 0 ? descansadas : elegiveis;
-      const familia = pool.reduce((melhor, f) =>
-        (indiceFamilia.get(f.nome) ?? 0) > (indiceFamilia.get(melhor.nome) ?? 0) ? f : melhor,
-      );
+
+      // Entre as elegíveis, a escolha é por qualidade DIVIDIDA pelo uso acumulado — não pelo
+      // maior índice puro. A diferença não é de calibração, é de aritmética, e o argmax puro
+      // era um defeito e não uma preferência:
+      //
+      // com descanso de 48h cada família cabe no máximo ~11 vezes num plano de 21 dias, e um
+      // plano de 21 dias tem ~51 slots. Bastam ~5 famílias para preencher tudo. O argmax
+      // preenche SEMPRE pelas melhores, então a 6ª família em diante nunca saía — não por
+      // ser ruim, mas por existir depois do ponto em que a fila já fechou. O catálogo podia
+      // ter 8, 15 ou 40 mecânicas; rodavam as mesmas 6. Isso torna a marcação de uma oferta
+      // no catálogo silenciosamente inócua, que é o pior tipo de bug: o input é aceito e
+      // ignorado.
+      //
+      // qualidade/(1+usos) resolve isso sem virar rodízio cego. É proporcionalidade justa:
+      // no equilíbrio, os usos ficam ~proporcionais à qualidade, então uma família com I2
+      // alto continua saindo mais que uma fraca — só não sai a ponto de zerar as outras.
+      // O +1 é o que dá a toda família nunca usada o maior score possível do seu nível, que
+      // é o que garante cobertura sem precisar de uma regra separada de cobertura.
+      const familia = pool.reduce((melhor, f) => {
+        const score = (g: typeof f) => qualidadeFamilia(g.nome) / (1 + (usosFamilia.get(g.nome) ?? 0));
+        return score(f) > score(melhor) ? f : melhor;
+      });
 
       const usoAnterior = ultimoUso.get(familia.nome);
       const gapFamiliaH = usoAnterior
@@ -319,6 +527,7 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
         : 999;
       familiasUsadasHoje.add(familia.nome);
       ultimoUso.set(familia.nome, { dia: indiceDia, hora });
+      usosFamilia.set(familia.nome, (usosFamilia.get(familia.nome) ?? 0) + 1);
 
       // Fase 5a — oferta dentro da família, com teto de repetição na semana (S2).
       const ofertas = familia.ofertas;
@@ -408,6 +617,47 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
     }
   });
 
+  // ── PISO DE RECEITA — onde a eficiência para de cobrar ────────────────────
+  // Esta é a resposta a "até onde o modo B vai": sem piso declarado, ele para no corte de 15%
+  // medido na Fase 1. Com piso, ele para antes — a eficiência é comprada com receita e o piso
+  // é o preço máximo que se aceita pagar.
+  //
+  // Reescalar aqui é exato, não uma aproximação: a estrutura do plano (quais dias, quais
+  // famílias, que pesos) não depende do volume — só escala com ele. Logo receita ∝ V^α em
+  // fechado, e este bloco é idêntico a rodar o gerador de novo com outro volume.
+  if (eficiencia && input.pisoReceita && input.pisoReceita > 0) {
+    const receitaSemCorte = receitaPlanoExata / Math.pow(1 - CORTE_EFICIENCIA, ALPHA);
+    if (input.pisoReceita > receitaSemCorte) {
+      // O piso não cabe nem devolvendo todo o volume. §6.3: declarar o gap, nunca fingir
+      // que a meta foi atingida — e nunca inflar volume acima do teto de saúde para chegar lá.
+      avisos.push(
+        `Piso de receita de ${Math.round(input.pisoReceita).toLocaleString('pt-BR')} não é alcançável no modo eficiência: mesmo sem cortar volume nenhum o plano chega a ${Math.round(receitaSemCorte).toLocaleString('pt-BR')}. O corte foi zerado e o gap permanece — fechá-lo é decisão de volume ou de oferta, não deste modo.`,
+      );
+    }
+    const alvo = Math.min(input.pisoReceita, receitaSemCorte);
+    if (alvo > receitaPlanoExata) {
+      const fator = Math.pow(alvo / receitaPlanoExata, 1 / ALPHA);
+      const fatorReceita = Math.pow(fator, ALPHA);
+      for (const s of slots) {
+        s.enviosPlanejados = Math.round(s.enviosPlanejados * fator);
+        s.receitaPrevista = Math.round(s.receitaPrevista * fatorReceita);
+        s.rpmPrevisto = Number(((s.receitaPrevista / s.enviosPlanejados) * 1000).toFixed(1));
+        s.confianca.ic80 = [
+          Math.round(s.confianca.ic80[0] * fatorReceita),
+          Math.round(s.confianca.ic80[1] * fatorReceita),
+        ];
+      }
+      receitaPlanoExata *= fatorReceita;
+      receitaSoDia *= fatorReceita;
+      volumeTotal = Math.round(volumeTotal * fator);
+      const corteFinal = (1 - volumeTotal / volumeBase) * 100;
+      avisos.push(
+        `Piso de receita ativo: o corte de volume parou em ${corteFinal.toFixed(1)}% em vez dos 15% padrão do modo eficiência. Menos corte significa menos ganho de R$/mil — o piso comprou receita pagando em eficiência.`,
+      );
+      restricoesAplicadas.push(`Piso de receita de R$ ${Math.round(alvo).toLocaleString('pt-BR')}`);
+    }
+  }
+
   // ── FASE 6 — previsão, decomposição, fronteira ────────────────────────────
   const enviosTotal = slots.reduce((a, s) => a + s.enviosPlanejados, 0);
   const receitaPlano = receitaPlanoExata;
@@ -464,6 +714,26 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
       rpm: Number(((receita / envios) * 1000).toFixed(1)),
     };
   });
+
+  // ── Metas: leitura, nunca comando ─────────────────────────────────────────
+  // As duas metas são opcionais e nenhuma delas altera uma única decisão acima — o plano é o
+  // mesmo com ou sem meta. O que a meta faz é dar uma régua: se o plano não chega lá, o modelo
+  // diz o tamanho do buraco e por onde se fecha. Inflar volume em silêncio para bater a meta
+  // seria trocar receita real por um número na tela.
+  const rpmPlano = fronteira.find((p) => p.deltaVolumePct === 0)?.rpm ?? 0;
+  if (!eficiencia && input.metaReceita && input.metaReceita > validado) {
+    const gap = ((input.metaReceita - validado) / validado) * 100;
+    const volumeNecessario = (Math.pow(input.metaReceita / validado, 1 / ALPHA) - 1) * 100;
+    avisos.push(
+      `Meta de receita ${gap.toFixed(1)}% acima do plano validado. Pela elasticidade medida, fechar só com volume exigiria +${volumeNecessario.toFixed(0)}% de envios — acima do teto de saúde da base. As alavancas em ordem de custo são: oferta de maior índice nos dias fortes, depois 3º disparo onde houver suporte, depois volume.`,
+    );
+  }
+  if (eficiencia && input.metaRpm && input.metaRpm > rpmPlano) {
+    const cortePara = (1 - Math.pow(rpmPlano / input.metaRpm, 1 / (1 - ALPHA))) * 100;
+    avisos.push(
+      `Meta de ${input.metaRpm.toLocaleString('pt-BR')} R$/mil acima do plano (${rpmPlano.toLocaleString('pt-BR')}). Pela elasticidade, chegar lá custa cortar ${cortePara.toFixed(0)}% do volume — e a receita cai junto, na taxa α. Se esse corte furar o piso, a meta e o piso são incompatíveis e um dos dois precisa ceder.`,
+    );
+  }
 
   // ── Avisos — cada suposição declarada como suposição (§10.7) ──────────────
   if (dias.length < 7) {

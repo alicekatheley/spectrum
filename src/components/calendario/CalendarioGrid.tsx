@@ -1,9 +1,16 @@
 import { CalendarioGerado, CalendarioSlot, DiaSemana } from "../../types";
-import { DIA_CURTO, formatarDataCurta, formatarEnvios, formatarHora, formatarRpm } from "./formato";
+import { chaveSlot } from "../../utils/editarCalendario";
+import { DIA_CURTO, formatarDataCurta, formatarHora } from "./formato";
 
 // A grade renderiza SLOTS, não células-dia. O modelo emite uma lista plana de slots
 // (§1.2: SLOT = marca, data, hora, oferta) e o agrupamento em dia/semana é decisão de
 // exibição — por isso vive aqui e não no contrato.
+//
+// O card mostra HORA e OFERTA, e só. A versão anterior empilhava família, agressividade,
+// envios, R$/mil e selo de validação num card de sete colunas, e o resultado era um monte
+// de "Expresso F…" — informação que existe no DOM e não chega em ninguém. Densidade não é
+// o mesmo que informação: sete campos truncados informam menos que dois legíveis. O resto
+// continua tudo lá, no painel que abre ao clicar, onde há largura para exibi-lo inteiro.
 
 interface DiaAgrupado {
   data: string;
@@ -29,7 +36,9 @@ function agrupar(slots: CalendarioSlot[]): { semana: string; dias: DiaAgrupado[]
 
   const porSemana = new Map<string, DiaAgrupado[]>();
   for (const dia of [...porDia.values()].sort((a, b) => a.data.localeCompare(b.data))) {
-    dia.slots.sort((a, b) => a.slot - b.slot);
+    // Ordem do dia é a do relógio. Depois de uma edição de horário é ela que faz o card
+    // de 15h aparecer antes do de 16h, sem depender do número do slot.
+    dia.slots.sort((a, b) => a.hora - b.hora);
     const chave = inicioDaSemana(dia.data);
     porSemana.set(chave, [...(porSemana.get(chave) ?? []), dia]);
   }
@@ -39,51 +48,56 @@ function agrupar(slots: CalendarioSlot[]): { semana: string; dias: DiaAgrupado[]
     .map(([semana, dias]) => ({ semana, dias }));
 }
 
-function Slot({ slot }: { key?: string; slot: CalendarioSlot }) {
+interface SlotProps {
+  key?: string;
+  slot: CalendarioSlot;
+  selecionado: boolean;
+  onSelecionar: (chave: string) => void;
+}
+
+function Slot({ slot, selecionado, onSelecionar }: SlotProps) {
+  const chave = chaveSlot(slot);
   return (
-    <div className="flex flex-col gap-1 border-t border-[var(--shell-border)] pt-2 first:border-t-0 first:pt-0">
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="text-[11px] font-mono font-bold text-[var(--shell-text-muted)] shrink-0">
-          {formatarHora(slot.hora)}
-        </span>
+    <button
+      type="button"
+      onClick={() => onSelecionar(chave)}
+      aria-pressed={selecionado}
+      title="Abrir para ver a previsão e editar"
+      className={`w-full text-left flex items-baseline gap-2 rounded-lg px-2 py-1.5 border transition-colors cursor-pointer ${
+        selecionado
+          ? 'border-indigo-500/70 bg-indigo-500/15'
+          : 'border-transparent hover:border-[var(--shell-border)] hover:bg-[var(--shell-panel-soft)]'
+      }`}
+    >
+      <span className="text-[11px] font-mono font-bold text-[var(--shell-text-muted)] shrink-0">
+        {formatarHora(slot.hora)}
+      </span>
+      {/* Sem truncate: o nome da oferta quebra em duas linhas em vez de virar reticências.
+          O card cresce; o nome continua inteiro. */}
+      <span className="text-[13px] font-semibold leading-snug text-[var(--shell-text)] flex-1">
+        {slot.oferta}
+      </span>
+      {slot.editado && (
         <span
-          className="text-sm font-bold text-[var(--shell-text)] flex-1 min-w-[4rem] truncate"
-          title={slot.oferta}
-        >
-          {slot.oferta}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-[11px] text-[var(--shell-text-muted)]">
-        {/* Família é a unidade de fadiga (§1.4) — é ela que o rodízio da Fase 4 decide,
-            e é a alavanca #2 em transferência. Precisa estar visível no card. */}
-        <span className="truncate" title={`Família ${slot.familia} · agressividade ${slot.agressividade}`}>
-          {slot.familia} · agr {slot.agressividade}
-        </span>
-        <span className="shrink-0 font-mono">{formatarEnvios(slot.enviosPlanejados)}</span>
-      </div>
-
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-        <span className="text-xs font-semibold text-emerald-400 shrink-0">
-          {formatarRpm(slot.rpmPrevisto)}
-        </span>
-        {!slot.confianca.validado && (
-          <span
-            className="text-[10px] font-mono uppercase tracking-wider text-amber-400 border border-amber-500/40 rounded px-1.5 py-0.5 shrink-0"
-            title="Alavanca de transferência 0,00 no walk-forward — entra no plano como hipótese, não como compromisso (Regra 3)."
-          >
-            não validado
-          </span>
-        )}
-      </div>
-    </div>
+          className="shrink-0 w-1.5 h-1.5 rounded-full bg-indigo-400 translate-y-[-1px]"
+          title="Slot editado à mão — não é mais a proposta do modelo"
+        />
+      )}
+    </button>
   );
 }
 
-function Dia({ dia }: { key?: string; dia: DiaAgrupado }) {
+interface DiaProps {
+  key?: string;
+  dia: DiaAgrupado;
+  selecionado: string | null;
+  onSelecionar: (chave: string) => void;
+}
+
+function Dia({ dia, selecionado, onSelecionar }: DiaProps) {
   return (
-    <div className="rounded-xl border border-[var(--shell-border)] bg-[var(--shell-panel)] p-3.5 flex flex-col gap-2.5">
-      <div className="flex items-baseline justify-between gap-2">
+    <div className="rounded-xl border border-[var(--shell-border)] bg-[var(--shell-panel)] p-2.5 flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-2 px-1">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--shell-text-muted)]">
           {DIA_CURTO[dia.diaSemana]}
         </span>
@@ -93,13 +107,24 @@ function Dia({ dia }: { key?: string; dia: DiaAgrupado }) {
       </div>
 
       {dia.slots.map((slot) => (
-        <Slot key={`${slot.data}-${slot.slot}`} slot={slot} />
+        <Slot
+          key={chaveSlot(slot)}
+          slot={slot}
+          selecionado={selecionado === chaveSlot(slot)}
+          onSelecionar={onSelecionar}
+        />
       ))}
     </div>
   );
 }
 
-export default function CalendarioGrid({ calendario }: { calendario: CalendarioGerado }) {
+interface GridProps {
+  calendario: CalendarioGerado;
+  slotSelecionado: string | null;
+  onSelecionar: (chave: string) => void;
+}
+
+export default function CalendarioGrid({ calendario, slotSelecionado, onSelecionar }: GridProps) {
   const semanas = agrupar(calendario.slots);
 
   return (
@@ -121,7 +146,12 @@ export default function CalendarioGrid({ calendario }: { calendario: CalendarioG
 
             <div className="grid grid-cols-1 @sm:grid-cols-2 @xl:grid-cols-4 @3xl:grid-cols-7 gap-3">
               {dias.map((dia) => (
-                <Dia key={dia.data} dia={dia} />
+                <Dia
+                  key={dia.data}
+                  dia={dia}
+                  selecionado={slotSelecionado}
+                  onSelecionar={onSelecionar}
+                />
               ))}
             </div>
           </div>

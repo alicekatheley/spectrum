@@ -11,6 +11,35 @@ export const ai = new GoogleGenAI({
   }
 });
 
+/**
+ * Cliente separado para a área de calendários.
+ *
+ * Existe para as duas áreas não dividirem cota nem histórico de uso: um pico de
+ * geração de pautas não pode derrubar a explicação de um calendário, e o consumo
+ * de cada área precisa ser legível em separado na fatura.
+ *
+ * Note o que este bloco NÃO faz: cair para `GEMINI_API_KEY` quando a chave própria
+ * falta. Esse fallback é tentador e destrói o motivo de existir da separação — as
+ * duas áreas voltariam a se misturar exatamente no dia em que alguém esquecesse de
+ * configurar, e sem nenhum sinal de que isso aconteceu.
+ */
+const CALENDARIO_AI_KEY = process.env.CALENDARIO_AI_KEY;
+
+export const aiCalendario = CALENDARIO_AI_KEY
+  ? new GoogleGenAI({
+      apiKey: CALENDARIO_AI_KEY,
+      httpOptions: {
+        // Um token de gateway (prefixo gw-tok-) não fala com generativelanguage.googleapis.com
+        // direto — precisa da URL do proxy. Sem ela o SDK vai ao endpoint público e
+        // volta com 401 de chave inválida, erro que aponta para o lado errado.
+        ...(process.env.CALENDARIO_AI_BASE_URL
+          ? { baseUrl: process.env.CALENDARIO_AI_BASE_URL }
+          : {}),
+        headers: { 'User-Agent': 'aistudio-build' },
+      },
+    })
+  : null;
+
 function buildPlaybook(marca: string): string {
   const isApice = marca === 'Apice';
   return isApice
@@ -484,4 +513,133 @@ Retorne em formato JSON contendo o objeto de copy refinado.`;
   const parsedCopy = JSON.parse(response.text || "{}");
   parsedCopy.preHeader = "Mas, vou precisar cancelar em breve";
   return parsedCopy;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Leitura assistida do calendário.
+//
+// REGRA 1 do modelo: o LLM nunca calcula um número. Aqui isso não é uma recomendação no
+// prompt que a gente torce para ser obedecida — é uma propriedade do desenho. O calendário
+// chega pronto, com receita, R$/mil, índices e restrições já decididos pelo gerador
+// determinístico. Não existe pergunta que faça a IA produzir um número que não esteja no
+// payload, porque não há nada para ela calcular: ela recebe o resultado e o explica.
+//
+// A resposta é prosa, sem responseSchema. Um schema aqui empurraria o modelo a preencher
+// campos — e campo vazio que precisa ser preenchido é exatamente como um número inventado
+// nasce.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INSTRUCAO_CALENDARIO = `Você é analista de CRM do Grupo GoBeaute e está lendo um calendário de disparos que JÁ FOI GERADO por um modelo estatístico determinístico.
+
+REGRA ABSOLUTA E INEGOCIÁVEL: você NUNCA calcula, estima, projeta ou inventa um número. Todo número que você escrever tem de estar literalmente presente no JSON do calendário que recebeu. Se alguém perguntar algo que exija um número que não está lá, responda que o modelo não emite esse número e diga qual decisão do modelo chega mais perto. Nunca some, multiplique ou faça média de valores do payload para produzir um número novo.
+
+O que você faz: explica POR QUE o plano é como é, usando o que o payload declara — os índices de cada slot, as restrições aplicadas e relaxadas, os avisos, a decomposição por alavanca e a fronteira receita × eficiência.
+
+Contexto do modelo que você precisa dominar para explicar bem:
+- SLOT = (marca, data, hora, oferta). Um dia tem 2 ou 3 slots.
+- FAMÍLIA é a unidade de fadiga. O rodízio entre famílias é a alavanca #2 (coeficiente 0,52).
+- I1 (dia da semana) é a alavanca #1, coeficiente 0,90. Quarta é historicamente o dia mais forte.
+- Hora (I3) e oferta (I4) transferiram a 0,00 na validação fora da amostra: o modelo NÃO tem evidência de que um horário ou uma oferta específica renda mais que outro. Quando perguntarem "por que esse horário?", a resposta honesta é que o horário vem da grade operacional e do espaçamento entre disparos, NÃO de um ganho medido. Nunca invente uma justificativa de performance para horário ou oferta.
+- Elasticidade de volume α = 0,31: receita ∝ V^0,31 e R$/mil ∝ V^-0,69. Mais volume sempre traz mais receita e sempre custa eficiência.
+- O 3º disparo do dia não sobreviveu à validação — é hipótese, não compromisso.
+- H1 (teto semanal de dias com 3 ofertas), H2 (nunca duas famílias iguais no mesmo dia), H3 (célula sem suporte histórico é bloqueada), H5 (dias inativos da marca) são restrições rígidas.
+
+CATÁLOGO SINTÉTICO: enquanto as ofertas vierem nomeadas como "Oferta A1", "Oferta B2" e as famílias como "Família A", "Família B", elas são posições vazias — não são o catálogo real da marca. Nunca atribua significado comercial a esses nomes, nunca deduza o que a oferta seria, nunca comente se ela combina com a data ou com o público. Fale delas como o que são: a 1ª família, a 2ª família, o rodízio entre elas. Se o usuário perguntar sobre o conteúdo de uma oferta, diga que o catálogo real ainda não foi conectado e que o plano decide POSIÇÕES (qual dia, qual hora, qual família), não qual produto entra em cada posição — essa escolha continua sendo de quem executa.
+
+Tom: direto, técnico, em português do Brasil, sem emoji, sem bullet decorativo, sem elogiar o plano. Escreva como quem apresenta um plano para quem vai executá-lo e cobrar resultado. Prefira frases curtas. Quando o payload declarar uma restrição relaxada ou um aviso, mencione — é o tipo de coisa que quem executa precisa saber e ninguém lê no rodapé.`;
+
+/** Resumo compacto do calendário. Slot a slot cabe em ~90 linhas; acima disso, agrega por dia. */
+function resumirCalendario(cal: any): string {
+  const slots: any[] = cal.slots ?? [];
+  const porDia = new Map<string, any[]>();
+  for (const s of slots) porDia.set(s.data, [...(porDia.get(s.data) ?? []), s]);
+
+  const detalhado = porDia.size <= 31;
+  const grade = detalhado
+    ? [...porDia.entries()]
+        .map(
+          ([data, doDia]) =>
+            `${data} (${doDia[0].diaSemana}, I1=${doDia[0].indices.dia}): ` +
+            doDia
+              .sort((a, b) => a.hora - b.hora)
+              .map(
+                (s) =>
+                  `${String(s.hora).padStart(2, '0')}h "${s.oferta}" [família ${s.familia}, I2=${s.indices.familia}, agr ${s.agressividade}, gap ${s.gapFamiliaH}h, ${s.enviosPlanejados} envios, R$ ${s.receitaPrevista}, ${s.rpmPrevisto} R$/mil${s.confianca.validado ? '' : ', NÃO VALIDADO'}${s.editado ? ', EDITADO À MÃO' : ''}]`,
+              )
+              .join(' | '),
+        )
+        .join('\n')
+    : [...porDia.entries()]
+        .map(
+          ([data, doDia]) =>
+            `${data} (${doDia[0].diaSemana}): ${doDia.length} disparos, famílias ${doDia.map((s) => s.familia).join('/')}, ${doDia.reduce((a, s) => a + s.enviosPlanejados, 0)} envios, R$ ${doDia.reduce((a, s) => a + s.receitaPrevista, 0)}`,
+        )
+        .join('\n');
+
+  return `MARCA: ${cal.marca}
+PERÍODO: ${cal.periodo?.inicio} a ${cal.periodo?.fim} (${porDia.size} dias ativos, ${slots.length} disparos)
+MODO: ${cal.modo === 'eficiencia' ? 'eficiência (R$/mil)' : 'receita máxima'}
+META DECLARADA: ${cal.meta ? `${cal.meta.tipo} = ${cal.meta.valor}` : 'nenhuma (metas são opcionais neste modelo)'}
+${cal.editadoManualmente ? 'ATENÇÃO: este calendário foi editado à mão depois de gerado. Slots marcados EDITADO À MÃO não são proposta do modelo.\n' : ''}
+PREVISÃO:
+- ritmo de hoje (sem modelo): R$ ${cal.previsao?.ritmoDeHoje}
+- plano validado: R$ ${cal.previsao?.validado} (${cal.previsao?.ganhoValidadoPct}% sobre o ritmo de hoje)
+- in-sample (NÃO USAR, existe só para expor o viés): R$ ${cal.previsao?.inSampleNaoUsar}
+
+DECOMPOSIÇÃO POR ALAVANCA:
+${(cal.decomposicao ?? []).map((e: any) => `- ${e.etapa}: R$ ${e.receita} (${e.ganhoPct >= 0 ? '+' : ''}${e.ganhoPct}%)${e.validado ? '' : ' — não validado, ganho creditado 0,00'}`).join('\n')}
+
+FRONTEIRA RECEITA × EFICIÊNCIA:
+${(cal.fronteira ?? []).map((p: any) => `- volume ${p.deltaVolumePct >= 0 ? '+' : ''}${p.deltaVolumePct}%: R$ ${p.receita}, ${p.rpm} R$/mil`).join('\n')}
+
+RESTRIÇÕES APLICADAS:
+${(cal.restricoesAplicadas ?? []).map((r: string) => `- ${r}`).join('\n') || '- nenhuma'}
+
+RESTRIÇÕES RELAXADAS (cederam durante a geração):
+${(cal.restricoesRelaxadas ?? []).map((r: string) => `- ${r}`).join('\n') || '- nenhuma'}
+
+AVISOS DO MODELO:
+${(cal.avisos ?? []).map((a: string) => `- ${a}`).join('\n') || '- nenhum'}
+
+GRADE${detalhado ? '' : ' (agregada por dia — o período é longo demais para slot a slot)'}:
+${grade}`;
+}
+
+export async function explicarCalendario(params: {
+  calendario: any;
+  pergunta?: string;
+  eventosEspeciais?: string;
+}): Promise<string> {
+  const { calendario, pergunta, eventosEspeciais } = params;
+  const dias = new Set((calendario.slots ?? []).map((s: any) => s.data)).size;
+
+  // Períodos longos pedem síntese, não narração dia a dia. Trinta parágrafos descrevendo
+  // trinta quartas-feiras não é leitura assistida, é o calendário outra vez em prosa.
+  const formato = pergunta
+    ? `PERGUNTA DO USUÁRIO: ${pergunta}
+
+Responda a pergunta e só ela, em no máximo dois parágrafos curtos. Se a resposta honesta for "o modelo não mede isso", diga exatamente isso e explique de onde a decisão veio de fato.`
+    : dias > 14
+      ? `Escreva uma leitura GERAL do período, em 3 a 4 parágrafos curtos. O período é longo (${dias} dias): não narre dia a dia. Cubra, nesta ordem: (1) a lógica de distribuição — quais dias concentram volume e por quê; (2) como o rodízio de famílias foi montado e onde a fadiga apertou; (3) o trade-off receita × eficiência neste modo, ancorado na fronteira; (4) o que exige atenção de quem vai executar — restrições relaxadas, avisos e slots não validados.`
+      : `Escreva uma leitura do calendário em 3 parágrafos curtos. Cubra: (1) a lógica de distribuição entre os dias e o motivo; (2) o rodízio de famílias e os pontos onde a fadiga apertou; (3) o trade-off do modo escolhido e o que exige atenção na execução — restrições relaxadas, avisos e slots não validados.`;
+
+  const conteudo = `${resumirCalendario(calendario)}
+
+${eventosEspeciais?.trim() ? `CONTEXTO INFORMADO PELO USUÁRIO (prosa, não entrou em cálculo nenhum — use só para comentar encaixe, nunca para justificar número):\n${eventosEspeciais.trim()}\n` : ''}
+${formato}`;
+
+  if (!aiCalendario) {
+    throw new Error(
+      'CALENDARIO_AI_KEY não configurada. A área de calendários usa chave própria, ' +
+        'separada da geração de conteúdo — configure no .env.',
+    );
+  }
+
+  const response = await aiCalendario.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: conteudo,
+    config: { systemInstruction: INSTRUCAO_CALENDARIO },
+  });
+
+  return (response.text || '').trim();
 }

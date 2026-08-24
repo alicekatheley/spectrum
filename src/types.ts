@@ -54,6 +54,9 @@ export interface CalendarioSlot {
   rpmPrevisto: number;
   receitaPrevista: number;
   confianca: { validado: boolean; ic80: [number, number] };
+  // Marcado quando o slot foi alterado à mão depois da geração. O plano continua sendo do
+  // modelo; o que muda é que ESTE slot deixou de ser proposta dele e a tela precisa dizer isso.
+  editado?: boolean;
 }
 
 // Os três cenários da Fase 6. Emitir os três é obrigatório: `inSampleNaoUsar` existe
@@ -102,20 +105,29 @@ export interface CalendarioGerado {
   avisos: string[];
   // Modo degradado (§8.3): marca que não passa o gate mínimo sai sem previsão de receita.
   degradado?: boolean;
+  // Ligado no primeiro slot editado à mão. Previsão e fronteira são recalculadas a cada
+  // edição; a decomposição, não — ela descreve como o MODELO chegou ao plano original, e
+  // reescrevê-la depois de uma edição manual seria atribuir ao modelo uma decisão que não
+  // foi dele.
+  editadoManualmente?: boolean;
 }
 
-// Entrada do gerador. Modo A pede meta de receita + teto de volume (§6.2); Modo B pede
-// meta de RPM + piso de receita (§6.3). `eventosEspeciais` é contexto em prosa e não
-// entra em cálculo nenhum (Regra 1 — o LLM nunca calcula um número).
+// Entrada do gerador. TODAS as metas são opcionais: elas são leitura sobre o plano, nunca
+// comando sobre ele. Modo A aceita meta de receita (§6.2); Modo B aceita meta de RPM e piso
+// de receita — o piso é o parâmetro que responde "até onde a eficiência pode ceder receita"
+// (§6.3). Sem piso declarado, o modo B para no corte medido de 15%.
+// `diasAgressivos` (dow 0–6) e `eventosEspeciais` são direcionamento do usuário, também
+// opcionais. `eventosEspeciais` é prosa e não entra em cálculo nenhum (Regra 1 — o LLM
+// nunca calcula um número).
 export interface InputCalendario {
   marca: MarcaCalendario;
   modo: ModoCalendario;
   dataInicio: string;
   dataFim: string;
   metaReceita?: number;
-  volumeMaximo?: number;
   metaRpm?: number;
   pisoReceita?: number;
+  diasAgressivos?: number[];
   eventosEspeciais: string;
 }
 
@@ -276,4 +288,67 @@ export interface TesteAbEnvioInsider {
   insiderCampaignId: string;
   varianteAGifUrl?: string | null;
   enviadoEm: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Catálogo de produtos (Yampi → Supabase)
+//
+// Sincronizado diariamente pela Edge Function `sync-catalogo-yampi`. A UI de
+// geração de ofertas escolhe dessa lista em vez de o Gemini inventar um produto
+// — mesmo motivo do BigQuery no calendário: número real ou tela vazia, sem
+// meio-termo fabricado.
+//
+// `MarcaCatalogo` é PROPOSITALMENTE mais amplo que `Brand`: playbook de conteúdo
+// só existe pra Ápice/Barbours, mas o catálogo cobre as 5 lojas Yampi do grupo.
+// Um seletor de produto (futuro) pode mostrar Lescent/Kokeshi/Rituária mesmo sem
+// haver Modo A/B de pauta pra elas — a integração serve outros fluxos também.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type MarcaCatalogo = 'Apice' | 'Barbours' | 'Lescent' | 'Kokeshi' | 'Rituaria';
+
+export interface ImagemProduto {
+  url: string;
+  thumbnailUrl: string | null;
+  ordem: number;
+  principal: boolean;
+}
+
+export interface CategoriaProduto {
+  id: number;
+  nome: string;
+}
+
+export interface ProdutoCatalogo {
+  id: string;
+  marca: MarcaCatalogo;
+  yampiProductId: number;
+  yampiAlias: string;
+  sku: string | null;
+  nome: string;
+  descricao: string | null;
+  descricaoCurta: string | null;
+  precoDe: number | null;
+  precoPor: number | null;
+  emPromocao: boolean;
+  categorias: CategoriaProduto[];
+  imagens: ImagemProduto[];
+  imagemPrincipal: string | null;
+  urlProduto: string | null;
+  estoque: number | null;
+  disponivel: boolean;
+  sincronizadoEm: string;
+}
+
+export interface CatalogoSyncRun {
+  id: string;
+  marca: string;
+  iniciadoEm: string;
+  terminadoEm: string | null;
+  status: 'em_execucao' | 'sucesso' | 'falha';
+  produtosProcessados: number;
+  produtosNovos: number;
+  produtosAtualizados: number;
+  produtosDesativados: number;
+  erro: string | null;
+  duracaoMs: number | null;
 }
