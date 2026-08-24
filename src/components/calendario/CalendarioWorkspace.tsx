@@ -3,6 +3,7 @@ import { CalendarDays, Loader2, Lock, Moon, RefreshCw, Sun } from "lucide-react"
 import { CalendarioGerado, MarcaCalendario, ModoCalendario } from "../../types";
 import { useTheme } from "../../contexts/ThemeContext";
 import { gerarCalendarioDemo, MARCAS_SEM_MODELO, procedenciaDoCatalogo } from "../../utils/calendarioDemo";
+import { configDoContexto, type ContextoBigQuery, type ResultadoContexto } from "../../utils/calendarioContexto";
 import { EdicaoSlot, chaveSlot, editarSlot, removerSlot } from "../../utils/editarCalendario";
 import CalendarioGrid from "./CalendarioGrid";
 import EditorSlot from "./EditorSlot";
@@ -100,15 +101,59 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
   const [agressividade, setAgressividade] = useState('2');
   const [aviso, setAviso] = useState<string | null>(null);
 
+  // Contexto real do BigQuery para a marca selecionada. Enquanto não chega, o gerador
+  // cai no CONFIG estático — e a tela diz qual dos dois produziu o plano, via
+  // `procedencia`. Um plano de catálogo inventado e um de catálogo medido não merecem
+  // a mesma confiança, e a diferença tem de ser visível sem abrir o código.
+  const [contexto, setContexto] = useState<ResultadoContexto | null>(null);
+  const [erroContexto, setErroContexto] = useState<string | null>(null);
+  const [carregandoContexto, setCarregandoContexto] = useState(false);
+
+  useEffect(() => {
+    let cancelado = false;
+    setContexto(null);
+    setErroContexto(null);
+    if (MARCAS_SEM_MODELO.includes(marca)) return;
+
+    setCarregandoContexto(true);
+    fetch(`/api/calendario/contexto?marca=${encodeURIComponent(marca)}`)
+      .then(async (r) => {
+        const corpo = await r.json();
+        if (!r.ok) throw new Error(corpo?.error ?? 'Falha ao carregar o contexto.');
+        return corpo.data as ContextoBigQuery;
+      })
+      .then((ctx) => {
+        if (!cancelado) setContexto(configDoContexto(ctx));
+      })
+      .catch((e: any) => {
+        // Falhar aqui NÃO bloqueia a geração: o plano estático continua servindo para
+        // ler a forma do modelo. O que não pode acontecer é cair para o estático em
+        // silêncio, porque aí os números inventados passam por medidos.
+        if (!cancelado) setErroContexto(e?.message ?? 'Contexto do BigQuery indisponível.');
+      })
+      .finally(() => {
+        if (!cancelado) setCarregandoContexto(false);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [marca]);
+
   const marcaSemModelo = MARCAS_SEM_MODELO.includes(marca);
   const periodoValido = Boolean(dataInicio && dataFim && dataInicio <= dataFim);
-  const podeGerar = periodoValido && !marcaSemModelo;
+  const podeGerar = periodoValido && !marcaSemModelo && !carregandoContexto;
   const slotAberto = calendario?.slots.find((s) => chaveSlot(s) === slotSelecionado) ?? null;
 
   // Deriva da marca DO CALENDÁRIO, não da marca selecionada no formulário: depois de gerar,
   // o usuário pode trocar o seletor sem gerar de novo, e o aviso tem de continuar descrevendo
   // o plano que está na tela.
-  const procedencia = calendario ? procedenciaDoCatalogo(calendario.marca) : 'sintetico';
+  // Congelada no momento da geração: depois de gerar, trocar o seletor de marca
+  // recarrega o contexto, e ler a procedência do contexto ATUAL faria o rótulo
+  // descrever uma marca que não é a do plano na tela.
+  const procedencia = calendario
+    ? (calendario.procedencia ?? procedenciaDoCatalogo(calendario.marca))
+    : 'sintetico';
 
   /**
    * Chama a leitura assistida. O calendário vai inteiro no corpo: a IA explica um plano que
@@ -138,17 +183,20 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
     setAviso(null);
     setSlotSelecionado(null);
     setErroEdicao(null);
-    const gerado = gerarCalendarioDemo({
-      marca,
-      modo,
-      dataInicio,
-      dataFim,
-      metaReceita: paraNumero(metaReceita),
-      metaRpm: paraNumero(metaRpm),
-      pisoReceita: paraNumero(pisoReceita),
-      diasAgressivos,
-      eventosEspeciais,
-    });
+    const gerado = gerarCalendarioDemo(
+      {
+        marca,
+        modo,
+        dataInicio,
+        dataFim,
+        metaReceita: paraNumero(metaReceita),
+        metaRpm: paraNumero(metaRpm),
+        pisoReceita: paraNumero(pisoReceita),
+        diasAgressivos,
+        eventosEspeciais,
+      },
+      contexto?.config,
+    );
     setCalendario(gerado);
     setConversa([]);
     void consultarIa(gerado);
@@ -291,6 +339,22 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
           })}
         </div>
       </div>
+
+      {/* Cair para o CONFIG estático é aceitável; cair em silêncio não é. Sem este
+          aviso, um plano de números inventados fica visualmente idêntico a um plano
+          medido, e a única diferença some junto com a conexão. */}
+      {erroContexto && !marcaSemModelo && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">
+            Contexto do BigQuery indisponível — usando catálogo estático
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-[var(--shell-text-muted)]">
+            {erroContexto} O plano ainda pode ser gerado, mas o catálogo, o volume e o RPM
+            voltam a ser os valores fixos do código — leia a forma do plano e ignore os
+            reais até a conexão voltar.
+          </p>
+        </div>
+      )}
 
       {marcaSemModelo ? (
         /* Gocase segue no seletor porque a pendência será resolvida — mas selecioná-la não
@@ -553,6 +617,38 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                         significam nada. O corte em famílias é uma proposta: como família é a
                         unidade de fadiga, cortar fino demais faz o modelo subestimar repetição.
                       </p>
+                    </div>
+                  )}
+
+                  {procedencia === 'dados' && (
+                    <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                        Catálogo extraído do histórico
+                      </p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-[var(--shell-text-muted)]">
+                        Ofertas, famílias, grade de horários, índice por dia, censo de
+                        viabilidade, volume e RPM de base vêm do BigQuery — as receitas em
+                        reais desta tela finalmente significam alguma coisa.{' '}
+                        <strong className="text-[var(--shell-text)]">
+                          Duas ressalvas que continuam valendo.
+                        </strong>{' '}
+                        A primeira: não há índice medido por família, então o modelo trata
+                        todas como equivalentes em performance — o rodízio acontece por
+                        fadiga e por H2, não porque uma família renda mais. A segunda: os
+                        fluxos automatizados ficaram de fora do plano (não são agendáveis),
+                        e com eles saiu também a pressão que eles exercem sobre a base, que
+                        o modelo de fadiga portanto subestima.
+                      </p>
+                      {contexto && contexto.excluidas.length > 0 && (
+                        <ul className="mt-2 space-y-1 border-t border-emerald-500/20 pt-2">
+                          {contexto.excluidas.map((e) => (
+                            <li key={`${e.familia}-${e.motivo}`} className="text-xs text-[var(--shell-text-muted)]">
+                              <strong className="text-[var(--shell-text)]">{e.familia}</strong>{' '}
+                              ({e.ofertas.length} {e.ofertas.length === 1 ? 'oferta' : 'ofertas'}) — {e.motivo}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
 

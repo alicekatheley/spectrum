@@ -17,6 +17,7 @@ import {
   getBrandDna, buildImagePrompt, uploadReferenceToPiApp, generateImageViaPiApp,
 } from "./piapp.ts";
 import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique } from "./validators.ts";
+import { aiProxyConfigurado } from "./ai-proxy.ts";
 import {
   carregarContextoModelo, getContextoModelo, getContextoMarca, getStatusBigQuery,
   campanhasNaoClassificadas,
@@ -998,14 +999,13 @@ app.post("/api/calendario/explicar", async (req, res) => {
     // escopo — erro que não tem nada a ver com a causa e manda quem for depurar para o lado
     // errado. Falhar aqui, dizendo o que falta, custa três linhas.
     //
-    // Checa CALENDARIO_AI_KEY, não GEMINI_API_KEY: esta área tem chave própria de
-    // propósito. Este guard ficou apontando para a chave errada depois que as duas
-    // foram separadas, e o efeito foi pior que não ter guard nenhum — respondia
-    // "GEMINI_API_KEY não configurada" mesmo com a chave do calendário presente,
-    // mandando depurar a variável errada.
-    if (!process.env.CALENDARIO_AI_KEY) {
+    // A resolução da chave mora em ai-proxy.ts (área "calendario" → CALENDARIO_AI_KEY,
+    // com AI_PROXY_KEY como padrão compartilhado). Duplicar a regra aqui foi o que
+    // produziu o bug anterior: o guard continuou checando GEMINI_API_KEY depois que
+    // as chaves mudaram e passou a acusar a variável errada.
+    if (!aiProxyConfigurado("calendario")) {
       return res.status(503).json({
-        error: "CALENDARIO_AI_KEY não configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.",
+        error: "Nenhuma chave do AI proxy configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.",
       });
     }
 

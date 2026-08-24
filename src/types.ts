@@ -110,6 +110,14 @@ export interface CalendarioGerado {
   // reescrevê-la depois de uma edição manual seria atribuir ao modelo uma decisão que não
   // foi dele.
   editadoManualmente?: boolean;
+  /**
+   * De onde veio o catálogo que gerou ESTE plano — 'sintetico' | 'ditado' | 'dados'.
+   *
+   * Carimbado no plano, e não consultado por marca na hora de exibir, porque o
+   * usuário pode trocar o seletor de marca depois de gerar. Lido por marca, o
+   * rótulo passaria a descrever a marca selecionada em vez do plano na tela.
+   */
+  procedencia?: 'sintetico' | 'ditado' | 'dados';
 }
 
 // Entrada do gerador. TODAS as metas são opcionais: elas são leitura sobre o plano, nunca

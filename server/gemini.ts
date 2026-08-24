@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 import { GoogleGenAI, Type } from "@google/genai";
+import { chatTexto, aiProxyConfigurado } from "./ai-proxy.ts";
 
 export const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -23,22 +24,16 @@ export const ai = new GoogleGenAI({
  * duas áreas voltariam a se misturar exatamente no dia em que alguém esquecesse de
  * configurar, e sem nenhum sinal de que isso aconteceu.
  */
-const CALENDARIO_AI_KEY = process.env.CALENDARIO_AI_KEY;
-
-export const aiCalendario = CALENDARIO_AI_KEY
-  ? new GoogleGenAI({
-      apiKey: CALENDARIO_AI_KEY,
-      httpOptions: {
-        // Um token de gateway (prefixo gw-tok-) não fala com generativelanguage.googleapis.com
-        // direto — precisa da URL do proxy. Sem ela o SDK vai ao endpoint público e
-        // volta com 401 de chave inválida, erro que aponta para o lado errado.
-        ...(process.env.CALENDARIO_AI_BASE_URL
-          ? { baseUrl: process.env.CALENDARIO_AI_BASE_URL }
-          : {}),
-        headers: { 'User-Agent': 'aistudio-build' },
-      },
-    })
-  : null;
+// A área de calendários fala com o AI proxy do Grupo via `server/ai-proxy.ts`.
+//
+// Aqui existia um segundo cliente `@google/genai` com `baseUrl` apontando para o
+// proxy, e um comentário afirmando que era isso que um token `gw-tok-` precisava.
+// Estava errado, e vale registrar por quê: os dois protocolos não são compatíveis.
+// O SDK do Google fala `:generateContent` com `contents[].parts[]`; o proxy é
+// OpenAI-compatível e espera `/chat/completions` com `messages[]`. Trocar a URL
+// mandava o corpo errado para o endereço certo — e o sintoma era um 400
+// "API key not valid" vindo de generativelanguage.googleapis.com, que apontava
+// para a chave quando o problema era o formato da requisição.
 
 function buildPlaybook(marca: string): string {
   const isApice = marca === 'Apice';
@@ -628,18 +623,18 @@ Responda a pergunta e só ela, em no máximo dois parágrafos curtos. Se a respo
 ${eventosEspeciais?.trim() ? `CONTEXTO INFORMADO PELO USUÁRIO (prosa, não entrou em cálculo nenhum — use só para comentar encaixe, nunca para justificar número):\n${eventosEspeciais.trim()}\n` : ''}
 ${formato}`;
 
-  if (!aiCalendario) {
+  if (!aiProxyConfigurado('calendario')) {
     throw new Error(
-      'CALENDARIO_AI_KEY não configurada. A área de calendários usa chave própria, ' +
-        'separada da geração de conteúdo — configure no .env.',
+      'Nenhuma chave do AI proxy configurada para a área de calendários. ' +
+        'Defina AI_PROXY_KEY (ou CALENDARIO_AI_KEY) no .env.',
     );
   }
 
-  const response = await aiCalendario.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: conteudo,
-    config: { systemInstruction: INSTRUCAO_CALENDARIO },
+  // Prosa, não JSON: a leitura é texto corrido e um schema aqui empurraria o modelo
+  // a preencher campos em vez de responder o que foi perguntado (ver nota na §527).
+  return chatTexto({
+    area: 'calendario',
+    system: INSTRUCAO_CALENDARIO,
+    user: conteudo,
   });
-
-  return (response.text || '').trim();
 }

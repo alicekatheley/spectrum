@@ -77,13 +77,27 @@ const SUPORTE_3_OFERTAS: number[] = [0, 1, 8, 5, 8, 2, 2];
  */
 type Procedencia = 'sintetico' | 'ditado' | 'dados';
 
-interface ConfigMarca {
+export interface ConfigMarca {
   diasAtivos: number[]; // H5 — dias inativos permanecem inativos
   maxDiasCom3: number; // H1 — teto operacional por semana (§1.3)
   familias: { nome: string; ofertas: string[]; agressividade: number }[];
   volumeSemana: number; // volume_maximo_semana (§7.3)
   rpmBase: number; // âncora: RPM real das últimas 4 semanas (§4.4)
   procedencia: Procedencia;
+
+  // ── Abaixo: o que antes eram constantes de módulo ────────────────────────
+  // Eram quatro `const` no topo do arquivo, iguais para todas as marcas, medidas
+  // uma vez para Lescent e aplicadas a Barbour's, Ápice, Kokeshi e Rituária sem
+  // ninguém dizer isso na tela. Viraram campos de config porque cada marca tem a
+  // sua grade, o seu perfil de dia e o seu censo de viabilidade no BigQuery —
+  // e porque a alternativa (ler a constante global) é indistinguível, no código,
+  // de ter medido a marca certa.
+  grade: number[][]; // §7.3 — janelas por dia da semana, índice = dow
+  indiceDia: number[]; // I1 — qualidade por dia da semana, índice = dow
+  suporte3: number[]; // Fase 1 — dias observados com 3 ofertas, por dow (H3)
+  alpha: number; // §6.1 — elasticidade de volume: receita ∝ V^alpha
+  /** I2 real por família, quando vem do BigQuery. Ausente ⇒ derivado da semente. */
+  indiceFamilia?: Record<string, number>;
 }
 
 const TODOS_OS_DIAS = [0, 1, 2, 3, 4, 5, 6];
@@ -186,6 +200,22 @@ const FAMILIAS_LESCENT: ConfigMarca['familias'] = [
   },
 ];
 
+/**
+ * Os quatro valores medidos, aplicados a todas as marcas do CONFIG estático.
+ *
+ * Isto NÃO é "o padrão do modelo": é a Lescent, medida uma vez, sendo usada como
+ * se descrevesse as outras quatro marcas. Era exatamente o comportamento anterior
+ * (constantes de módulo lidas direto), e continua aqui só para o CONFIG estático
+ * não mudar de número ao virar campo. Marca que carrega contexto do BigQuery
+ * sobrescreve os quatro — ver `configDoContexto`.
+ */
+const PADRAO_MEDIDO = {
+  grade: GRADE,
+  indiceDia: INDICE_DIA,
+  suporte3: SUPORTE_3_OFERTAS,
+  alpha: ALPHA,
+};
+
 const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
   Lescent: {
     diasAtivos: TODOS_OS_DIAS,
@@ -196,6 +226,7 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     rpmBase: 28.4,
     familias: FAMILIAS_LESCENT,
     procedencia: 'ditado',
+    ...PADRAO_MEDIDO,
   },
   Barbours: {
     diasAtivos: [1, 2, 3, 4, 5, 6],
@@ -204,6 +235,7 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     rpmBase: 34.1,
     familias: familiasSinteticas(5),
     procedencia: 'sintetico',
+    ...PADRAO_MEDIDO,
   },
   Apice: {
     diasAtivos: [1, 2, 3, 4, 5],
@@ -212,6 +244,7 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     rpmBase: 22.7,
     familias: familiasSinteticas(4),
     procedencia: 'sintetico',
+    ...PADRAO_MEDIDO,
   },
   Rituaria: {
     diasAtivos: [1, 2, 3, 4, 5, 6],
@@ -220,6 +253,7 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     rpmBase: 19.3,
     familias: familiasSinteticas(4),
     procedencia: 'sintetico',
+    ...PADRAO_MEDIDO,
   },
   Kokeshi: {
     diasAtivos: [1, 2, 3, 4, 5],
@@ -228,6 +262,7 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     rpmBase: 17.8,
     familias: familiasSinteticas(4),
     procedencia: 'sintetico',
+    ...PADRAO_MEDIDO,
   },
 };
 
@@ -281,8 +316,29 @@ function semanasDoPeriodo(inicio: string, fim: string, diasAtivos: number[]): Da
   return semanas;
 }
 
-export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
-  const cfg = CONFIG[input.marca as MarcaAtiva] ?? CONFIG.Lescent;
+export function gerarCalendarioDemo(
+  input: InputCalendario,
+  /**
+   * Config vinda do BigQuery. Quando presente, substitui o CONFIG estático inteiro —
+   * catálogo, volume, RPM, grade, I1, censo de viabilidade e alpha.
+   *
+   * É parâmetro opcional, e não uma troca do CONFIG, porque as duas procedências
+   * precisam coexistir enquanto nem toda marca tem contexto carregável: sem
+   * BigQuery no ar a tela cai para o estático e DIZ isso (procedencia), em vez de
+   * ficar em branco ou fingir dado.
+   */
+  configExterna?: ConfigMarca,
+): CalendarioGerado {
+  const cfg = configExterna ?? CONFIG[input.marca as MarcaAtiva] ?? CONFIG.Lescent;
+
+  // Sombreiam as constantes de módulo de mesmo nome, de propósito. O corpo desta
+  // função lê GRADE/INDICE_DIA/SUPORTE_3_OFERTAS/ALPHA em ~30 lugares; ligá-los à
+  // config aqui, em vez de reescrever os 30, mantém o diff no que de fato mudou
+  // (a ORIGEM dos números) e não na aritmética, que não mudou.
+  const GRADE = cfg.grade;
+  const INDICE_DIA = cfg.indiceDia;
+  const SUPORTE_3_OFERTAS = cfg.suporte3;
+  const ALPHA = cfg.alpha;
   const semente = hash(`${input.marca}|${input.dataInicio}|${input.dataFim}|${input.modo}`);
   const eficiencia = input.modo === 'eficiencia';
 
@@ -298,9 +354,36 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
   const restricoesRelaxadas: string[] = [];
   const avisos: string[] = [];
 
+  // Qualidade por família. Três procedências, e a diferença entre elas importa:
+  //
+  //  - cfg.indiceFamilia presente  → medido, usa como está.
+  //  - procedência 'dados'         → NEUTRO (1.0 para todas). Ver abaixo.
+  //  - resto (sintético/ditado)    → derivado da semente, como antes.
+  //
+  // O ramo neutro é o que muda de verdade. A linha anterior derivava a qualidade de
+  // cada família de um HASH do nome da marca e do período — variância inventada, que
+  // mexe em qual família ganha o melhor horário e em quanta receita a tela mostra.
+  // Num catálogo sintético isso é inofensivo (os rótulos já são falsos). Sobre dados
+  // reais seria pior que inútil: daria a famílias reais uma diferença de performance
+  // que ninguém mediu, embrulhada em número.
+  //
+  // E não há o que colocar no lugar. O BigQuery não expõe índice por família: I2 é
+  // por FAIXA DE GAP ('2-4d', '7-30d'), não por família, e I4 é por OFERTA e vem com
+  // veredito 'NAO transfere' nas 22 — com transferência global negativa (-0,436),
+  // que é reversão à média em amostra pequena, não sinal. Neutro é a leitura honesta:
+  // o rodízio de famílias continua acontecendo por H2 e por fadiga, que são regras
+  // observadas, e deixa de fingir que uma família rende mais que a outra.
   const indiceFamilia = new Map<string, number>();
   cfg.familias.forEach((f, i) => {
-    indiceFamilia.set(f.nome, Number((0.8 + ((semente >> (i + 2)) % 42) / 100).toFixed(3)));
+    const medido = cfg.indiceFamilia?.[f.nome];
+    indiceFamilia.set(
+      f.nome,
+      medido !== undefined
+        ? medido
+        : cfg.procedencia === 'dados'
+          ? 1
+          : Number((0.8 + ((semente >> (i + 2)) % 42) / 100).toFixed(3)),
+    );
   });
   const mediaFamilia = [...indiceFamilia.values()].reduce((a, b) => a + b, 0) / cfg.familias.length;
   const qualidadeFamilia = (nome: string) =>
@@ -775,7 +858,10 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
       : input.metaReceita
         ? { tipo: 'receita', valor: input.metaReceita }
         : null,
-    snapshotIndicesId: `snap-${(semente >> 4).toString(16)}-fixture`,
+    // O sufixo distingue plano medido de fixture. Um id de snapshot terminado em
+    // "-fixture" num plano que foi para a operação é o rastro de que os números
+    // não vieram do BigQuery.
+    snapshotIndicesId: `snap-${(semente >> 4).toString(16)}-${cfg.procedencia === 'dados' ? 'bq' : 'fixture'}`,
     geradoEm: new Date().toISOString(),
     slots,
     previsao,
@@ -784,5 +870,6 @@ export function gerarCalendarioDemo(input: InputCalendario): CalendarioGerado {
     restricoesAplicadas,
     restricoesRelaxadas,
     avisos,
+    procedencia: cfg.procedencia,
   };
 }
