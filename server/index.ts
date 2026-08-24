@@ -997,9 +997,15 @@ app.post("/api/calendario/explicar", async (req, res) => {
     // Sem chave, o SDK cai silenciosamente nas credenciais do gcloud e volta com um 403 de
     // escopo — erro que não tem nada a ver com a causa e manda quem for depurar para o lado
     // errado. Falhar aqui, dizendo o que falta, custa três linhas.
-    if (!process.env.GEMINI_API_KEY) {
+    //
+    // Checa CALENDARIO_AI_KEY, não GEMINI_API_KEY: esta área tem chave própria de
+    // propósito. Este guard ficou apontando para a chave errada depois que as duas
+    // foram separadas, e o efeito foi pior que não ter guard nenhum — respondia
+    // "GEMINI_API_KEY não configurada" mesmo com a chave do calendário presente,
+    // mandando depurar a variável errada.
+    if (!process.env.CALENDARIO_AI_KEY) {
       return res.status(503).json({
-        error: "GEMINI_API_KEY não configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.",
+        error: "CALENDARIO_AI_KEY não configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.",
       });
     }
 
