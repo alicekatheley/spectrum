@@ -1423,6 +1423,10 @@ async function generateGifFramesForAgente(params: {
   const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
   let masterFrameRefUrl: string | undefined;
 
+  // Cada frame é tentado individualmente — se um falhar, os demais seguem tentando em vez de
+  // abortar o lote inteiro. Antes, uma falha em qualquer frame descartava os frames já gerados
+  // com sucesso e a pauta terminava sem nenhuma imagem; agora ela sai com os frames que deram
+  // certo, em vez de "sem nada".
   for (const { frameName, frameDescription } of frames) {
     const prompt = buildFramePrompt({
       frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa,
@@ -1431,17 +1435,21 @@ async function generateGifFramesForAgente(params: {
     // t2i não aceita imagem de referência — trocar pra edit a partir do frame que usa o
     // frame-mestre como referência (frames 2+).
     const imageModel = resolveImageModel('wavespeed-gpt-image-2-t2i', !!masterFrameRefUrl);
-    const result = await generateImage(
-      prompt, aspectRatio, imageModel, piappApiKey,
-      masterFrameRefUrl ? [masterFrameRefUrl] : undefined,
-    );
-    frameResults.push({ frameName, ...result });
-    if (!masterFrameRefUrl) {
-      try {
-        masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`, piappApiKey);
-      } catch (err: any) {
-        console.error('[agente-gif] Falha ao subir master frame como referência:', err.message);
+    try {
+      const result = await generateImage(
+        prompt, aspectRatio, imageModel, piappApiKey,
+        masterFrameRefUrl ? [masterFrameRefUrl] : undefined,
+      );
+      frameResults.push({ frameName, ...result });
+      if (!masterFrameRefUrl) {
+        try {
+          masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`, piappApiKey);
+        } catch (err: any) {
+          console.error('[agente-gif] Falha ao subir master frame como referência:', err.message);
+        }
       }
+    } catch (err: any) {
+      console.error(`[agente-gif] Falha ao gerar o frame "${frameName}" (pulando, mantendo os demais):`, err.message);
     }
   }
 

@@ -341,9 +341,19 @@ export default function ModoCPanel({
                                 </p>
                               </div>
                               {envio ? (
-                                <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-[11px] bg-emerald-50 px-3 py-2 border border-emerald-200 rounded-xl shrink-0">
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  Enviada (#{envio.insiderCampaignId})
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-[11px] bg-emerald-50 px-3 py-2 border border-emerald-200 rounded-xl">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Enviada (#{envio.insiderCampaignId})
+                                  </div>
+                                  <button
+                                    onClick={() => setEnvioAberto(aberto ? null : key)}
+                                    title="Enviar de novo pra Insider da mesma marca (cria uma nova campanha lá)"
+                                    className="bg-white hover:bg-slate-50 border border-[var(--shell-border)] text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+                                  >
+                                    <Send className="w-3.5 h-3.5" />
+                                    {aberto ? 'Fechar' : 'Reenviar'}
+                                  </button>
                                 </div>
                               ) : (
                                 <button
@@ -356,7 +366,7 @@ export default function ModoCPanel({
                               )}
                             </div>
 
-                            {aberto && !envio && (
+                            {aberto && (
                               <div className="flex flex-col gap-2.5 bg-[var(--shell-panel-soft)] border border-[var(--shell-border)] rounded-xl p-3.5">
                                 <div className="flex flex-col gap-1">
                                   <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--shell-text-muted)]">
@@ -406,7 +416,11 @@ export default function ModoCPanel({
                                   className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all self-start"
                                 >
                                   <Send className="w-3.5 h-3.5" />
-                                  {enviandoInsiderId === proposta.id ? 'Enviando...' : `Enviar para Insider da ${marca}`}
+                                  {enviandoInsiderId === proposta.id
+                                    ? 'Enviando...'
+                                    : envio
+                                      ? `Reenviar pra Insider da ${marca} (nova campanha)`
+                                      : `Enviar para Insider da ${marca}`}
                                 </button>
                               </div>
                             )}

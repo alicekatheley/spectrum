@@ -5,6 +5,7 @@ import BannerSimulador from "./BannerSimulador";
 import { downloadFile, generatePautaBriefingText } from "../utils";
 import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont } from "../utils/composeFrame";
 import { loadGifshot } from "../utils/loadGifshot";
+import { TituloFontColorFields, SubtituloFontColorFields, BotaoFontColorFields } from "./EstiloTextoFields";
 
 function SliderRow({
   label, value, min, max, step, unit, onChange,
@@ -367,6 +368,26 @@ export default function PreviewModal({
     setButtonFontSizePx(null);
   };
 
+  // Fonte/cor manuais do título, subtítulo e botão — '' = usa o padrão da marca (mesmo default
+  // já aplicado no composeFrame quando esses campos não vêm preenchidos).
+  const [fonteEscolhida, setFonteEscolhida] = useState(inputOriginalPos.fonteEscolhida ?? '');
+  const [corTextoPrincipal, setCorTextoPrincipal] = useState(inputOriginalPos.corTextoPrincipal ?? '#FFFFFF');
+  const [fonteSubtitulo, setFonteSubtitulo] = useState(inputOriginalPos.fonteSubtitulo ?? '');
+  const [corSubtitulo, setCorSubtitulo] = useState(inputOriginalPos.corSubtitulo ?? 'rgba(255,255,255,0.90)');
+  const [corBotaoEscolhida, setCorBotaoEscolhida] = useState(inputOriginalPos.corBotaoEscolhida ?? '');
+  const [corTextoBotao, setCorTextoBotao] = useState(inputOriginalPos.corTextoBotao ?? '#FFFFFF');
+  const [fonteBotao, setFonteBotao] = useState(inputOriginalPos.fonteBotao ?? '');
+
+  const resetFonteCor = () => {
+    setFonteEscolhida('');
+    setCorTextoPrincipal('#FFFFFF');
+    setFonteSubtitulo('');
+    setCorSubtitulo('rgba(255,255,255,0.90)');
+    setCorBotaoEscolhida('');
+    setCorTextoBotao('#FFFFFF');
+    setFonteBotao('');
+  };
+
   // Tamanhos/posição efetivos da prévia CSS (aba "Editar Copy") — usam os MESMOS defaults do
   // composeFrame (canvas), em vez de valores fixos, senão a prévia mostra tamanho/posição
   // diferentes do resultado real assim que o headline muda de tamanho.
@@ -389,9 +410,9 @@ export default function PreviewModal({
 
   useEffect(() => {
     let cancelado = false;
-    const headlineRaw = inputOriginalPos.fonteEscolhida || (isApice ? 'Playfair Display' : 'Oswald');
-    const subRaw = inputOriginalPos.fonteSubtitulo || (isApice ? 'Montserrat' : 'Inter');
-    const btnRaw = inputOriginalPos.fonteBotao || subRaw;
+    const headlineRaw = fonteEscolhida || (isApice ? 'Playfair Display' : 'Oswald');
+    const subRaw = fonteSubtitulo || (isApice ? 'Montserrat' : 'Inter');
+    const btnRaw = fonteBotao || subRaw;
     Promise.all([
       loadFont(headlineRaw, '900'),
       loadFont(subRaw, '600'),
@@ -403,8 +424,7 @@ export default function PreviewModal({
       setPreviewButtonFont(b);
     });
     return () => { cancelado = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pauta.id, inputOriginalPos.fonteEscolhida, inputOriginalPos.fonteSubtitulo, inputOriginalPos.fonteBotao, isApice]);
+  }, [fonteEscolhida, fonteSubtitulo, fonteBotao, isApice]);
 
   // Disparar atualização para o pai para que o BannerSimulador atualize ao digito
   const handleFieldChange = (key: keyof PautaCopy, value: string) => {
@@ -441,8 +461,9 @@ export default function PreviewModal({
       const { composeFrame } = await import('../utils/composeFrame');
       const inputOriginal = (pauta as any).inputOriginal;
 
-      // Mesma lógica de montagem de estiloVisual usada na geração original
-      const fonteEscolhida = inputOriginal?.fonteEscolhida || '';
+      // Mesma lógica de montagem de estiloVisual usada na geração original, mas usando o estado
+      // editável dos pickers de fonte/cor (inicializado a partir de inputOriginal, porém agora
+      // ajustável ao vivo nesta aba) em vez de ler inputOriginal direto.
       const estiloTexto = inputOriginal?.estiloVisualTexto;
       const direcionamento = inputOriginal?.direcionamento;
       const textoParaParse = estiloTexto || direcionamento;
@@ -458,15 +479,15 @@ export default function PreviewModal({
           estiloVisual = await estiloRes.json();
         } catch { /* ignore, usa defaults */ }
       }
-      if (fonteEscolhida || inputOriginal?.corBotaoEscolhida || inputOriginal?.fonteBotao || inputOriginal?.corTextoBotao) {
+      if (fonteEscolhida || corBotaoEscolhida || fonteBotao || corTextoBotao) {
         estiloVisual = {
           ...estiloVisual,
           familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
-          corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
+          corTexto: corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
           estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
-          corBotao: inputOriginal?.corBotaoEscolhida || estiloVisual?.corBotao,
-          corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
-          familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
+          corBotao: corBotaoEscolhida || estiloVisual?.corBotao,
+          corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
+          familiaFonteBotao: fonteBotao || estiloVisual?.familiaFonteBotao,
         };
       }
       if (estiloVisual && !estiloVisual.corBotao) {
@@ -474,10 +495,10 @@ export default function PreviewModal({
       }
       const estiloVisualFinal = {
         ...estiloVisual,
-        familiaFonteSubheadline: inputOriginal?.fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
-        corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
-        familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
-        corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
+        familiaFonteSubheadline: fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
+        corSubheadline: corSubtitulo || estiloVisual?.corSubheadline,
+        familiaFonteBotao: fonteBotao || estiloVisual?.familiaFonteBotao,
+        corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
         headlineTopPercent: headlineTopPercent ?? undefined,
         headlineSizePx: headlineSizePx ?? undefined,
         subheadlineTopPercent: subheadlineTopPercent ?? undefined,
@@ -538,7 +559,7 @@ export default function PreviewModal({
         }
       }
 
-      // Salva a posição/tamanho escolhidos junto da pauta, pra lembrar da próxima vez
+      // Salva a posição/tamanho e fonte/cor escolhidos junto da pauta, pra lembrar da próxima vez
       if (onUpdatePauta) {
         onUpdatePauta({
           ...pauta,
@@ -553,6 +574,13 @@ export default function PreviewModal({
             buttonWidthPercent: buttonWidthPercent ?? undefined,
             buttonHeightPercent: buttonHeightPercent ?? undefined,
             buttonFontSizePx: buttonFontSizePx ?? undefined,
+            fonteEscolhida: fonteEscolhida || undefined,
+            corTextoPrincipal: corTextoPrincipal || undefined,
+            fonteSubtitulo: fonteSubtitulo || undefined,
+            corSubtitulo: corSubtitulo || undefined,
+            corBotaoEscolhida: corBotaoEscolhida || undefined,
+            corTextoBotao: corTextoBotao || undefined,
+            fonteBotao: fonteBotao || undefined,
           },
         } as any);
       }
@@ -748,8 +776,10 @@ export default function PreviewModal({
         <div className="flex-1 overflow-y-auto p-6 md:p-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             
-            {/* Coluna Esquerda: Simulador Animado da Pauta */}
-            <div className="lg:col-span-5 flex flex-col gap-4 text-center">
+            {/* Coluna Esquerda: Simulador Animado da Pauta — sticky no desktop pra acompanhar o
+                scroll da coluna de edição (Fonte e Cor, Posição e Tamanho ficam bem abaixo), em
+                vez de sumir de vista assim que o usuário rola pra baixo. */}
+            <div className="lg:col-span-5 flex flex-col gap-4 text-center lg:sticky lg:top-0">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-1">
                 Visualização do GIF de E-mail CRM
               </span>
@@ -793,8 +823,7 @@ export default function PreviewModal({
                             fontSize: `${previewHeadlineSize * previewScale}px`,
                             fontFamily: previewHeadlineFont,
                             fontWeight: 900,
-                            color: (pauta as any).inputOriginal?.corTextoPrincipal || '#FFFFFF',
-                            textShadow: '0 2px 8px rgba(0,0,0,0.65)',
+                            color: corTextoPrincipal || '#FFFFFF',
                             lineHeight: 1.15,
                           }}
                         >
@@ -810,8 +839,7 @@ export default function PreviewModal({
                             fontSize: `${previewSubheadlineSize * previewScale}px`,
                             fontFamily: previewSubheadlineFont,
                             fontWeight: 600,
-                            color: (pauta as any).inputOriginal?.corSubtitulo || 'rgba(255,255,255,0.90)',
-                            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+                            color: corSubtitulo || 'rgba(255,255,255,0.90)',
                             lineHeight: 1.2,
                           }}
                         >
@@ -827,9 +855,9 @@ export default function PreviewModal({
                           borderRadius: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'retangular' ? '6px' : '999px',
                           backgroundColor: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'outline'
                             ? 'transparent'
-                            : ((pauta as any).inputOriginal?.corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')),
+                            : (corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')),
                           border: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'outline'
-                            ? `2px solid ${(pauta as any).inputOriginal?.corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')}`
+                            ? `2px solid ${corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')}`
                             : 'none',
                         }}
                       >
@@ -838,7 +866,7 @@ export default function PreviewModal({
                             fontSize: `${(buttonFontSizePx ?? 34) * previewScale}px`,
                             fontFamily: previewButtonFont,
                             fontWeight: 800,
-                            color: (pauta as any).inputOriginal?.corTextoBotao || '#FFFFFF',
+                            color: corTextoBotao || '#FFFFFF',
                             textTransform: 'uppercase',
                           }}
                         >
@@ -1098,6 +1126,59 @@ export default function PreviewModal({
                         </div>
                       </div>
                     )}
+
+                    {/* Fonte e cor manuais do título, subtítulo e botão */}
+                    <div className="mt-2 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-extrabold tracking-widest text-indigo-300">
+                          Fonte e Cor
+                        </span>
+                        <button
+                          type="button"
+                          onClick={resetFonteCor}
+                          className="text-[10px] text-slate-400 hover:text-slate-200 underline cursor-pointer"
+                        >
+                          Restaurar padrão
+                        </button>
+                      </div>
+
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Título</span>
+                        <TituloFontColorFields
+                          marca={pauta.marca as 'Apice' | 'Barbours'}
+                          values={{ fonteEscolhida, corTextoPrincipal }}
+                          onChange={(patch) => {
+                            if (patch.fonteEscolhida !== undefined) setFonteEscolhida(patch.fonteEscolhida);
+                            if (patch.corTextoPrincipal !== undefined) setCorTextoPrincipal(patch.corTextoPrincipal);
+                          }}
+                        />
+                      </div>
+
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Subtítulo</span>
+                        <SubtituloFontColorFields
+                          marca={pauta.marca as 'Apice' | 'Barbours'}
+                          values={{ fonteSubtitulo, corSubtitulo }}
+                          onChange={(patch) => {
+                            if (patch.fonteSubtitulo !== undefined) setFonteSubtitulo(patch.fonteSubtitulo);
+                            if (patch.corSubtitulo !== undefined) setCorSubtitulo(patch.corSubtitulo);
+                          }}
+                        />
+                      </div>
+
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Botão CTA</span>
+                        <BotaoFontColorFields
+                          marca={pauta.marca as 'Apice' | 'Barbours'}
+                          values={{ corBotaoEscolhida, corTextoBotao, fonteBotao }}
+                          onChange={(patch) => {
+                            if (patch.corBotaoEscolhida !== undefined) setCorBotaoEscolhida(patch.corBotaoEscolhida);
+                            if (patch.corTextoBotao !== undefined) setCorTextoBotao(patch.corTextoBotao);
+                            if (patch.fonteBotao !== undefined) setFonteBotao(patch.fonteBotao);
+                          }}
+                        />
+                      </div>
+                    </div>
 
                     {/* Posição e tamanho manuais do título, subtítulo e botão */}
                     <div className="mt-2 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">

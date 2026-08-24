@@ -169,7 +169,16 @@ const SYSTEM_FONTS = new Set([
   'courier new', 'impact', 'verdana', 'trebuchet ms',
 ]);
 
-export async function loadFont(familiaFonte: string, peso: string): Promise<string> {
+// Cache por (fonte + peso) — os 3 frames de um mesmo GIF chamam loadFont() em sequência para
+// a mesma família/peso. Sem cache, cada frame corria sua própria race contra o timeout de
+// carregamento: o primeiro frame podia bater o timeout (fonte ainda baixando) e cair no
+// fallback Georgia, enquanto o segundo/terceiro já achavam a fonte no cache do navegador e
+// resolviam certo — resultado: cada frame do mesmo GIF saía com uma fonte de título diferente.
+// Compartilhar a mesma Promise garante que todos os frames esperem o mesmo carregamento e
+// cheguem exatamente ao mesmo resultado (fonte real ou fallback), nunca uma mistura dos dois.
+const fontLoadCache = new Map<string, Promise<string>>();
+
+async function loadFontUncached(familiaFonte: string, peso: string): Promise<string> {
   const nomeFonte = familiaFonte.split(',')[0].trim().replace(/['"]/g, '').toLowerCase();
   if (SYSTEM_FONTS.has(nomeFonte)) return familiaFonte;
 
@@ -194,65 +203,25 @@ export async function loadFont(familiaFonte: string, peso: string): Promise<stri
       document.head.appendChild(link);
     }
 
-    await Promise.race([
-      document.fonts.load(`${pesoNum} 48px "${cssName}"`),
-      new Promise(r => setTimeout(r, 4000)),
-    ]);
+    // Sem race contra timeout: esperar de verdade o carregamento evita que um frame renderize
+    // com o fallback só porque a rede estava lenta naquele instante — o cache acima garante que
+    // essa espera só acontece uma vez por fonte, não uma vez por frame.
+    await document.fonts.load(`${pesoNum} 48px "${cssName}"`);
 
-    return `"${cssName}", sans-serif`;
+    return document.fonts.check(`${pesoNum} 48px "${cssName}"`) ? `"${cssName}", sans-serif` : 'Georgia, serif';
   } catch {
     return 'Georgia, serif';
   }
 }
 
-// Corrige vinheta vertical (clara OU escura) que o modelo de imagem às vezes aplica no topo/
-// rodapé mesmo com a instrução de iluminação uniforme no prompt. Mede o brilho médio em faixas
-// horizontais e aproxima cada faixa da mediana: faixas mais escuras que a mediana recebem um leve
-// "screen" branco, faixas mais claras/estouradas recebem um leve "multiply" preto — faixas já
-// uniformes (perto da mediana) ficam praticamente intocadas. Existia uma versão anterior desta
-// função que só clareava (nunca escurecia), o que empurrava qualquer glow/halo que o modelo
-// gerasse ainda mais pro branco — esta versão corrige nos dois sentidos.
-function flattenVerticalVignette(ctx: CanvasRenderingContext2D, img: CanvasImageSource, width: number, height: number) {
-  const ROWS = 24;
-  const sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = 1;
-  sampleCanvas.height = ROWS;
-  const sctx = sampleCanvas.getContext('2d')!;
-  sctx.drawImage(img, 0, 0, width, height, 0, 0, 1, ROWS);
-
-  let rowLuma: number[];
-  try {
-    const data = sctx.getImageData(0, 0, 1, ROWS).data;
-    rowLuma = Array.from({ length: ROWS }, (_, i) => {
-      const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
-      return 0.299 * r + 0.587 * g + 0.114 * b;
-    });
-  } catch {
-    return; // Canvas tainted (CORS) — não corrige, mas não quebra a geração.
+export async function loadFont(familiaFonte: string, peso: string): Promise<string> {
+  const key = `${familiaFonte}|${peso}`;
+  let cached = fontLoadCache.get(key);
+  if (!cached) {
+    cached = loadFontUncached(familiaFonte, peso);
+    fontLoadCache.set(key, cached);
   }
-
-  const sorted = [...rowLuma].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)];
-  const MAX_ALPHA = 0.35;
-  const bandH = height / ROWS;
-
-  ctx.save();
-  rowLuma.forEach((luma, i) => {
-    const diff = luma - median;
-    if (Math.abs(diff) < 4) return; // já uniforme, não mexe
-    const y = i * bandH;
-    if (diff < 0) {
-      const alpha = Math.min(MAX_ALPHA, -diff / 255);
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
-    } else {
-      const alpha = Math.min(MAX_ALPHA, diff / 255);
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = `rgba(0,0,0,${alpha.toFixed(3)})`;
-    }
-    ctx.fillRect(0, y - 1, width, bandH + 2);
-  });
-  ctx.restore();
+  return cached;
 }
 
 export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
@@ -305,11 +274,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       canvas.height = HEIGHT;
       const ctx = canvas.getContext('2d')!;
 
-      // 1. Imagem base
+      // 1. Imagem base — sem nenhum ajuste de brilho/contraste em cima: o PiApp já entrega o
+      // frame com iluminação uniforme, e uma correção heurística por faixas horizontais aqui
+      // era o que estava introduzindo o efeito de vinheta (lia o objeto central mais escuro/claro
+      // que o fundo como "vinheta" e clareava/escurecia faixas inteiras por engano).
       ctx.drawImage(img, 0, 0, WIDTH, HEIGHT);
-
-      // 2. Corrige vinheta clara ou escura que o modelo de imagem eventualmente gera.
-      flattenVerticalVignette(ctx, img, WIDTH, HEIGHT);
 
       // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem
       // só da sombra (shadowColor/shadowBlur) aplicada em cada elemento abaixo.
@@ -363,8 +332,6 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
 
       // 4. Headline
       ctx.textAlign = 'center';
-      ctx.shadowColor = 'rgba(0,0,0,0.65)';
-      ctx.shadowBlur = 14;
       ctx.fillStyle = corTexto;
 
       let hY = ZONA_TOP_PX + hSize;
@@ -376,7 +343,6 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
 
       // 5. Sub-headline — por padrão 12px abaixo da ÚLTIMA linha do headline,
       // ou em posição própria se subheadlineTopPercent for definido manualmente.
-      ctx.shadowBlur = 5;
       ctx.fillStyle = corSubheadline;
       let sY = ev.subheadlineTopPercent != null
         ? HEIGHT * (ev.subheadlineTopPercent / 100) + sSize

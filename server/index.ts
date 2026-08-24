@@ -529,6 +529,10 @@ async function generateGifFramesSequential(opts: {
   const frameResults: Array<{ frameName: string; imageBytes: string; mimeType: string }> = [];
   let masterFrameRefUrl: string | undefined;
 
+  // Cada frame é tentado individualmente — se um falhar (timeout, erro do PiApp etc.), os demais
+  // seguem tentando normalmente em vez de abortar o lote inteiro. Antes, uma falha em qualquer
+  // frame descartava os frames já gerados com sucesso e a pauta terminava sem nenhuma imagem;
+  // agora ela sai com os frames que deram certo, em vez de "sem nada".
   for (const { frameName, frameDescription } of frames) {
     const prompt = buildImagePrompt({
       frameName,
@@ -548,20 +552,28 @@ async function generateGifFramesSequential(opts: {
     });
 
     const referenceImageUrls = masterFrameRefUrl ? [...sharedRefUrls, masterFrameRefUrl] : sharedRefUrls;
-    const result = await generateImageViaPiApp(
-      prompt, aspectRatio, imageModel,
-      referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
-    );
-    frameResults.push({ frameName, ...result });
+    try {
+      const result = await generateImageViaPiApp(
+        prompt, aspectRatio, imageModel,
+        referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
+      );
+      frameResults.push({ frameName, ...result });
 
-    if (!masterFrameRefUrl) {
-      try {
-        masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`);
-        console.log(`[generate-gif] Frame "${frameName}" definido como master frame de referência.`);
-      } catch (err: any) {
-        console.warn('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
+      if (!masterFrameRefUrl) {
+        try {
+          masterFrameRefUrl = await uploadReferenceToPiApp(`data:${result.mimeType};base64,${result.imageBytes}`);
+          console.log(`[generate-gif] Frame "${frameName}" definido como master frame de referência.`);
+        } catch (err: any) {
+          console.warn('[generate-gif] Falha ao subir master frame como referência (ignorando):', err.message);
+        }
       }
+    } catch (err: any) {
+      console.warn(`[generate-gif] Falha ao gerar o frame "${frameName}" (pulando, mantendo os demais):`, err.message);
     }
+  }
+
+  if (frameResults.length === 0) {
+    throw new Error('Nenhum frame pôde ser gerado.');
   }
 
   const results = await Promise.all(
