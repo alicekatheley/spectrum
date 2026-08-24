@@ -50,6 +50,8 @@ Environment: copy `.env.example` to `.env.local` and set `GEMINI_API_KEY`.
 |-------|------|---------|
 | `disparos_historicos` | 17 | Reference campaigns — loaded at server boot, used as few-shot examples in Gemini prompt |
 | `pautas_geradas` | — | Generated campaign history — replaces `localStorage` key `crm_pautas_history` |
+| `catalogo_produtos` | — | Catálogo Yampi sincronizado por marca. Fonte para geração de ofertas com produto real. |
+| `catalogo_sync_runs` | — | Log de cada execução do sync Yampi (debug do cron sem depender de logs de Edge Function). |
 
 ### Key files
 
@@ -57,7 +59,9 @@ Environment: copy `.env.example` to `.env.local` and set `GEMINI_API_KEY`.
 |------|---------|
 | `src/lib/supabase.ts` | Client init (`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`) |
 | `src/lib/pautas-service.ts` | `getPautas` / `upsertPautas` / `clearPautas` — maps snake_case DB ↔ camelCase TS |
+| `src/lib/catalogo-service.ts` | `listarProdutos` / `getUltimaSync` — leitura do catálogo Yampi |
 | `supabase/migrations/` | Versioned DDL migrations (apply with `npm run sb:push`) |
+| `supabase/functions/sync-catalogo-yampi/` | Edge Function (Deno) que sincroniza o catálogo Yampi diariamente |
 | `supabase/seeds/` | Seed data for `disparos_historicos` |
 
 ### Column mapping (`pautas_geradas`)
@@ -67,6 +71,84 @@ Environment: copy `.env.example` to `.env.local` and set `GEMINI_API_KEY`.
 `contextos_recomendados` (DB) ↔ `contextosRecomendados` (TS)
 
 Supabase migration is **complete** — both tables exist and are active.
+
+## Sync Yampi → catálogo (cron diário)
+
+O catálogo (`catalogo_produtos`) é sincronizado todo dia às **04h BRT (07h UTC)** pela
+Edge Function `sync-catalogo-yampi`, agendada via `pg_cron` + `pg_net`. Setup em três passos:
+
+### 1. Popular o vault com a service_role_key
+
+Necessário só uma vez (e a cada rotação de chave). No SQL Editor do Supabase:
+
+```sql
+SELECT vault.create_secret(
+  'ey...SUA_SERVICE_ROLE_KEY...',
+  'service_role_key',
+  'Usada pelo cron para chamar sync-catalogo-yampi'
+);
+```
+
+A chave está em Project Settings → API → `service_role` (a "secret", não a `anon`).
+
+### 2. Definir secrets Yampi
+
+O Grupo Beauté tem uma única conta Yampi que administra 5 lojas — logo, um par
+(`YAMPI_USER_TOKEN`, `YAMPI_USER_SECRET_KEY`) compartilhado + um alias por marca:
+
+```bash
+supabase secrets set \
+  YAMPI_USER_TOKEN=... \
+  YAMPI_USER_SECRET_KEY=sk_... \
+  YAMPI_APICE_ALIAS=apice-cosmeticos \
+  YAMPI_BARBOURS_ALIAS=group-barbours-beauty \
+  YAMPI_LESCENT_ALIAS=lescent-varejo-sp2 \
+  YAMPI_KOKESHI_ALIAS=kokeshi \
+  YAMPI_RITUARIA_ALIAS=rituaria
+```
+
+Marca sem alias é **pulada** no sync (log warn, outras marcas rodam).
+Se `YAMPI_USER_TOKEN` ou `YAMPI_USER_SECRET_KEY` faltar, TODAS são puladas.
+
+**Cuidado com o header:** o Yampi usa `User-Secret-Key` (com "-Key"), não `User-Secret`.
+A Edge Function já trata isso — se aparecer 401 "Missing User-Secret-Key header" é
+sinal de que alguém quebrou o header name.
+
+### 3. Deploy da função e das migrations
+
+```bash
+npm run sb:push                                  # aplica migrations (tabela, extensões, schedule)
+supabase functions deploy sync-catalogo-yampi    # sobe o código Deno
+```
+
+### Rodar sync manualmente
+
+```bash
+# Ambas as marcas
+curl -X POST "https://krxuwejvkdkrjrppcwsw.supabase.co/functions/v1/sync-catalogo-yampi" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+
+# Só uma marca (útil pra debugar)
+curl -X POST "https://krxuwejvkdkrjrppcwsw.supabase.co/functions/v1/sync-catalogo-yampi?marca=Apice" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+```
+
+### Debug do cron
+
+```sql
+-- Últimas execuções por marca
+SELECT marca, iniciado_em, status, produtos_processados, produtos_desativados, erro
+FROM catalogo_sync_runs
+ORDER BY iniciado_em DESC LIMIT 20;
+
+-- Confirma que o cron está agendado
+SELECT * FROM cron.job WHERE jobname = 'sync-catalogo-yampi-diario';
+
+-- Histórico de execuções do pg_cron
+SELECT * FROM cron.job_run_details
+WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'sync-catalogo-yampi-diario')
+ORDER BY start_time DESC LIMIT 10;
+```
 
 ## Architecture
 
