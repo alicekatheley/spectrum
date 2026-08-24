@@ -4,50 +4,119 @@ export type Brand = 'Apice' | 'Barbours';
 // o conteúdo do agente não é amarrado a marca; qualquer pauta pode ir pra qualquer conta aqui.
 export type ContaInsider = 'Apice' | 'Barbours' | 'Rituaria' | 'Lescent' | 'Kokeshi' | 'Gocase';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Geração de Calendários
+//
+// Estes tipos espelham a §9.1 de MODELO_CALENDARIO_MULTIMARCA.md — o schema de
+// saída do gerador. `snapshotIndicesId`, `restricoesAplicadas`, `restricoesRelaxadas`,
+// `avisos` e os três cenários de `previsao` NÃO são opcionais: a §14 (checklist de
+// aceite) proíbe publicar um calendário sem eles.
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Marcas atendidas pela aba de Geração de Calendários — conjunto mais amplo que `Brand`,
 // que segue restrito às duas marcas com playbook de conteúdo.
+// `Gocase` fica no seletor mas não gera: a origem (Spree) não tem coluna de UTM nenhuma,
+// o que torna a atribuição da §2.4 impossível. É bloqueio de origem, não de prioridade (§2.9).
 export type MarcaCalendario = 'Apice' | 'Barbours' | 'Rituaria' | 'Gocase' | 'Kokeshi' | 'Lescent';
 
-export type RecomendacaoVolume = 'aumentar' | 'manter' | 'reduzir';
+// Nomes por extenso, como o modelo emite em `dia_semana`. A abreviação de 3 letras é
+// só de exibição e vive no mapa DIA_CURTO do CalendarioGrid.
+export type DiaSemana = 'Domingo' | 'Segunda' | 'Terca' | 'Quarta' | 'Quinta' | 'Sexta' | 'Sabado';
 
-export type DiaSemana = 'DOM' | 'SEG' | 'TER' | 'QUA' | 'QUI' | 'SEX' | 'SAB';
+// §6 — os dois modos. Valores idênticos ao check de `calendario.modo` no Supabase (§11.2).
+export type ModoCalendario = 'receita_maxima' | 'eficiencia';
 
-export interface CalendarioOferta {
-  nome: string;
-  receitaPorMil: number;
+// Índices que sustentam o slot (§9.1). Cada um carrega seu próprio coeficiente de
+// transferência (§4.5) — em Lescent, hora e oferta transferiram a 0,00.
+export interface IndicesSlot {
+  dia: number;
+  hora: number;
+  oferta: number;
+  familia: number;
 }
 
-export interface CalendarioCelula {
+// SLOT = (marca, data, hora, oferta) — a unidade de calendário da §1.2. Um slot agrega
+// ~2 campanhas. O calendário decide quando, o quê e quanto; nunca para quem, que é
+// decisão do gerador de segmentação (§9.2).
+export interface CalendarioSlot {
   data: string; // YYYY-MM-DD
   diaSemana: DiaSemana;
-  // C1 = disparo principal do dia; C2 = disparo complementar (reforço da mesma oferta
-  // ou uma oferta nova), ausente quando o dia tem só um envio.
-  c1: CalendarioOferta;
-  c2: (CalendarioOferta & { tipo: 'novo' | 'reforco' }) | null;
-  recomendacao: RecomendacaoVolume;
+  slot: number; // ordem dentro do dia: 1, 2 ou 3
+  hora: number; // hora cheia, 0–23
+  oferta: string;
+  familia: string; // unidade de fadiga (§1.4)
+  agressividade: number; // escada 1–4 (§1.4)
+  enviosPlanejados: number;
+  indices: IndicesSlot;
+  gapFamiliaH: number; // descanso de família que o índice I2 assume (§9.3)
+  janelaFamilia: string; // bucket do gap, ex.: '4-7d'
+  score: number;
+  rpmPrevisto: number;
+  receitaPrevista: number;
+  confianca: { validado: boolean; ic80: [number, number] };
 }
 
-export interface CalendarioSemana {
-  label: string; // 'S1', 'S2', ...
-  celulas: CalendarioCelula[];
+// Os três cenários da Fase 6. Emitir os três é obrigatório: `inSampleNaoUsar` existe
+// só para expor o tamanho do viés e precisa ser exibido com aviso de "NÃO USE".
+export interface PrevisaoCalendario {
+  ritmoDeHoje: number;
+  validado: number;
+  inSampleNaoUsar: number;
+  ganhoValidadoPct: number;
+}
+
+// Decomposição alavanca a alavanca, em ordem de transferência decrescente (Fase 6).
+export interface EtapaDecomposicao {
+  etapa: string;
+  receita: number;
+  ganhoPct: number;
+  validado: boolean;
+}
+
+// Um ponto da fronteira receita × RPM (§6.4). O modelo emite a curva, não um ponto.
+export interface PontoFronteira {
+  deltaVolumePct: number;
+  receita: number;
+  rpm: number;
+}
+
+export interface MetaCalendario {
+  tipo: 'receita' | 'rpm';
+  valor: number;
 }
 
 export interface CalendarioGerado {
   id: string;
   marca: MarcaCalendario;
-  dataInicio: string;
-  dataFim: string;
-  semanas: CalendarioSemana[];
-  criadoEm: string;
+  periodo: { inicio: string; fim: string };
+  modo: ModoCalendario;
+  meta: MetaCalendario | null;
+  snapshotIndicesId: string;
+  geradoEm: string; // ISO
+  slots: CalendarioSlot[];
+  previsao: PrevisaoCalendario;
+  decomposicao: EtapaDecomposicao[];
+  fronteira: PontoFronteira[];
+  restricoesAplicadas: string[];
+  restricoesRelaxadas: string[];
+  avisos: string[];
+  // Modo degradado (§8.3): marca que não passa o gate mínimo sai sem previsão de receita.
+  degradado?: boolean;
 }
 
+// Entrada do gerador. Modo A pede meta de receita + teto de volume (§6.2); Modo B pede
+// meta de RPM + piso de receita (§6.3). `eventosEspeciais` é contexto em prosa e não
+// entra em cálculo nenhum (Regra 1 — o LLM nunca calcula um número).
 export interface InputCalendario {
   marca: MarcaCalendario;
+  modo: ModoCalendario;
   dataInicio: string;
   dataFim: string;
+  metaReceita?: number;
+  volumeMaximo?: number;
+  metaRpm?: number;
+  pisoReceita?: number;
   eventosEspeciais: string;
-  volumeMensagens: string;
-  diretrizes: string;
 }
 
 export type CampaignContext =

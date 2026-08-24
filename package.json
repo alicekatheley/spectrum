@@ -9,6 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "verify:calendario": "tsx scripts/verificar-calendario.ts",
     "sb:link": "supabase link --project-ref krxuwejvkdkrjrppcwsw",
     "sb:push": "supabase db push",
     "sb:pull": "supabase db pull",
