@@ -70,7 +70,29 @@ async function main() {
     Array.isArray(d.config?.diasAtivos) && d.config.diasAtivos.every((x: any) => typeof x === 'number' && x >= 0 && x <= 6),
     JSON.stringify(d.config?.diasAtivos));
   checa('gradeHorarios tem 7 linhas', d.config?.gradeHorarios?.length === 7);
-  checa('grade de Quarta abre às 8h', d.config?.gradeHorarios?.[3]?.[0] === 8, JSON.stringify(d.config?.gradeHorarios?.[3]));
+
+  // Aqui havia `gradeHorarios[3][0] === 8` — a quarta da Lescent abrindo às 8h.
+  // Era válido quando a grade era semeada à mão e portanto constante. Desde que
+  // sp_deriva_grade_horarios passou a derivá-la de fato_slot todo dia, o 8h saiu
+  // legitimamente: aparece em 4 de 19 quartas (21%) contra o limiar de 30%.
+  // Fixar valor derivado num teste faz ele falhar toda vez que o dado se move
+  // com razão, e teste que grita à toa é teste que as pessoas aprendem a ignorar.
+  // O contrato é o que deve ser afirmado: 7 dias, horas inteiras 0..23, ordenadas,
+  // sem repetição, e pelo menos um dia com hora — grade totalmente vazia é o bug
+  // do calendário mudo que `avisosDoContexto` existe para denunciar.
+  const gh: number[][] = d.config?.gradeHorarios ?? [];
+  const horasValidas = gh.every(
+    (dia) =>
+      Array.isArray(dia) &&
+      dia.every((h) => Number.isInteger(h) && h >= 0 && h <= 23) &&
+      dia.every((h, i) => i === 0 || h > dia[i - 1]),
+  );
+  checa('grade: horas inteiras 0..23, crescentes, sem repetir', horasValidas, JSON.stringify(gh));
+  checa(
+    'grade não está inteira vazia',
+    gh.reduce((s, dia) => s + (dia?.length ?? 0), 0) > 0,
+    `${gh.reduce((s, dia) => s + (dia?.length ?? 0), 0)} horas no total`,
+  );
 
   checa('catálogo não vazio', (d.catalogo?.length ?? 0) > 0, `${d.catalogo?.length} ofertas`);
   checa('agressividade é number', typeof d.catalogo?.[0]?.agressividade === 'number');
