@@ -524,7 +524,11 @@ Retorne em formato JSON contendo o objeto de copy refinado.`;
 // nasce.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const INSTRUCAO_CALENDARIO = `Você é analista de CRM do Grupo GoBeaute e está lendo um calendário de disparos que JÁ FOI GERADO por um modelo estatístico determinístico.
+// Mantido em sincronia com `instrucaoCalendario()` em worker.ts — o Worker é o que
+// roda em produção, este é o Express local. Divergir os dois prompts significa que
+// a leitura assistida explica o plano de um jeito na sua máquina e de outro na
+// mão de quem usa.
+const instrucaoCalendario = (catalogoReal: boolean) => `Você é analista de CRM do Grupo GoBeaute e está lendo um calendário de disparos que JÁ FOI GERADO por um modelo estatístico determinístico.
 
 REGRA ABSOLUTA E INEGOCIÁVEL: você NUNCA calcula, estima, projeta ou inventa um número. Todo número que você escrever tem de estar literalmente presente no JSON do calendário que recebeu. Se alguém perguntar algo que exija um número que não está lá, responda que o modelo não emite esse número e diga qual decisão do modelo chega mais perto. Nunca some, multiplique ou faça média de valores do payload para produzir um número novo.
 
@@ -539,7 +543,9 @@ Contexto do modelo que você precisa dominar para explicar bem:
 - O 3º disparo do dia não sobreviveu à validação — é hipótese, não compromisso.
 - H1 (teto semanal de dias com 3 ofertas), H2 (nunca duas famílias iguais no mesmo dia), H3 (célula sem suporte histórico é bloqueada), H5 (dias inativos da marca) são restrições rígidas.
 
-CATÁLOGO SINTÉTICO: enquanto as ofertas vierem nomeadas como "Oferta A1", "Oferta B2" e as famílias como "Família A", "Família B", elas são posições vazias — não são o catálogo real da marca. Nunca atribua significado comercial a esses nomes, nunca deduza o que a oferta seria, nunca comente se ela combina com a data ou com o público. Fale delas como o que são: a 1ª família, a 2ª família, o rodízio entre elas. Se o usuário perguntar sobre o conteúdo de uma oferta, diga que o catálogo real ainda não foi conectado e que o plano decide POSIÇÕES (qual dia, qual hora, qual família), não qual produto entra em cada posição — essa escolha continua sendo de quem executa.
+${catalogoReal
+  ? `CATÁLOGO REAL: as ofertas e famílias deste plano vêm do histórico da marca (dataset crm_modelo), não são posições vazias. Pode citá-las pelo nome. O que continua fora do que o modelo mede: se a oferta "combina" com a data, com a estação ou com o público — nada disso foi estimado. O plano decide POSIÇÕES (qual dia, qual hora, qual família) a partir de fadiga e de índice por dia; a adequação comercial da oferta continua sendo julgamento de quem executa. Fluxos automatizados (carrinho abandonado, recompra, expresso) foram excluídos do catálogo porque não são agendáveis — se perguntarem por eles, diga isso e diga também o custo: a pressão que eles exercem na caixa de entrada não entra no modelo de fadiga.`
+  : `CATÁLOGO SINTÉTICO: enquanto as ofertas vierem nomeadas como "Oferta A1", "Oferta B2" e as famílias como "Família A", "Família B", elas são posições vazias — não são o catálogo real da marca. Nunca atribua significado comercial a esses nomes, nunca deduza o que a oferta seria, nunca comente se ela combina com a data ou com o público. Fale delas como o que são: a 1ª família, a 2ª família, o rodízio entre elas. Se o usuário perguntar sobre o conteúdo de uma oferta, diga que o catálogo real ainda não foi conectado e que o plano decide POSIÇÕES (qual dia, qual hora, qual família), não qual produto entra em cada posição — essa escolha continua sendo de quem executa.`}
 
 Tom: direto, técnico, em português do Brasil, sem emoji, sem bullet decorativo, sem elogiar o plano. Escreva como quem apresenta um plano para quem vai executá-lo e cobrar resultado. Prefira frases curtas. Quando o payload declarar uma restrição relaxada ou um aviso, mencione — é o tipo de coisa que quem executa precisa saber e ninguém lê no rodapé.`;
 
@@ -575,6 +581,7 @@ function resumirCalendario(cal: any): string {
 PERÍODO: ${cal.periodo?.inicio} a ${cal.periodo?.fim} (${porDia.size} dias ativos, ${slots.length} disparos)
 MODO: ${cal.modo === 'eficiencia' ? 'eficiência (R$/mil)' : 'receita máxima'}
 META DECLARADA: ${cal.meta ? `${cal.meta.tipo} = ${cal.meta.valor}` : 'nenhuma (metas são opcionais neste modelo)'}
+PROCEDÊNCIA DOS DADOS: ${cal.procedencia === 'dados' ? 'catálogo e índices medidos no histórico (BigQuery)' : cal.procedencia === 'ditado' ? 'parâmetros ditados à mão' : 'catálogo sintético (posições vazias)'}
 ${cal.editadoManualmente ? 'ATENÇÃO: este calendário foi editado à mão depois de gerado. Slots marcados EDITADO À MÃO não são proposta do modelo.\n' : ''}
 PREVISÃO:
 - ritmo de hoje (sem modelo): R$ ${cal.previsao?.ritmoDeHoje}
@@ -634,7 +641,7 @@ ${formato}`;
   // a preencher campos em vez de responder o que foi perguntado (ver nota na §527).
   return chatTexto({
     area: 'calendario',
-    system: INSTRUCAO_CALENDARIO,
+    system: instrucaoCalendario(calendario.procedencia === 'dados'),
     user: conteudo,
   });
 }

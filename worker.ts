@@ -6,6 +6,14 @@ interface Env {
   SUPABASE_SERVICE_KEY: string;
   PIAPP_API_KEY: string;
   GOGROUP_TOKEN: string;
+  // ─── BigQuery (contexto do modelo de calendário) ───────────────────────────
+  // Cole o JSON inteiro da service account em GCP_SERVICE_ACCOUNT_JSON, ou use o
+  // par email/chave. Sem isso a aba de calendário fica indisponível — de propósito,
+  // ver a nota em `carregarContextoBq`.
+  BIGQUERY_PROJECT_ID?: string;
+  GCP_SERVICE_ACCOUNT_JSON?: string;
+  GCP_SA_EMAIL?: string;
+  GCP_SA_PRIVATE_KEY?: string;
   INSIDER_API_KEY_APICE?: string;
   INSIDER_API_KEY_BARBOURS?: string;
   INSIDER_API_KEY_RITUARIA?: string;
@@ -87,6 +95,397 @@ async function callGemini(prompt: string, systemPrompt: string, token: string): 
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? '[]';
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BigQuery via REST — o mesmo contexto que `server/bigquery.ts` carrega no boot
+// do Express, mas sem nenhuma lib Node.
+//
+// POR QUE REESCREVER em vez de importar `server/bigquery.ts`: aquele módulo usa
+// `@google-cloud/bigquery`, que depende de `fs`, `http2` e `gcp-metadata` para
+// descobrir a credencial. Nada disso existe no runtime de Workers. Foi exatamente
+// esse detalhe que deixou a aba de calendário funcionando em `npm run dev` e
+// caindo no catálogo sintético em produção — o Express e o Worker são dois
+// servidores diferentes, e só um deles tinha as rotas.
+//
+// O que substitui a lib: um JWT RS256 assinado com WebCrypto, trocado por um
+// access token no oauth2.googleapis.com, usado contra a REST API do BigQuery.
+//
+// ARMADILHA DA REST API (verificada contra o dataset real, não suposta): ela
+// devolve TODO valor como string, inclusive BOOLEAN e INTEGER. `ativo` vem como
+// "true"/"false" — e `Boolean("false")` é `true`. TIMESTAMP vem como epoch em
+// notação científica ("1.787586455298868E9"). O SDK Node tipa isso sozinho; aqui
+// a coerção é manual e obrigatória. É o que fazem `bqBool`/`bqNum`/`bqTimestamp`.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const BQ_SCOPE = 'https://www.googleapis.com/auth/bigquery.readonly';
+
+function bqCredencial(env: Env): { email: string; chave: string; projeto: string } | null {
+  if (env.GCP_SERVICE_ACCOUNT_JSON) {
+    try {
+      const sa = JSON.parse(env.GCP_SERVICE_ACCOUNT_JSON);
+      if (sa.client_email && sa.private_key) {
+        return {
+          email: sa.client_email,
+          chave: sa.private_key,
+          projeto: env.BIGQUERY_PROJECT_ID || sa.project_id || 'gogroup-crm',
+        };
+      }
+    } catch {
+      console.error('[BigQuery] GCP_SERVICE_ACCOUNT_JSON não é JSON válido.');
+      return null;
+    }
+  }
+  if (env.GCP_SA_EMAIL && env.GCP_SA_PRIVATE_KEY) {
+    return {
+      email: env.GCP_SA_EMAIL,
+      chave: env.GCP_SA_PRIVATE_KEY,
+      projeto: env.BIGQUERY_PROJECT_ID || 'gogroup-crm',
+    };
+  }
+  return null;
+}
+
+function b64url(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function pemParaDer(pem: string): Uint8Array {
+  // Secret de ambiente costuma chegar com "\n" literal em vez de quebra de linha.
+  // Sem esta troca o atob abaixo falha com "invalid character" e o erro não diz
+  // nada sobre a causa real, que é formatação do secret.
+  const corpo = pem
+    .replace(/\\n/g, '\n')
+    .replace(/-----BEGIN [^-]+-----/, '')
+    .replace(/-----END [^-]+-----/, '')
+    .replace(/\s+/g, '');
+  const bin = atob(corpo);
+  const der = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) der[i] = bin.charCodeAt(i);
+  return der;
+}
+
+let _bqToken: { valor: string; expiraEm: number } | null = null;
+
+async function bqAccessToken(env: Env): Promise<string> {
+  const agora = Math.floor(Date.now() / 1000);
+  if (_bqToken && _bqToken.expiraEm > agora + 60) return _bqToken.valor;
+
+  const cred = bqCredencial(env);
+  if (!cred) throw new Error('credencial do BigQuery não configurada (GCP_SERVICE_ACCOUNT_JSON)');
+
+  const texto = (o: any) => b64url(new TextEncoder().encode(JSON.stringify(o)));
+  const cabecalho = texto({ alg: 'RS256', typ: 'JWT' });
+  const claim = texto({
+    iss: cred.email,
+    scope: BQ_SCOPE,
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: agora + 3600,
+    iat: agora,
+  });
+
+  const chave = await crypto.subtle.importKey(
+    'pkcs8',
+    pemParaDer(cred.chave) as unknown as ArrayBuffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const assinatura = new Uint8Array(
+    await crypto.subtle.sign(
+      'RSASSA-PKCS1-v1_5',
+      chave,
+      new TextEncoder().encode(`${cabecalho}.${claim}`),
+    ),
+  );
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${cabecalho}.${claim}.${b64url(assinatura)}`,
+    }),
+  });
+  const j: any = await res.json();
+  if (!res.ok) throw new Error(`OAuth ${res.status}: ${j.error_description ?? JSON.stringify(j)}`);
+  _bqToken = { valor: j.access_token, expiraEm: agora + Number(j.expires_in ?? 3600) };
+  return _bqToken.valor;
+}
+
+function bqLeValor(campo: any, v: any): any {
+  if (v === null || v === undefined) return null;
+  if (campo.mode === 'REPEATED') {
+    return (v as any[]).map((x) => bqLeValor({ ...campo, mode: 'NULLABLE' }, x.v));
+  }
+  if (campo.type === 'RECORD' || campo.type === 'STRUCT') {
+    const o: any = {};
+    (campo.fields ?? []).forEach((f: any, i: number) => { o[f.name] = bqLeValor(f, v.f?.[i]?.v); });
+    return o;
+  }
+  return v;
+}
+
+function bqMapear(schema: any, rows: any[]): any[] {
+  const campos = schema?.fields ?? [];
+  return (rows ?? []).map((r: any) => {
+    const o: any = {};
+    campos.forEach((f: any, i: number) => { o[f.name] = bqLeValor(f, r.f?.[i]?.v); });
+    return o;
+  });
+}
+
+async function bqConsultar(env: Env, sql: string): Promise<any[]> {
+  const cred = bqCredencial(env)!;
+  const token = await bqAccessToken(env);
+  const base = `https://bigquery.googleapis.com/bigquery/v2/projects/${cred.projeto}`;
+
+  const res = await fetch(`${base}/queries`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: sql, useLegacySql: false, timeoutMs: 60000, maxResults: 2000 }),
+  });
+  const j: any = await res.json();
+  if (!res.ok) throw new Error(`BigQuery ${res.status}: ${j.error?.message ?? JSON.stringify(j)}`);
+  if (!j.jobComplete) throw new Error('BigQuery: job não completou dentro do timeout');
+
+  let linhas = bqMapear(j.schema, j.rows);
+
+  // Paginação. Sem isto, um resultado maior que maxResults volta TRUNCADO e sem
+  // erro nenhum — o catálogo simplesmente perderia ofertas e o plano continuaria
+  // parecendo completo. É a classe exata de falha silenciosa que este módulo
+  // existe para não repetir.
+  let pageToken = j.pageToken;
+  const jobId = j.jobReference?.jobId;
+  const location = j.jobReference?.location;
+  while (pageToken && jobId) {
+    const q = new URLSearchParams({ pageToken, maxResults: '2000' });
+    if (location) q.set('location', location);
+    const r2 = await fetch(`${base}/queries/${jobId}?${q}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const j2: any = await r2.json();
+    if (!r2.ok) throw new Error(`BigQuery página ${r2.status}: ${j2.error?.message ?? ''}`);
+    linhas = linhas.concat(bqMapear(j2.schema ?? j.schema, j2.rows));
+    pageToken = j2.pageToken;
+  }
+  return linhas;
+}
+
+// ─── Coerções (a REST API devolve tudo como string) ──────────────────────────
+const bqNum = (v: any): number | null => (v === null || v === undefined || v === '' ? null : Number(v));
+const bqBool = (v: any): boolean => v === true || v === 'true';
+const bqTimestamp = (v: any): string | null =>
+  v === null || v === undefined ? null : new Date(Number(v) * 1000).toISOString();
+
+const BQ_NOME_DOW: Record<string, number> = {
+  domingo: 0, segunda: 1, terca: 2, terça: 2, quarta: 3,
+  quinta: 4, sexta: 5, sabado: 6, sábado: 6,
+};
+const bqNomeParaDow = (nome: string) => BQ_NOME_DOW[String(nome).trim().toLowerCase()] ?? -1;
+
+// ─── Contexto do modelo ──────────────────────────────────────────────────────
+// Cache de isolate. O Express carrega no boot e guarda para sempre; um Worker não
+// tem boot, então o custo se paga com TTL. As cinco queries são todas agregadas —
+// nenhuma varre evento bruto — e o cache de resultado do próprio BigQuery torna a
+// repetição barata.
+const BQ_TTL_MS = 10 * 60 * 1000;
+let _bqCtx: Record<string, any> | null = null;
+let _bqCtxEm = 0;
+let _bqCtxErro: string | null = null;
+
+/**
+ * Regra que este bloco impõe, igual à do Express: NÃO EXISTE FALLBACK PARA NÚMERO
+ * INVENTADO. Se o BigQuery não responder, devolve null e quem chama diz isso na
+ * tela. Um plano bonito com números fabricados é pior que tela vazia, porque é
+ * indistinguível de um plano verdadeiro.
+ */
+async function carregarContextoBq(env: Env, forcar = false): Promise<Record<string, any> | null> {
+  if (!forcar && _bqCtx && Date.now() - _bqCtxEm < BQ_TTL_MS) return _bqCtx;
+  if (!bqCredencial(env)) {
+    _bqCtxErro = 'credencial do BigQuery não configurada no ambiente do Worker';
+    return null;
+  }
+
+  const projeto = bqCredencial(env)!.projeto;
+  const DS = `${projeto}.crm_modelo`;
+
+  try {
+    const [configs, catalogo, indices, viabilidade, baseline, observadas] = await Promise.all([
+      bqConsultar(env, `
+        SELECT marca, ativo, janela_dias, burn_in_dias, janela_atribuicao_h,
+               max_dias_com_3, dias_ativos, volume_maximo_semana, min_enviados_slot,
+               max_oferta_semana, TO_JSON_STRING(grade_horarios) AS grade_json,
+               data_min_evento
+        FROM \`${DS}.marca_config\` WHERE ativo`),
+      bqConsultar(env, `
+        SELECT marca, familia, oferta, agressividade
+        FROM \`${DS}.marca_oferta_familia\` ORDER BY marca, familia, oferta`),
+      bqConsultar(env, `
+        SELECT marca, indice, nivel, valor, ic80_lo, ic80_hi, n_observacoes,
+               coef_transferencia, veredito, janela_ini, janela_fim, gerado_em
+        FROM \`${DS}.v_indices_atuais\``),
+      bqConsultar(env, `
+        SELECT marca, dow, dias_observados, dias_1_oferta, dias_2_ofertas, dias_3_ofertas
+        FROM \`${DS}.v_viabilidade\``),
+      // Âncora de 4 semanas: RPM e volume MEDIDOS. A janela termina no último dia
+      // com fato, não em CURRENT_DATE — senão um atraso de ingestão vira "a marca
+      // parou de vender".
+      bqConsultar(env, `
+        WITH fim AS (SELECT marca, MAX(data) AS d FROM \`${DS}.fato_slot\` GROUP BY 1)
+        SELECT f.marca, COUNT(DISTINCT f.data) AS dias, SUM(f.enviados) AS enviados,
+               SUM(f.receita) AS receita,
+               SAFE_DIVIDE(SUM(f.receita), SUM(f.enviados)) * 1000 AS rpm,
+               MAX(fim.d) AS data_fim
+        FROM \`${DS}.fato_slot\` f JOIN fim ON fim.marca = f.marca
+        WHERE f.data > DATE_SUB(fim.d, INTERVAL 28 DAY) GROUP BY 1`),
+      bqConsultar(env, `
+        SELECT marca, oferta, familia, SUM(enviados) AS enviados
+        FROM \`${DS}.fato_slot\` GROUP BY 1,2,3`),
+    ]);
+
+    const ctx: Record<string, any> = {};
+
+    for (const c of configs) {
+      const marca = String(c.marca).toLowerCase();
+      const grade: number[][] = Array.from({ length: 7 }, () => [] as number[]);
+      if (c.grade_json && c.grade_json !== 'null') {
+        const bruto = JSON.parse(c.grade_json) as Record<string, number[]>;
+        for (const [nome, horas] of Object.entries(bruto)) {
+          const d = bqNomeParaDow(nome);
+          if (d >= 0) grade[d] = [...horas].map(Number).sort((a, b) => a - b);
+        }
+      }
+      ctx[marca] = {
+        marca,
+        config: {
+          ativo: bqBool(c.ativo),
+          janelaDias: bqNum(c.janela_dias) ?? 0,
+          burnInDias: bqNum(c.burn_in_dias) ?? 0,
+          janelaAtribuicaoH: bqNum(c.janela_atribuicao_h) ?? 0,
+          maxDiasCom3: bqNum(c.max_dias_com_3),
+          diasAtivos: ((c.dias_ativos as string[]) ?? [])
+            .map(bqNomeParaDow).filter((d) => d >= 0).sort((a, b) => a - b),
+          volumeMaximoSemana: bqNum(c.volume_maximo_semana),
+          minEnviadosSlot: bqNum(c.min_enviados_slot),
+          maxOfertaSemana: bqNum(c.max_oferta_semana),
+          gradeHorarios: grade,
+          dataMinEvento: c.data_min_evento ?? null,
+        },
+        catalogo: [] as any[],
+        indices: {
+          geradoEm: '', janelaIni: null, janelaFim: null, transferencia: {} as any,
+          i1Dia: [] as any[], i2Gap: [] as any[], i3Hora: [] as any[], i4Oferta: [] as any[],
+          alpha: null as number | null,
+        },
+        viabilidade: [] as any[],
+        baseline: { dias: 0, enviados: 0, receita: 0, rpm: 0, volumeSemana: 0, dataFim: '' },
+        cobertura: { enviadosTotal: 0, enviadosSemOferta: 0, shareSemOferta: 0, ofertasNuncaDisparadas: [] as string[] },
+      };
+    }
+
+    for (const o of catalogo) {
+      const m = ctx[String(o.marca).toLowerCase()];
+      if (!m) continue;
+      m.catalogo.push({
+        oferta: String(o.oferta),
+        familia: String(o.familia),
+        agressividade: bqNum(o.agressividade) ?? 1,
+      });
+    }
+
+    for (const i of indices) {
+      const m = ctx[String(i.marca).toLowerCase()];
+      if (!m) continue;
+      const nivel = {
+        nivel: i.nivel == null ? null : String(i.nivel),
+        valor: bqNum(i.valor) ?? 0,
+        ic80Lo: bqNum(i.ic80_lo),
+        ic80Hi: bqNum(i.ic80_hi),
+        nObservacoes: bqNum(i.n_observacoes),
+        veredito: i.veredito == null ? null : String(i.veredito),
+      };
+      m.indices.geradoEm = bqTimestamp(i.gerado_em) ?? m.indices.geradoEm;
+      m.indices.janelaIni = i.janela_ini ?? m.indices.janelaIni;
+      m.indices.janelaFim = i.janela_fim ?? m.indices.janelaFim;
+      m.indices.transferencia[String(i.indice)] = bqNum(i.coef_transferencia);
+      switch (String(i.indice)) {
+        case 'I1_dia': m.indices.i1Dia.push(nivel); break;
+        case 'I2_familia': m.indices.i2Gap.push(nivel); break;
+        case 'I3_hora': m.indices.i3Hora.push(nivel); break;
+        case 'I4_oferta': m.indices.i4Oferta.push(nivel); break;
+        case 'I6_alpha': m.indices.alpha = nivel.valor; break;
+      }
+    }
+
+    for (const v of viabilidade) {
+      const m = ctx[String(v.marca).toLowerCase()];
+      if (!m) continue;
+      // BigQuery EXTRACT(DAYOFWEEK) é 1=Domingo..7=Sábado; Date.getDay() é 0..6.
+      // Converter na FRONTEIRA e nunca depois: um off-by-one aqui não quebra nada,
+      // só desloca o calendário inteiro em um dia e continua parecendo plausível.
+      m.viabilidade.push({
+        dow: (bqNum(v.dow) ?? 1) - 1,
+        diasObservados: bqNum(v.dias_observados) ?? 0,
+        dias1Oferta: bqNum(v.dias_1_oferta) ?? 0,
+        dias2Ofertas: bqNum(v.dias_2_ofertas) ?? 0,
+        dias3Ofertas: bqNum(v.dias_3_ofertas) ?? 0,
+      });
+    }
+    for (const m of Object.values(ctx)) m.viabilidade.sort((a: any, b: any) => a.dow - b.dow);
+
+    for (const b of baseline) {
+      const m = ctx[String(b.marca).toLowerCase()];
+      if (!m) continue;
+      const dias = bqNum(b.dias) ?? 0;
+      const enviados = bqNum(b.enviados) ?? 0;
+      m.baseline = {
+        dias, enviados,
+        receita: bqNum(b.receita) ?? 0,
+        rpm: bqNum(b.rpm) ?? 0,
+        volumeSemana: dias > 0 ? Math.round((enviados / dias) * 7) : 0,
+        dataFim: b.data_fim ?? '',
+      };
+    }
+
+    const vistas = new Map<string, Set<string>>();
+    for (const o of observadas) {
+      const marca = String(o.marca).toLowerCase();
+      const m = ctx[marca];
+      if (!m) continue;
+      if (!vistas.has(marca)) vistas.set(marca, new Set());
+      vistas.get(marca)!.add(String(o.oferta));
+      const env_ = bqNum(o.enviados) ?? 0;
+      m.cobertura.enviadosTotal += env_;
+      // 'Sem Oferta'/'OUTROS' é o balde do que o CASE não reconheceu. Não é uma
+      // família de verdade — é a medida do próprio desconhecimento.
+      if (String(o.familia) === 'Sem Oferta' || String(o.oferta) === 'OUTROS') {
+        m.cobertura.enviadosSemOferta += env_;
+      }
+    }
+    for (const [marca, m] of Object.entries(ctx)) {
+      const doMarca = vistas.get(marca) ?? new Set<string>();
+      m.cobertura.shareSemOferta = m.cobertura.enviadosTotal > 0
+        ? m.cobertura.enviadosSemOferta / m.cobertura.enviadosTotal
+        : 0;
+      m.cobertura.ofertasNuncaDisparadas = m.catalogo
+        .map((o: any) => o.oferta)
+        .filter((o: string) => o !== 'OUTROS' && !doMarca.has(o))
+        .sort();
+    }
+
+    _bqCtx = ctx;
+    _bqCtxEm = Date.now();
+    _bqCtxErro = null;
+    console.log(`[BigQuery] Contexto carregado: ${Object.keys(ctx).join(', ')}`);
+    return ctx;
+  } catch (err: any) {
+    _bqCtxErro = err.message;
+    console.error(`[BigQuery] FALHA ao carregar contexto: ${err.message}`);
+    return null;
+  }
 }
 
 async function callPiApp(method: string, params: any, apiKey: string): Promise<any> {
@@ -1539,6 +1938,113 @@ async function runAgenteGifPipeline(env: Env, motivoRejeicaoAnterior?: string): 
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Leitura assistida do calendário. A IA recebe um plano PRONTO e o explica — ela
+// não gera, não realoca e não estima. Se um dia esta rota devolver números novos,
+// o erro estará aqui e não no prompt: o payload de entrada já contém todos os
+// números que a resposta pode citar.
+// ═════════════════════════════════════════════════════════════════════════════
+
+function instrucaoCalendario(catalogoReal: boolean): string {
+  return `Você é analista de CRM do Grupo GoBeaute e está lendo um calendário de disparos que JÁ FOI GERADO por um modelo estatístico determinístico.
+
+REGRA ABSOLUTA E INEGOCIÁVEL: você NUNCA calcula, estima, projeta ou inventa um número. Todo número que você escrever tem de estar literalmente presente no JSON do calendário que recebeu. Se alguém perguntar algo que exija um número que não está lá, responda que o modelo não emite esse número e diga qual decisão do modelo chega mais perto. Nunca some, multiplique ou faça média de valores do payload para produzir um número novo.
+
+O que você faz: explica POR QUE o plano é como é, usando o que o payload declara — os índices de cada slot, as restrições aplicadas e relaxadas, os avisos, a decomposição por alavanca e a fronteira receita × eficiência.
+
+Contexto do modelo que você precisa dominar para explicar bem:
+- SLOT = (marca, data, hora, oferta). Um dia tem 2 ou 3 slots.
+- FAMÍLIA é a unidade de fadiga. O rodízio entre famílias é a alavanca #2 (coeficiente 0,52).
+- I1 (dia da semana) é a alavanca #1, coeficiente 0,90. Quarta é historicamente o dia mais forte.
+- Hora (I3) e oferta (I4) transferiram a 0,00 na validação fora da amostra: o modelo NÃO tem evidência de que um horário ou uma oferta específica renda mais que outro. Quando perguntarem "por que esse horário?", a resposta honesta é que o horário vem da grade operacional e do espaçamento entre disparos, NÃO de um ganho medido. Nunca invente uma justificativa de performance para horário ou oferta.
+- Elasticidade de volume α = 0,31: receita ∝ V^0,31 e R$/mil ∝ V^-0,69. Mais volume sempre traz mais receita e sempre custa eficiência.
+- O 3º disparo do dia não sobreviveu à validação — é hipótese, não compromisso.
+- H1 (teto semanal de dias com 3 ofertas), H2 (nunca duas famílias iguais no mesmo dia), H3 (célula sem suporte histórico é bloqueada), H5 (dias inativos da marca) são restrições rígidas.
+
+${catalogoReal
+    ? `CATÁLOGO REAL: as ofertas e famílias deste plano vêm do histórico da marca (dataset crm_modelo), não são posições vazias. Pode citá-las pelo nome. O que continua fora do que o modelo mede: se a oferta "combina" com a data, com a estação ou com o público — nada disso foi estimado. O plano decide POSIÇÕES (qual dia, qual hora, qual família) a partir de fadiga e de índice por dia; a adequação comercial da oferta continua sendo julgamento de quem executa. Fluxos automatizados (carrinho abandonado, recompra, expresso) foram excluídos do catálogo porque não são agendáveis — se perguntarem por eles, diga isso e diga também o custo: a pressão que eles exercem na caixa de entrada não entra no modelo de fadiga.`
+    : `CATÁLOGO SINTÉTICO: enquanto as ofertas vierem nomeadas como "Oferta A1", "Oferta B2" e as famílias como "Família A", "Família B", elas são posições vazias — não são o catálogo real da marca. Nunca atribua significado comercial a esses nomes, nunca deduza o que a oferta seria, nunca comente se ela combina com a data ou com o público. Fale delas como o que são: a 1ª família, a 2ª família, o rodízio entre elas. Se o usuário perguntar sobre o conteúdo de uma oferta, diga que o catálogo real ainda não foi conectado e que o plano decide POSIÇÕES (qual dia, qual hora, qual família), não qual produto entra em cada posição — essa escolha continua sendo de quem executa.`}
+
+Tom: direto, técnico, em português do Brasil, sem emoji, sem bullet decorativo, sem elogiar o plano. Escreva como quem apresenta um plano para quem vai executá-lo e cobrar resultado. Prefira frases curtas. Quando o payload declarar uma restrição relaxada ou um aviso, mencione — é o tipo de coisa que quem executa precisa saber e ninguém lê no rodapé.`;
+}
+
+/** Resumo compacto do calendário. Slot a slot cabe em ~90 linhas; acima disso, agrega por dia. */
+function resumirCalendario(cal: any): string {
+  const slots: any[] = cal.slots ?? [];
+  const porDia = new Map<string, any[]>();
+  for (const s of slots) porDia.set(s.data, [...(porDia.get(s.data) ?? []), s]);
+
+  const detalhado = porDia.size <= 31;
+  const grade = detalhado
+    ? [...porDia.entries()]
+        .map(([data, doDia]) =>
+          `${data} (${doDia[0].diaSemana}, I1=${doDia[0].indices.dia}): ` +
+          doDia.sort((a, b) => a.hora - b.hora)
+            .map((s) =>
+              `${String(s.hora).padStart(2, '0')}h "${s.oferta}" [família ${s.familia}, I2=${s.indices.familia}, agr ${s.agressividade}, gap ${s.gapFamiliaH}h, ${s.enviosPlanejados} envios, R$ ${s.receitaPrevista}, ${s.rpmPrevisto} R$/mil${s.confianca?.validado ? '' : ', NÃO VALIDADO'}${s.editado ? ', EDITADO À MÃO' : ''}]`)
+            .join(' | '))
+        .join('\n')
+    : [...porDia.entries()]
+        .map(([data, doDia]) =>
+          `${data} (${doDia[0].diaSemana}): ${doDia.length} disparos, famílias ${doDia.map((s) => s.familia).join('/')}, ${doDia.reduce((a, s) => a + s.enviosPlanejados, 0)} envios, R$ ${doDia.reduce((a, s) => a + s.receitaPrevista, 0)}`)
+        .join('\n');
+
+  return `MARCA: ${cal.marca}
+PERÍODO: ${cal.periodo?.inicio} a ${cal.periodo?.fim} (${porDia.size} dias ativos, ${slots.length} disparos)
+MODO: ${cal.modo === 'eficiencia' ? 'eficiência (R$/mil)' : 'receita máxima'}
+META DECLARADA: ${cal.meta ? `${cal.meta.tipo} = ${cal.meta.valor}` : 'nenhuma (metas são opcionais neste modelo)'}
+PROCEDÊNCIA DOS DADOS: ${cal.procedencia === 'dados' ? 'catálogo e índices medidos no histórico (BigQuery)' : cal.procedencia === 'ditado' ? 'parâmetros ditados à mão' : 'catálogo sintético (posições vazias)'}
+${cal.editadoManualmente ? 'ATENÇÃO: este calendário foi editado à mão depois de gerado. Slots marcados EDITADO À MÃO não são proposta do modelo.\n' : ''}
+PREVISÃO:
+- ritmo de hoje (sem modelo): R$ ${cal.previsao?.ritmoDeHoje}
+- plano validado: R$ ${cal.previsao?.validado} (${cal.previsao?.ganhoValidadoPct}% sobre o ritmo de hoje)
+- in-sample (NÃO USAR, existe só para expor o viés): R$ ${cal.previsao?.inSampleNaoUsar}
+
+DECOMPOSIÇÃO POR ALAVANCA:
+${(cal.decomposicao ?? []).map((e: any) => `- ${e.etapa}: R$ ${e.receita} (${e.ganhoPct >= 0 ? '+' : ''}${e.ganhoPct}%)${e.validado ? '' : ' — não validado, ganho creditado 0,00'}`).join('\n')}
+
+FRONTEIRA RECEITA × EFICIÊNCIA:
+${(cal.fronteira ?? []).map((p: any) => `- volume ${p.deltaVolumePct >= 0 ? '+' : ''}${p.deltaVolumePct}%: R$ ${p.receita}, ${p.rpm} R$/mil`).join('\n')}
+
+RESTRIÇÕES APLICADAS:
+${(cal.restricoesAplicadas ?? []).map((r: string) => `- ${r}`).join('\n') || '- nenhuma'}
+
+RESTRIÇÕES RELAXADAS (cederam durante a geração):
+${(cal.restricoesRelaxadas ?? []).map((r: string) => `- ${r}`).join('\n') || '- nenhuma'}
+
+AVISOS DO MODELO:
+${(cal.avisos ?? []).map((a: string) => `- ${a}`).join('\n') || '- nenhum'}
+
+GRADE${detalhado ? '' : ' (agregada por dia — o período é longo demais para slot a slot)'}:
+${grade}`;
+}
+
+async function explicarCalendario(
+  params: { calendario: any; pergunta?: string; eventosEspeciais?: string },
+  token: string,
+): Promise<string> {
+  const { calendario, pergunta, eventosEspeciais } = params;
+  const dias = new Set((calendario.slots ?? []).map((s: any) => s.data)).size;
+
+  // Períodos longos pedem síntese, não narração dia a dia. Trinta parágrafos
+  // descrevendo trinta quartas-feiras não é leitura assistida, é o calendário
+  // outra vez em prosa.
+  const formato = pergunta
+    ? `PERGUNTA DO USUÁRIO: ${pergunta}
+
+Responda a pergunta e só ela, em no máximo dois parágrafos curtos. Se a resposta honesta for "o modelo não mede isso", diga exatamente isso e explique de onde a decisão veio de fato.`
+    : dias > 14
+      ? `Escreva uma leitura GERAL do período, em 3 a 4 parágrafos curtos. O período é longo (${dias} dias): não narre dia a dia. Cubra, nesta ordem: (1) a lógica de distribuição — quais dias concentram volume e por quê; (2) como o rodízio de famílias foi montado e onde a fadiga apertou; (3) o trade-off receita × eficiência neste modo, ancorado na fronteira; (4) o que exige atenção de quem vai executar — restrições relaxadas, avisos e slots não validados.`
+      : `Escreva uma leitura do calendário em 3 parágrafos curtos. Cubra: (1) a lógica de distribuição entre os dias e o motivo; (2) o rodízio de famílias e os pontos onde a fadiga apertou; (3) o trade-off do modo escolhido e o que exige atenção na execução — restrições relaxadas, avisos e slots não validados.`;
+
+  const conteudo = `${resumirCalendario(calendario)}
+
+${eventosEspeciais?.trim() ? `CONTEXTO INFORMADO PELO USUÁRIO (prosa, não entrou em cálculo nenhum — use só para comentar encaixe, nunca para justificar número):\n${eventosEspeciais.trim()}\n` : ''}
+${formato}`;
+
+  return callGemini(conteudo, instrucaoCalendario(calendario.procedencia === 'dados'), token);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const SUPABASE_KEY = env?.SUPABASE_KEY || '';
@@ -1557,6 +2063,113 @@ export default {
 
     if (url.pathname === '/api/mecanicas') {
       return json({ status: 'success', data: DEFAULT_MECANICAS });
+    }
+
+    // ─── Calendário: contexto do modelo (BigQuery) ────────────────────────────
+    // Estado da conexão. A tela usa isto para decidir se pode gerar — e para dizer
+    // POR QUE não pode, quando não pode.
+    if (url.pathname === '/api/calendario/status') {
+      const ctx = await carregarContextoBq(env);
+      return json({
+        status: 'success',
+        data: {
+          disponivel: ctx !== null,
+          carregadoEm: _bqCtxEm ? new Date(_bqCtxEm).toISOString() : null,
+          erro: _bqCtxErro,
+          marcas: ctx ? Object.keys(ctx) : [],
+        },
+      });
+    }
+
+    // Catálogo real, índices e viabilidade. É a rota que substitui o catálogo
+    // inventado. O 503 aqui não é preguiça de tratamento: sem estes dados o gerador
+    // NÃO TEM o que usar, e a única alternativa a falhar é inventar — que é
+    // exatamente o defeito que este endpoint existe para consertar.
+    if (url.pathname === '/api/calendario/contexto') {
+      const ctx = await carregarContextoBq(env, url.searchParams.get('recarregar') === '1');
+      if (!ctx) {
+        return json({
+          error: 'Contexto do modelo indisponível: sem conexão com o BigQuery.',
+          detalhe: _bqCtxErro,
+        }, 503);
+      }
+      const marca = url.searchParams.get('marca');
+      if (!marca) return json({ status: 'success', data: ctx });
+
+      const doMarca = ctx[marca.toLowerCase()];
+      if (!doMarca) {
+        // Gocase cai aqui, e é o caso mais importante de distinguir: ela não está em
+        // marca_config porque a tabela de pedidos é Spree e não tem UTM — atribuição
+        // impossível. Não é fila de trabalho, é bloqueio de origem.
+        return json({
+          error: `Marca "${marca}" não está no modelo.`,
+          marcasDisponiveis: Object.keys(ctx),
+        }, 404);
+      }
+      return json({ status: 'success', data: doMarca });
+    }
+
+    // O que o classificador de ofertas está perdendo. Diagnóstico de manutenção do
+    // catálogo, não insumo do plano — por isso rota própria, sob demanda: varre a
+    // tabela de eventos brutos da marca, caro demais para entrar na carga do contexto.
+    if (url.pathname === '/api/calendario/nao-classificadas') {
+      const marca = (url.searchParams.get('marca') ?? '').toLowerCase();
+      if (!marca) return json({ error: 'Informe ?marca=' }, 400);
+      const ctx = await carregarContextoBq(env);
+      if (!ctx || !ctx[marca]) {
+        return json({ error: `marca "${marca}" não está no modelo`, detalhe: _bqCtxErro }, 503);
+      }
+      try {
+        const projeto = bqCredencial(env)!.projeto;
+        // O CASE é interpolado no SQL. É injeção por construção, e é aceitável aqui
+        // por dois motivos que precisam valer sempre: a coluna GUARDA uma expressão
+        // SQL (é o contrato da tabela, escrita pelo time de CRM), e `marca` foi
+        // validada contra as chaves do contexto — nunca vai crua para o dataset.
+        const [cfg] = await bqConsultar(env,
+          `SELECT oferta_case FROM \`${projeto}.crm_modelo.marca_config\` WHERE marca = '${marca}'`);
+        if (!cfg?.oferta_case) return json({ error: `marca "${marca}" não tem oferta_case` }, 503);
+        const ini = ctx[marca].config.dataMinEvento ?? '2026-04-09';
+        const dados = await bqConsultar(env, `
+          WITH e AS (
+            SELECT e_campaign_name AS nome, LOWER(e_campaign_name) AS c, COUNT(*) AS envios
+            FROM \`${projeto}.crm_${marca}.crm_eventos_brutos\`
+            WHERE event_name = 'email_sent' AND DATE(e_timestamp) >= '${ini}'
+            GROUP BY 1, 2
+          )
+          SELECT nome, envios FROM e
+          WHERE nome IS NULL OR (${cfg.oferta_case}) = 'OUTROS'
+          ORDER BY envios DESC LIMIT 50`);
+        return json({
+          status: 'success',
+          data: dados,
+          total: dados.reduce((a: number, d: any) => a + Number(d.envios), 0),
+        });
+      } catch (err: any) {
+        return json({ error: err.message }, 503);
+      }
+    }
+
+    if (url.pathname === '/api/calendario/explicar' && request.method === 'POST') {
+      try {
+        const body = await request.json() as any;
+        const { calendario, pergunta, eventosEspeciais } = body;
+        if (!calendario?.slots?.length) {
+          return json({ error: 'Nenhum calendário gerado para explicar.' }, 400);
+        }
+        if (!GOGROUP_TOKEN) {
+          return json({
+            error: 'Nenhuma chave do AI proxy configurada — a leitura assistida está indisponível. O calendário acima continua válido: ele é gerado pelo modelo determinístico, sem IA.',
+          }, 503);
+        }
+        const texto = await explicarCalendario(
+          { calendario, pergunta, eventosEspeciais },
+          GOGROUP_TOKEN,
+        );
+        return json({ status: 'success', data: { texto } });
+      } catch (err: any) {
+        console.error('Erro na leitura do calendário:', err);
+        return json({ error: 'Erro ao ler o calendário.', details: err.message }, 500);
+      }
     }
 
     if (url.pathname === '/api/generate-pauta' && request.method === 'POST') {

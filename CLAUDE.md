@@ -36,7 +36,14 @@ npm run sb:pull   # Pull remote schema to local
 npm run sb:types  # Generate src/lib/database.types.ts from live schema
 ```
 
-Environment: copy `.env.example` to `.env.local` and set `GEMINI_API_KEY`.
+Environment: copy `.env.example` to `.env` e defina `AI_PROXY_KEY`. **Não existe
+`GEMINI_API_KEY`** — toda chamada de IA passa pelo proxy do Grupo (ver abaixo).
+
+```bash
+npx tsx scripts/verificar-worker-calendario.ts        # rotas do Worker × BigQuery real
+npx tsx scripts/verificar-worker-calendario.ts --ia   # idem + chamada ao AI proxy
+npm run verify:calendario                             # invariantes do gerador
+```
 
 ## Supabase
 
@@ -152,14 +159,36 @@ ORDER BY start_time DESC LIMIT 10;
 
 ## Architecture
 
-**Single-process full-stack app** — `server.ts` (Express) runs both the API and serves the React SPA. In dev, Vite is mounted as middleware inside Express; in prod, Express serves the static `dist/` folder built by Vite.
+### ⚠️ Existem DOIS servidores. Toda rota nova precisa entrar nos dois.
+
+| | `server/index.ts` (via `server.ts`) | `worker.ts` |
+|---|---|---|
+| Runtime | Node + Express | Workers (GoDeploy) |
+| Quando roda | `npm run dev`, local | **produção** |
+| Imports | livre (`@google-cloud/bigquery`, `fs`, …) | **nenhum** — arquivo autocontido, só globais de Worker (`fetch`, `crypto.subtle`, `btoa`) |
+
+Este é o erro mais caro do repositório e ele já aconteceu: as rotas de calendário
+(`/api/calendario/contexto` e `/api/calendario/explicar`) foram escritas só no Express,
+passaram em todo teste local, e em produção a aba caiu no catálogo sintético sem
+nenhum erro visível. Testar em `localhost:3000` **não testa o servidor de produção**.
+
+Consequência prática: bibliotecas Node não podem ser usadas no `worker.ts`. O acesso
+ao BigQuery lá é feito na mão — JWT RS256 assinado com WebCrypto + REST API. Rode
+`npx tsx scripts/verificar-worker-calendario.ts` para exercitar as rotas do Worker
+contra o BigQuery real (com `--ia`, também chama o AI proxy).
+
+**Armadilha da REST API do BigQuery:** ela devolve *todo* valor como string,
+inclusive `BOOLEAN` e `INTEGER` — e `Boolean("false") === true`. `TIMESTAMP` vem
+como epoch em notação científica. As coerções ficam em `bqNum`/`bqBool`/`bqTimestamp`.
 
 ```
-Browser → Express (server.ts)
-            ├─ /api/historico          → returns databaseDisparos (loaded from Supabase on boot)
-            ├─ /api/generate-pauta     → deterministic validation → Gemini → structured JSON
-            ├─ /api/generate-variation → lightweight copy variant via Gemini
-            └─ /*                      → Vite middleware (dev) or static dist/ (prod)
+Browser → Express (server.ts, dev) ─┐
+                                    ├─ /api/historico          → databaseDisparos (Supabase no boot)
+Browser → Worker (worker.ts, prod) ─┘  ├─ /api/generate-pauta     → validação determinística → AI proxy
+                                       ├─ /api/generate-variation → variante de copy via AI proxy
+                                       ├─ /api/calendario/contexto → catálogo + índices do BigQuery
+                                       ├─ /api/calendario/explicar → leitura assistida do plano
+                                       └─ /*                      → Vite middleware (dev) / assets (prod)
 ```
 
 **React SPA (`src/`)** — All routing is tab-based state in `App.tsx` (no router library). `App.tsx` owns all global state: `history` (persisted to Supabase + `localStorage` fallback), active brand, active mode, and modal state. Components are pure presentational/form leaves that call callbacks up to `App.tsx`.
@@ -203,5 +232,14 @@ Prohibited subject terms for both brands: `%`, `OFF`, `GRÁTIS`, `R$`, ALL CAPS,
 - **ES Modules** throughout (`"type": "module"` in package.json). Server build uses `--format=cjs` via esbuild to produce a CJS bundle for Node.js compatibility.
 - **`DISABLE_HMR=true`** disables Vite file watching and HMR — set by AI Studio during agent edits to prevent flickering.
 - The `@` path alias resolves to the repo root (`.`), not `src/`.
-- Gemini model in use: `gemini-2.5-flash`. Response parsing uses `@google/genai` structured output with a JSON schema enforced via `responseSchema`.
+- **IA: AI proxy do Grupo, não Gemini.** `https://ai-proxy.gogroupbr.com/v1`, OpenAI-compatível
+  (`/chat/completions`, `messages[]`). Modelos: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+  `gpt-5.5` (padrão), `gpt-5.4`, `gpt-5.4-mini`. **Nenhum modelo Google.** Cliente em
+  `server/ai-proxy.ts` (Express) e `callGemini()` em `worker.ts` (produção).
+  - Apontar o SDK `@google/genai` para essa URL **não funciona**: os protocolos são
+    diferentes (`contents[].parts[]` vs `messages[]`) e o sintoma é um 400
+    "API key not valid" que culpa a chave quando o problema é o formato.
+  - `response_format: {type:"json_schema"}` é **aceito e silenciosamente ignorado**
+    (HTTP 200 devolvendo markdown). Só `{type:"json_object"}` funciona — e ele garante
+    sintaxe JSON, não conformidade com schema. Por isso `chatJson` exige um type guard.
 - Node.js is at `C:\Program Files\nodejs` — not in default PATH, always export before running npm.
