@@ -140,9 +140,13 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
     };
   }, [marca]);
 
+  // `gerando` cobre a janela em que a Fase 0 do handleGerar está refrescando o contexto
+  // no BigQuery — sem isso o botão volta a parecer instantâneo (o refresh some no meio
+  // dos ~1-2s de RTT) e é impossível saber se o plano é da leitura atual ou da anterior.
+  const [gerando, setGerando] = useState(false);
   const marcaSemModelo = MARCAS_SEM_MODELO.includes(marca);
   const periodoValido = Boolean(dataInicio && dataFim && dataInicio <= dataFim);
-  const podeGerar = periodoValido && !marcaSemModelo && !carregandoContexto;
+  const podeGerar = periodoValido && !marcaSemModelo && !carregandoContexto && !gerando;
   const slotAberto = calendario?.slots.find((s) => chaveSlot(s) === slotSelecionado) ?? null;
 
   // Deriva da marca DO CALENDÁRIO, não da marca selecionada no formulário: depois de gerar,
@@ -178,28 +182,57 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
     }
   };
 
-  const handleGerar = () => {
+  const handleGerar = async () => {
     if (!podeGerar) return;
     setAviso(null);
     setSlotSelecionado(null);
     setErroEdicao(null);
-    const gerado = gerarCalendarioDemo(
-      {
-        marca,
-        modo,
-        dataInicio,
-        dataFim,
-        metaReceita: paraNumero(metaReceita),
-        metaRpm: paraNumero(metaRpm),
-        pisoReceita: paraNumero(pisoReceita),
-        diasAgressivos,
-        eventosEspeciais,
-      },
-      contexto?.config,
-    );
-    setCalendario(gerado);
-    setConversa([]);
-    void consultarIa(gerado);
+    setGerando(true);
+    try {
+      // Fase 0 — refresh do contexto ANTES de gerar. O baseline (RPM/volume dos últimos 28
+      // dias) e os índices ficam cacheados 10min no isolate do Worker; sem `?recarregar=1`,
+      // dois cliques seguidos com meia hora de diferença podem estar usando a mesma foto
+      // de ontem. Uma geração precisa refletir o dado mais fresco disponível, senão o
+      // rótulo "procedencia: dados" mente sobre quão atuais são os dados.
+      let cfgFrescoDoContexto = contexto?.config;
+      if (!marcaSemModelo) {
+        try {
+          const resp = await fetch(`/api/calendario/contexto?marca=${encodeURIComponent(marca)}&recarregar=1`);
+          const corpo = await resp.json();
+          if (resp.ok && corpo?.data) {
+            const novoResultado = configDoContexto(corpo.data as ContextoBigQuery);
+            setContexto(novoResultado);
+            setErroContexto(null);
+            cfgFrescoDoContexto = novoResultado.config;
+          } else if (!resp.ok) {
+            // Não é fatal: se o refresh falhar, gera com o contexto que já está em memória
+            // e sinaliza. Melhor um plano com dado de 10min atrás do que nenhum plano.
+            setErroContexto(corpo?.error ?? 'Não foi possível atualizar o contexto — usando o último carregado.');
+          }
+        } catch (err: any) {
+          setErroContexto(err?.message ?? 'Falha de rede ao atualizar o contexto — usando o último carregado.');
+        }
+      }
+      const gerado = gerarCalendarioDemo(
+        {
+          marca,
+          modo,
+          dataInicio,
+          dataFim,
+          metaReceita: paraNumero(metaReceita),
+          metaRpm: paraNumero(metaRpm),
+          pisoReceita: paraNumero(pisoReceita),
+          diasAgressivos,
+          eventosEspeciais,
+        },
+        cfgFrescoDoContexto,
+      );
+      setCalendario(gerado);
+      setConversa([]);
+      void consultarIa(gerado);
+    } finally {
+      setGerando(false);
+    }
   };
 
   const handleEditar = (edicao: EdicaoSlot) => {
@@ -563,9 +596,11 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                   className={`${CAMPO} resize-y`}
                 />
                 <p className="text-[11px] text-[var(--shell-text-muted)] leading-relaxed">
-                  Campo aberto. Não entra em cálculo nenhum — volume, oferta e horário saem dos
-                  índices, nunca de texto livre. Serve para a leitura assistida comentar o encaixe
-                  do que você já sabe que vai acontecer.
+                  Datas no formato DD/MM ou DD/MM/AAAA são lidas do texto e ganham prioridade
+                  máxima na fila do 3º disparo — acima dos dias agressivos por dow. Se cair em
+                  dia inativo, sem suporte histórico ou sem 3ª janela na grade, o algoritmo
+                  avisa em vez de forçar. Volume e horário continuam saindo dos índices; o
+                  texto ainda vai inteiro para a leitura assistida.
                 </p>
               </div>
 
@@ -575,8 +610,17 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                 disabled={!podeGerar}
                 className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:bg-violet-600/30 disabled:cursor-not-allowed text-white font-bold text-sm py-3.5 rounded-xl transition-all shadow-lg cursor-pointer"
               >
-                <CalendarDays className="w-4 h-4" />
-                Gerar Calendário (1 Cred)
+                {gerando ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Atualizando contexto no BigQuery…
+                  </>
+                ) : (
+                  <>
+                    <CalendarDays className="w-4 h-4" />
+                    Gerar Calendário (1 Cred)
+                  </>
+                )}
               </button>
             </div>
 

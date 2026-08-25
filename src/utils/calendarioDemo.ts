@@ -298,6 +298,55 @@ function deISO(iso: string): Date {
   return new Date(ano, mes - 1, dia);
 }
 
+/**
+ * Extrai datas ISO do texto livre de "eventos especiais", limitadas ao período do plano.
+ *
+ * O campo é prosa e continuará sendo — não vale a pena forçar um date-picker separado só
+ * para isso e o formato "dia 28 teremos lançamento X" é como o time já escreve. O que muda
+ * é que agora essas datas VIRAM entrada do algoritmo (Fase 2c): elas vão pra frente da fila
+ * do 3º disparo, à frente até dos dias marcados por dow, porque um lançamento agendado é um
+ * evento específico e não um viés de dia-da-semana.
+ *
+ * Formatos que sobrevivem ao parse: `28/11`, `28-11`, `28/11/2026`, `28.11`. Sem ano, ano do
+ * dataInicio (ou dataFim, se o mês vier depois da virada do ano). Datas fora do período são
+ * descartadas em silêncio: não é erro digitar `Black Friday em 28/11` num plano de janeiro.
+ */
+function parseEventosEspeciais(texto: string, inicioIso: string, fimIso: string): Set<string> {
+  const datas = new Set<string>();
+  if (!texto || !texto.trim()) return datas;
+  const inicio = deISO(inicioIso);
+  const fim = deISO(fimIso);
+  // Regex tolerante: dia (1-2 díg), separador (/,-,.), mês (1-2 díg), opcional separador + ano (2 ou 4 díg).
+  const regex = /\b(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\b/g;
+  for (const m of texto.matchAll(regex)) {
+    const dia = Number(m[1]);
+    const mes = Number(m[2]);
+    if (dia < 1 || dia > 31 || mes < 1 || mes > 12) continue;
+    // Sem ano explícito, escolhe o ano que faz a data cair no período. Testa primeiro o do
+    // inicio; se não, o do fim. É comum plano cruzar a virada de ano e o time digitar "28/12"
+    // num plano dez/26–jan/27 sem dizer o ano.
+    const anosPossiveis: number[] = [];
+    if (m[3]) {
+      let ano = Number(m[3]);
+      if (ano < 100) ano += 2000;
+      anosPossiveis.push(ano);
+    } else {
+      anosPossiveis.push(inicio.getFullYear());
+      if (fim.getFullYear() !== inicio.getFullYear()) anosPossiveis.push(fim.getFullYear());
+    }
+    for (const ano of anosPossiveis) {
+      const candidata = new Date(ano, mes - 1, dia);
+      // Descarta data inválida (ex.: 31/02 vira 03/03) e fora do período.
+      if (candidata.getMonth() !== mes - 1 || candidata.getDate() !== dia) continue;
+      if (candidata >= inicio && candidata <= fim) {
+        datas.add(paraISO(candidata));
+        break;
+      }
+    }
+  }
+  return datas;
+}
+
 /** Dias do período, cortados em semanas no domingo (mesma convenção da grade). */
 function semanasDoPeriodo(inicio: string, fim: string, diasAtivos: number[]): Date[][] {
   const ultimo = deISO(fim);
@@ -411,6 +460,12 @@ export function gerarCalendarioDemo(
   // (H1) e a célula sem suporte histórico (H3) continuam valendo, senão a marcação viraria
   // uma porta para furar as duas restrições que mais seguram o plano.
   const agressivos = new Set(input.diasAgressivos ?? []);
+  // Eventos declarados no texto livre: datas específicas (ISO) que a Fase 2c prioriza
+  // ACIMA dos dias marcados por dow. Prioridade maior porque um lançamento é evento
+  // específico; agressividade por dow é preferência geral. Se um evento cai num dia sem
+  // suporte histórico ou sem 3ª janela, o filtro de candidatos ainda o descarta (H3/§7.3
+  // não cedem), e o aviso mais adiante explica por quê.
+  const datasEventos = parseEventosEspeciais(input.eventosEspeciais ?? '', input.dataInicio, input.dataFim);
   const diasCom3 = new Set<string>();
   for (const semana of semanas) {
     const candidatos = semana
@@ -420,13 +475,39 @@ export function gerarCalendarioDemo(
       // um erro, é um sábado com dois envios às 10h, que só aparece quando alguém olha.
       .filter((d) => SUPORTE_3_OFERTAS[d.getDay()] > 0 && GRADE[d.getDay()].length >= 3)
       .sort((a, b) => {
+        const eventoA = datasEventos.has(paraISO(a)) ? 2 : 0;
+        const eventoB = datasEventos.has(paraISO(b)) ? 2 : 0;
         const marcadoA = agressivos.has(a.getDay()) ? 1 : 0;
         const marcadoB = agressivos.has(b.getDay()) ? 1 : 0;
-        if (marcadoA !== marcadoB) return marcadoB - marcadoA;
+        const prioA = eventoA + marcadoA;
+        const prioB = eventoB + marcadoB;
+        if (prioA !== prioB) return prioB - prioA;
         return INDICE_DIA[b.getDay()] - INDICE_DIA[a.getDay()];
       })
       .slice(0, cfg.maxDiasCom3);
     for (const d of candidatos) diasCom3.add(paraISO(d));
+  }
+
+  // Eventos declarados que não conseguiram entrar como 3º slot precisam ser ditos. Motivos
+  // possíveis, na ordem que a Fase 2c os elimina: dia inativo da marca (H5), célula sem
+  // suporte histórico (H3), grade sem 3ª janela (§7.3), ou teto semanal H1 já preenchido
+  // por outros eventos/dias mais agressivos. O aviso não distingue os quatro — basta saber
+  // que o evento foi visto e não deu.
+  if (datasEventos.size > 0) {
+    const perdidos: string[] = [];
+    for (const iso of datasEventos) {
+      const d = deISO(iso);
+      if (!cfg.diasAtivos.includes(d.getDay())) { perdidos.push(iso); continue; }
+      if (!diasCom3.has(iso)) perdidos.push(iso);
+    }
+    if (perdidos.length > 0) {
+      avisos.push(
+        `Eventos declarados que não viraram 3º disparo: ${perdidos.map((iso) => iso.split('-').reverse().slice(0, 2).join('/')).join(', ')}. Verifica se cai em dia ativo, com suporte histórico e com 3ª janela na grade; se cabe no teto semanal H1.`,
+      );
+    }
+    restricoesAplicadas.push(
+      `Eventos declarados: ${[...datasEventos].map((iso) => iso.split('-').reverse().slice(0, 2).join('/')).join(', ')} na frente da fila (prioridade acima de dias agressivos por dow)`,
+    );
   }
 
   // Dias marcados que o modelo não pode atender precisam ser ditos, não ignorados em silêncio.
@@ -535,6 +616,15 @@ export function gerarCalendarioDemo(
   // Quantas vezes cada família já saiu NESTE plano. Não é métrica, é insumo da escolha:
   // sem ela o rodízio não tem como saber que está repetindo as mesmas famílias.
   const usosFamilia = new Map<string, number>();
+  // Uso por (família, dow) e (oferta, dow) — anti-repetição SEMANA A SEMANA. Sem isto o
+  // rodízio geral do plano (usosFamilia) segurava a mesma família saindo em 4 quartas
+  // seguidas se a qualidade dela dominasse; e ofertas[(semente + indiceDia*7 + s) % L]
+  // reduzia-se a (semente + s) % L nas segundas quando L divide 7, então TODA segunda do
+  // plano pegava a mesma oferta. As duas linhas abaixo forçam que o mesmo dow, semana
+  // após semana, escolha família e oferta diferentes até esgotar catálogo.
+  const usosFamiliaPorDow = new Map<string, Map<number, number>>();
+  const usosOfertaPorDow = new Map<string, Map<number, number>>();
+  const PENALIDADE_DOW_FAMILIA = 3;
   // Receita da etapa intermediária da decomposição (só I1 ligado, família ainda neutra).
   let receitaSoDia = 0;
   let receitaPlanoExata = 0;
@@ -599,8 +689,19 @@ export function gerarCalendarioDemo(
       // alto continua saindo mais que uma fraca — só não sai a ponto de zerar as outras.
       // O +1 é o que dá a toda família nunca usada o maior score possível do seu nível, que
       // é o que garante cobertura sem precisar de uma regra separada de cobertura.
+      //
+      // A penalidade extra `PENALIDADE_DOW_FAMILIA * usosNoDow` fecha o buraco desta
+      // fórmula quando o plano tem 3+ semanas: a família dominante ganhava TODAS as
+      // segundas do plano, porque a diferença de qualidade compensava usos globais mas
+      // um dow não fica "poupado" só porque a família aparece em outros dias. Com K=3,
+      // uma segunda semana com uma família de qualidade 1,5× já perde para uma família
+      // vizinha que ainda não saiu naquele dow — que é o comportamento pedido.
       const familia = pool.reduce((melhor, f) => {
-        const score = (g: typeof f) => qualidadeFamilia(g.nome) / (1 + (usosFamilia.get(g.nome) ?? 0));
+        const score = (g: typeof f) => {
+          const usosGeral = usosFamilia.get(g.nome) ?? 0;
+          const usosNoDow = usosFamiliaPorDow.get(g.nome)?.get(dow) ?? 0;
+          return qualidadeFamilia(g.nome) / (1 + usosGeral + PENALIDADE_DOW_FAMILIA * usosNoDow);
+        };
         return score(f) > score(melhor) ? f : melhor;
       });
 
@@ -611,10 +712,29 @@ export function gerarCalendarioDemo(
       familiasUsadasHoje.add(familia.nome);
       ultimoUso.set(familia.nome, { dia: indiceDia, hora });
       usosFamilia.set(familia.nome, (usosFamilia.get(familia.nome) ?? 0) + 1);
+      if (!usosFamiliaPorDow.has(familia.nome)) usosFamiliaPorDow.set(familia.nome, new Map());
+      const mapaDow = usosFamiliaPorDow.get(familia.nome)!;
+      mapaDow.set(dow, (mapaDow.get(dow) ?? 0) + 1);
 
       // Fase 5a — oferta dentro da família, com teto de repetição na semana (S2).
+      // O critério antigo `ofertas[(semente + indiceDia*7 + s) % L]` era determinístico
+      // mas coincidia toda vez que L | 7 (ex.: L=7 ⇒ mesma oferta em toda segunda do plano).
+      // Agora escolhemos a oferta MENOS usada no dow atual, com semente só como desempate.
       const ofertas = familia.ofertas;
-      const escolhida = ofertas[(semente + indiceDia * 7 + s) % ofertas.length];
+      const escolhida = ofertas.reduce((menor, o, i) => {
+        const usosOMenor = usosOfertaPorDow.get(menor)?.get(dow) ?? 0;
+        const usosO = usosOfertaPorDow.get(o)?.get(dow) ?? 0;
+        if (usosO < usosOMenor) return o;
+        if (usosO > usosOMenor) return menor;
+        // Desempate: hash da semente + índice na lista, pra manter reprodutibilidade
+        // dentro do mesmo (marca, período) sem fixar a mesma oferta em toda semana.
+        const desempateAtual = (semente + i * 13 + dow * 7 + s) % ofertas.length;
+        const desempateMenor = (semente + ofertas.indexOf(menor) * 13 + dow * 7 + s) % ofertas.length;
+        return desempateAtual < desempateMenor ? o : menor;
+      });
+      if (!usosOfertaPorDow.has(escolhida)) usosOfertaPorDow.set(escolhida, new Map());
+      const mapaOfertaDow = usosOfertaPorDow.get(escolhida)!;
+      mapaOfertaDow.set(dow, (mapaOfertaDow.get(dow) ?? 0) + 1);
       const usos = (usoOfertaNaSemana.get(escolhida) ?? 0) + 1;
       usoOfertaNaSemana.set(escolhida, usos);
       if (usos > 2 && !restricoesRelaxadas.includes('S2: mesma oferta ≤2× na semana')) {

@@ -124,9 +124,11 @@ export interface CalendarioGerado {
 // comando sobre ele. Modo A aceita meta de receita (§6.2); Modo B aceita meta de RPM e piso
 // de receita — o piso é o parâmetro que responde "até onde a eficiência pode ceder receita"
 // (§6.3). Sem piso declarado, o modo B para no corte medido de 15%.
-// `diasAgressivos` (dow 0–6) e `eventosEspeciais` são direcionamento do usuário, também
-// opcionais. `eventosEspeciais` é prosa e não entra em cálculo nenhum (Regra 1 — o LLM
-// nunca calcula um número).
+// `diasAgressivos` (dow 0–6) é direcionamento do usuário por dia-da-semana. `eventosEspeciais`
+// é prosa mas o gerador extrai datas DD/MM (com ou sem ano) dela e prioriza esses dias
+// específicos no 3º slot, ACIMA de diasAgressivos. Não vira número — não gera receita, RPM
+// nem envio novo. Volume, oferta e RPM continuam vindo dos índices; a Regra 1 (o LLM nunca
+// calcula um número) segue valendo, o parse é aritmética simples sobre o texto.
 export interface InputCalendario {
   marca: MarcaCalendario;
   modo: ModoCalendario;

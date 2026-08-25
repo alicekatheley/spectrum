@@ -109,11 +109,17 @@ for (const marca of MARCAS) {
       // todas por igual e o ciclo desliza de fase contra os dias de maior volume. Nesses
       // casos o rodízio genuinamente não agrega, e pode ficar alguns milésimos negativo.
       // Isso é resultado do modelo, não defeito. O que NÃO se tolera é queda visível.
+      //
+      // Limiar mais frouxo (0,2%) do que a versão anterior (0,05%) porque a rotação passou
+      // a incluir penalidade explícita por (dow, família): duas quartas seguidas evitam a
+      // mesma família em vez de deixar a de maior qualidade dominar. Custa alguns décimos
+      // no q_família_dia médio — trade-off deliberado pra plano não ficar estático semana
+      // a semana. Queda visível na tela (R$ 1k+ em 5k) continua estourando este check.
       for (let i = 1; i < cal.decomposicao.length; i++) {
         const anterior = cal.decomposicao[i - 1];
         const atual = cal.decomposicao[i];
         anotar(
-          atual.receita >= anterior.receita * 0.9995,
+          atual.receita >= anterior.receita * 0.998,
           `${ctx}: decomposição desce em "${atual.etapa}" (${anterior.receita} → ${atual.receita})`,
         );
       }
