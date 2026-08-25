@@ -38,13 +38,16 @@ function json(data: any, status = 200): Response {
 const BRAND_DNA: Record<string, any> = {
   Apice: {
     primaryColors: 'Forest Green #688D65, Magenta #D553A5, Aqua #AAD4C7, Off-White #F4F1E5',
-    backgrounds: 'Clean off-white #F4F1E5 or soft aqua tint.',
+    // Lista ampliada de propósito (era só "off-white ou aqua") — usada como FALLBACK quando o
+    // conceito não propõe um fundo próprio (ver paleta.fundo em buildFramePrompt). Antes, esse
+    // fallback era o único destino possível e enviesava todo o Modo C pro bege.
+    backgrounds: 'Vary the background across concepts — do not default to off-white/beige. Rotate among: soft aqua tint #AAD4C7, deep forest green #3E5A3B, warm magenta blush #D553A5 tint, muted terracotta, or (occasionally) clean off-white #F4F1E5.',
     style: 'Clean 2D organic or soft 3D digital illustration, warm feminine mood',
     prohibitedColors: 'Avoid harsh neons and cold blues.',
   },
   Barbours: {
     primaryColors: 'Ruby Red #BF0F26, Gold #AA834B, Merlot #4F080E, Pink Blush #FFCCD5',
-    backgrounds: 'Pastel pink #FFCCD5, OR Off-White #E7E3D8, OR deep Merlot #4F080E.',
+    backgrounds: 'Vary the background across concepts — do not default to off-white/beige. Rotate among: pastel pink #FFCCD5, deep Merlot #4F080E, ruby red #BF0F26 tint, warm gold #AA834B tint, or (occasionally) off-white #E7E3D8.',
     style: 'Premium 3D illustrated luxury editorial style, dramatic studio lighting',
     prohibitedColors: 'NEVER use green, orange, yellow or cold blue.',
   },
@@ -567,7 +570,13 @@ async function generateImage(prompt: string, aspectRatio: string, model: string,
   const genResp = await callPiApp('tools/call', { name: 'generate_image', arguments: genArgs }, apiKey);
   const jobId = JSON.parse(genResp.result?.content?.[0]?.text ?? '{}').job_id;
   if (!jobId) throw new Error('No job_id from PiApp');
-  for (let i = 0; i < 30; i++) {
+  // 90s (30x3s) era curto demais pra frames "edit" (2+, com imagem de referência) sob carga —
+  // o job no PiApp segue rodando e termina minutos depois (visível no painel do PiApp como
+  // concluído), mas a gente já tinha desistido e descartado o frame como falho. No Modo C isso
+  // reproduzia como pauta 100% sem imagem (nenhum frame_urls) mesmo com 2 dos 3 frames prontos
+  // no PiApp. 150s dá mais folga sem arriscar estourar o tempo de execução do worker (a maioria
+  // das rodadas já levava minutos com os 3 frames em série).
+  for (let i = 0; i < 50; i++) {
     await new Promise(r => setTimeout(r, 3000));
     const check = await callPiApp('tools/call', { name: 'check_jobs', arguments: { job_ids: [jobId] } }, apiKey);
     const checkData = JSON.parse(check.result?.content?.[0]?.text ?? '{}');
@@ -586,7 +595,7 @@ async function generateImage(prompt: string, aspectRatio: string, model: string,
     const imageBytes = btoa(binary);
     return { imageBytes, mimeType: imgResp.headers.get('content-type') ?? 'image/png' };
   }
-  throw new Error('Timeout after 90s');
+  throw new Error('Timeout after 150s');
 }
 
 async function supabaseUpload(bucket: string, path: string, data: Uint8Array, mimeType: string, supabaseKey: string) {
@@ -611,7 +620,7 @@ function buildFramePrompt({
   ajusteRegeneracao,
 }: {
   frameName?: string; frameDescription: string; marca: string; brandDna: any;
-  estiloIlustracao?: string; paleta?: { cores?: string[] }; mecanica?: string; recompensa?: string;
+  estiloIlustracao?: string; paleta?: { cores?: string[]; fundo?: string }; mecanica?: string; recompensa?: string;
   headline?: string; subheadline?: string; direcionamento?: string; aspectRatio: string; frameRefCount?: number;
   productRefCount?: number; totalFrames?: number; ajusteRegeneracao?: string;
 }): string {
@@ -681,7 +690,10 @@ function buildFramePrompt({
     isFirstFrame
       ? `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene (full establishing description — defines the fixed layout every later frame must match): ${frameDescription}.${rewardPhrase}`
       : `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. ONLY THIS CHANGES vs the reference frame: ${frameDescription}.${rewardPhrase} Everything not mentioned here (background, secondary props, reward items not yet revealed) must remain pixel-identical to the reference image — do not re-imagine or reposition it.`,
-    `Palette: ${paletaCores}.${direcionamento ? '' : ` Background: ${brandDna.backgrounds}.`} ${brandDna.prohibitedColors}`,
+    // O conceito pode propor seu próprio fundo (paleta.fundo, ex: o Agente do Modo C) — nesse
+    // caso ele tem prioridade sobre o fallback genérico da marca, senão todo conceito cai no
+    // mesmo "Background: ..." fixo e o resultado converge pro mesmo tom (bege/off-white).
+    `Palette: ${paletaCores}.${direcionamento ? '' : ` Background: ${paleta?.fundo?.trim() || brandDna.backgrounds}.`} ${brandDna.prohibitedColors}`,
     consistencyBlock,
     `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. ABSOLUTELY NO TEXT of any kind anywhere in the image — no letters, words, numbers, or symbols, even if they relate to this campaign. This is a pure background/product illustration; all copy is added separately afterward. 4K. Ratio: ${aspectRatio}.`
   ].filter(Boolean).join('\n\n');
@@ -709,6 +721,7 @@ function normalizePauta(p: any, marca: string, modo: string, tipoGeracao: string
       paletaRecomendada: {
         nome: String(p.visual?.paletaRecomendada?.nome ?? 'Paleta da marca'),
         cores: Array.isArray(p.visual?.paletaRecomendada?.cores) ? p.visual.paletaRecomendada.cores : [],
+        fundo: String(p.visual?.paletaRecomendada?.fundo ?? ''),
       },
       estiloIlustracao: String(p.visual?.estiloIlustracao ?? ''),
       frames: Array.isArray(p.visual?.frames) ? p.visual.frames.slice(0, qtdFrames) : [],
@@ -845,7 +858,9 @@ REGRAS DE COPY (OBRIGATÓRIO PREENCHER TODOS — nunca deixe vazio):
 - subHeadlineBanner: expõe a recompensa concreta + um prazo/urgência, em UMA frase corrida, SEM travessão (—) nem hífen duplo (--) separando as duas ideias — use vírgula ou reestruture a frase (ex: "seu brinde te espera, válido até 23h59" e NÃO "seu brinde te espera — válido até 23h59"). Travessão no meio da frase é um tique de texto gerado por IA e não pode aparecer aqui.
 - ctaBotao: verbo único no imperativo correspondente à mecânica (ex: "ABRIR", "PUXAR").
 - assunto: dentro do limite de caracteres, coerente com a mecânica, também sem travessão.
-Um conceito sem headlineBanner, subHeadlineBanner ou ctaBotao preenchidos é considerado INVÁLIDO — sempre preencha os quatro campos de copy com texto real, nunca com string vazia.`;
+Um conceito sem headlineBanner, subHeadlineBanner ou ctaBotao preenchidos é considerado INVÁLIDO — sempre preencha os quatro campos de copy com texto real, nunca com string vazia.
+
+REGRA DE FUNDO/BACKGROUND (visual.paletaRecomendada.fundo): varie o fundo entre os conceitos gerados — não repita "off-white"/"bege" por padrão. Escolha um fundo que tenha harmonia com a paleta de cores da marca (tons vivos, saturados ou escuros também valem, contanto que combinem com o objeto herói e mantenham boa legibilidade), e descreva-o em 1 frase objetiva (cor + textura/gradiente, ex: "verde-floresta profundo com leve gradiente" ou "rosa blush pastel liso"). O bege claro só deve aparecer ocasionalmente, nunca como escolha padrão.`;
 
   const userPrompt = `GIFs analisados que já funcionaram (grounding — de qualquer marca do grupo, use só como entendimento de padrão de mecânica/composição, NÃO copie o produto ou nicho deles):
 ${gifsBlock}
@@ -861,7 +876,7 @@ CONTINUIDADE VISUAL (ESCOPO DECRESCENTE — OBRIGATÓRIO): frames[0] é a ÚNICA
 Retorne APENAS um array JSON com 1 item, sem markdown, nesta estrutura exata:
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
-  "visual": { "formato": "GIF animado 3 frames", "paletaRecomendada": { "nome": "", "cores": [] }, "estiloIlustracao": "", "frames": ["", "", ""], "posicaoCta": "", "tipografia": "" },
+  "visual": { "formato": "GIF animado 3 frames", "paletaRecomendada": { "nome": "", "cores": [], "fundo": "" }, "estiloIlustracao": "", "frames": ["", "", ""], "posicaoCta": "", "tipografia": "" },
   "operacional": { "mecanicaEscolhida": "", "justificativaMecanica": "", "recompensaEscolhida": "", "diaRecomendado": "", "horarioRecomendado": "", "segmentoRecomendado": "" },
   "previsao": { "aberturaEsperada": "", "ctorEsperado": "", "receitaEsperada": "", "casesReferencia": [], "confianca": "baixa", "confiancaMotivo": "" },
   "riscos": []
@@ -1865,14 +1880,20 @@ async function generateGifFramesForAgente(params: {
 
   const safeMarca = marca.toLowerCase().replace(/[^a-z0-9]/g, '');
   const urls: Record<string, string> = {};
-  for (let i = 0; i < frameResults.length; i++) {
-    const { frameName, imageBytes, mimeType } = frameResults[i];
+  // Chaves "frame_0"/"frame_1"/"frame_2" (não "inicial"/"final"...) pra casar com a convenção
+  // que o GifViewer/reconstrução do front ordenam alfabeticamente = cronológica. O índice usado
+  // na chave vem de um contador à parte, incrementado só em upload bem-sucedido — se usássemos
+  // o índice do loop, uma falha de upload no primeiro frame gerado deixava "frame_0" sem valor
+  // mesmo com frames 2 e 3 disponíveis, e o front (que só olha "frame_0") mostrava o card em branco.
+  let nextIndex = 0;
+  for (const { frameName, imageBytes, mimeType } of frameResults) {
     try {
       const { bytes } = dataUrlToBytes(`data:${mimeType};base64,${imageBytes}`);
       const up = await supabaseUpload('campaign-images', `${safeMarca}/${pautaId}/${frameName}.png`, bytes, mimeType, supabaseServiceKey);
-      // Chaves "frame_0"/"frame_1"/"frame_2" (não "inicial"/"final"...) pra casar com a
-      // convenção que o GifViewer/reconstrução do front ordenam alfabeticamente = cronológica.
-      if (up.ok) urls[`frame_${i}`] = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pautaId}/${frameName}.png`;
+      if (up.ok) {
+        urls[`frame_${nextIndex}`] = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pautaId}/${frameName}.png`;
+        nextIndex++;
+      }
     } catch (err: any) {
       console.error(`[agente-gif] Upload do frame ${frameName} falhou:`, err.message);
     }

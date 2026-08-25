@@ -209,6 +209,7 @@ export interface PautaVisual {
   paletaRecomendada: {
     nome: string;
     cores: string[]; // HEX codes
+    fundo?: string; // descrição livre do background, quando o conceito propõe um (ex: Modo C)
   };
   estiloIlustracao: string;
   frameInicial?: string;

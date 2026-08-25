@@ -20,7 +20,12 @@ export default function HistoryGallery({ pautas, frameImagesByPauta, onOpenPauta
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
       {pautas.map((pauta) => {
         const isApice = pauta.marca === 'Apice';
-        const thumb = (frameImagesByPauta[pauta.id] ?? {})['frame_0'];
+        const frameImages = frameImagesByPauta[pauta.id] ?? {};
+        // Nem sempre "frame_0" existe — quando o gerador só emplaca 1 ou 2 dos 3 frames, a
+        // convenção de índices contíguos pode deixar o conceito só com "frame_1"/"frame_2".
+        // Pega o primeiro frame disponível em vez de assumir "frame_0" e cair no placeholder vazio.
+        const firstFrameKey = Object.keys(frameImages).sort()[0];
+        const thumb = firstFrameKey ? frameImages[firstFrameKey] : undefined;
         const label = pauta.copy?.assunto || pauta.copy?.headlineBanner || 'Pauta sem assunto';
         return (
           <button
