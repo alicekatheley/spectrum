@@ -58,7 +58,17 @@ export interface OfertaCatalogo {
  */
 export interface NivelIndice {
   nivel: string | null;
+  /** Índice CRU, como medido na janela de treino. Diagnóstico, não planejamento. */
   valor: number;
+  /**
+   * `valor ^ peso` — o número que se usa. O expoente vem do walk-forward e já
+   * está encolhido pela própria incerteza, então índice que o teste não
+   * distinguiu de ruído chega aqui como 1 (neutro) sem precisar de limiar.
+   * Ver sql/bigquery/peso_transferencia_e_corte_rolante.sql.
+   */
+  valorEfetivo: number;
+  /** Expoente aplicado. 0 = neutralizado, 1 = usado como medido. NULL em I6_alpha. */
+  peso: number | null;
   ic80Lo: number | null;
   ic80Hi: number | null;
   nObservacoes: number | null;
@@ -69,6 +79,8 @@ export interface IndicesMarca {
   geradoEm: string;
   janelaIni: string | null;
   janelaFim: string | null;
+  /** Fronteira treino/teste do walk-forward. Rolante (hoje − 1 mês), muda todo dia. */
+  corteWalkforward: string | null;
   /** Quanto de cada índice se confirma fora da amostra. 1 = integral, 0 = ruído. */
   transferencia: Record<string, number | null>;
   i1Dia: NivelIndice[];
@@ -268,8 +280,10 @@ export async function carregarContextoModelo(): Promise<boolean> {
         FROM \`${DATASET}.marca_oferta_familia\`
         ORDER BY marca, familia, oferta`),
       consultar(`
-        SELECT marca, indice, nivel, valor, ic80_lo, ic80_hi, n_observacoes,
-               coef_transferencia, veredito, janela_ini, janela_fim, gerado_em
+        SELECT marca, indice, nivel, valor, valor_efetivo, peso_transferencia,
+               ic80_lo, ic80_hi, n_observacoes,
+               coef_transferencia, veredito, janela_ini, janela_fim,
+               corte_walkforward, gerado_em
         FROM \`${DATASET}.v_indices_atuais\``),
       consultar(`
         SELECT marca, dow, dias_observados, dias_1_oferta, dias_2_ofertas, dias_3_ofertas
@@ -333,6 +347,7 @@ export async function carregarContextoModelo(): Promise<boolean> {
           geradoEm: "",
           janelaIni: null,
           janelaFim: null,
+          corteWalkforward: null,
           transferencia: {},
           i1Dia: [],
           i2Gap: [],
@@ -367,6 +382,8 @@ export async function carregarContextoModelo(): Promise<boolean> {
       const nivel: NivelIndice = {
         nivel: i.nivel == null ? null : String(i.nivel),
         valor: Number(i.valor),
+        valorEfetivo: comoNumero(i.valor_efetivo) ?? Number(i.valor),
+        peso: comoNumero(i.peso_transferencia),
         ic80Lo: comoNumero(i.ic80_lo),
         ic80Hi: comoNumero(i.ic80_hi),
         nObservacoes: comoNumero(i.n_observacoes),
@@ -375,6 +392,7 @@ export async function carregarContextoModelo(): Promise<boolean> {
       m.indices.geradoEm = comoTexto(i.gerado_em) ?? m.indices.geradoEm;
       m.indices.janelaIni = comoTexto(i.janela_ini) ?? m.indices.janelaIni;
       m.indices.janelaFim = comoTexto(i.janela_fim) ?? m.indices.janelaFim;
+      m.indices.corteWalkforward = comoTexto(i.corte_walkforward) ?? m.indices.corteWalkforward;
       m.indices.transferencia[String(i.indice)] = comoNumero(i.coef_transferencia);
 
       switch (String(i.indice)) {

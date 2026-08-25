@@ -20,9 +20,10 @@ export interface ContextoBigQuery {
   };
   catalogo: { oferta: string; familia: string; agressividade: number }[];
   indices: {
-    i1Dia: { nivel: string; valor: number; nObservacoes: number; veredito: string }[];
-    i4Oferta: { nivel: string; valor: number; nObservacoes: number; veredito: string }[];
+    i1Dia: { nivel: string; valor: number; valorEfetivo: number; peso: number | null; nObservacoes: number; veredito: string }[];
+    i4Oferta: { nivel: string; valor: number; valorEfetivo: number; peso: number | null; nObservacoes: number; veredito: string }[];
     alpha: number;
+    corteWalkforward?: string | null;
   };
   viabilidade: { dow: number; diasObservados: number; dias3Ofertas: number }[];
   baseline: { rpm: number; volumeSemana: number; dias: number; enviados: number };
@@ -165,10 +166,34 @@ export function configDoContexto(ctx: ContextoBigQuery): ResultadoContexto {
   // I1 chega como lista rotulada por nome de dia; o gerador indexa por dow.
   // Nível ausente vira 1 (neutro) em vez de 0 — 0 zeraria o peso do dia e o
   // tiraria do plano por falta de linha na tabela, que é bug silencioso.
+  //
+  // Usa `valorEfetivo`, NÃO `valor`. O cru é o índice medido no treino; o efetivo
+  // é `valor^peso`, com o expoente vindo do walk-forward e já encolhido pela
+  // própria incerteza. A diferença não é cosmética. Medições de I1 em 25/08/2026,
+  // com o corte rolante (treino até 25/07, teste depois):
+  //
+  //     kokeshi   b=-0,26  se=1,23  -> peso 0,00   (ruído puro; agora neutro)
+  //     rituaria  b=-0,02  se=0,31  -> peso 0,00
+  //     barbours  b= 0,85  se=0,74  -> peso 0,21   (encolhido quase todo)
+  //     apice     b= 0,73  se=0,45  -> peso 0,45
+  //     lescent   b= 1,72  se=0,58  -> peso 1,50   (no teto; ver abaixo)
+  //
+  // Antes disso as cinco aplicavam o índice de dia a 100%, inclusive kokeshi e
+  // rituaria, cujo coeficiente é NEGATIVO — ou seja, o dia "bom" do treino não
+  // era melhor no teste, e o modelo estava concentrando envio nele mesmo assim.
+  //
+  // Lescent é o caso oposto e o único que bate no teto: o peso não-truncado é
+  // 1,53 e sai capado em 1,5. Não é bug — é a trava contra extrapolar longe do
+  // range observado. Efeito prático: a quarta-feira dessa marca entra com 1,31
+  // em vez de 1,20. Se o teto passar a valer para mais de uma marca, o certo é
+  // pooling parcial de b entre marcas, não subir o teto.
+  //
+  // Fallback para `valor` só protege contexto vindo de snapshot antigo, gravado
+  // antes da coluna existir.
   const indiceDia = [1, 1, 1, 1, 1, 1, 1];
   for (const linha of ctx.indices.i1Dia) {
     const dow = DOW_POR_NOME[linha.nivel];
-    if (dow !== undefined) indiceDia[dow] = linha.valor;
+    if (dow !== undefined) indiceDia[dow] = linha.valorEfetivo ?? linha.valor;
   }
 
   const suporte3 = [0, 0, 0, 0, 0, 0, 0];

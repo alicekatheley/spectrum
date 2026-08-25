@@ -324,8 +324,10 @@ async function carregarContextoBq(env: Env, forcar = false): Promise<Record<stri
         SELECT marca, familia, oferta, agressividade
         FROM \`${DS}.marca_oferta_familia\` ORDER BY marca, familia, oferta`),
       bqConsultar(env, `
-        SELECT marca, indice, nivel, valor, ic80_lo, ic80_hi, n_observacoes,
-               coef_transferencia, veredito, janela_ini, janela_fim, gerado_em
+        SELECT marca, indice, nivel, valor, valor_efetivo, peso_transferencia,
+               ic80_lo, ic80_hi, n_observacoes,
+               coef_transferencia, veredito, janela_ini, janela_fim,
+               corte_walkforward, gerado_em
         FROM \`${DS}.v_indices_atuais\``),
       bqConsultar(env, `
         SELECT marca, dow, dias_observados, dias_1_oferta, dias_2_ofertas, dias_3_ofertas
@@ -376,7 +378,8 @@ async function carregarContextoBq(env: Env, forcar = false): Promise<Record<stri
         },
         catalogo: [] as any[],
         indices: {
-          geradoEm: '', janelaIni: null, janelaFim: null, transferencia: {} as any,
+          geradoEm: '', janelaIni: null, janelaFim: null, corteWalkforward: null,
+          transferencia: {} as any,
           i1Dia: [] as any[], i2Gap: [] as any[], i3Hora: [] as any[], i4Oferta: [] as any[],
           alpha: null as number | null,
         },
@@ -401,7 +404,12 @@ async function carregarContextoBq(env: Env, forcar = false): Promise<Record<stri
       if (!m) continue;
       const nivel = {
         nivel: i.nivel == null ? null : String(i.nivel),
+        // `valor` é o índice CRU, mantido para diagnóstico. Quem planeja usa
+        // `valorEfetivo` = valor^peso, já encolhido pela incerteza do walk-forward.
+        // Ver sql/bigquery/peso_transferencia_e_corte_rolante.sql.
         valor: bqNum(i.valor) ?? 0,
+        valorEfetivo: bqNum(i.valor_efetivo) ?? bqNum(i.valor) ?? 0,
+        peso: bqNum(i.peso_transferencia),
         ic80Lo: bqNum(i.ic80_lo),
         ic80Hi: bqNum(i.ic80_hi),
         nObservacoes: bqNum(i.n_observacoes),
@@ -410,6 +418,9 @@ async function carregarContextoBq(env: Env, forcar = false): Promise<Record<stri
       m.indices.geradoEm = bqTimestamp(i.gerado_em) ?? m.indices.geradoEm;
       m.indices.janelaIni = i.janela_ini ?? m.indices.janelaIni;
       m.indices.janelaFim = i.janela_fim ?? m.indices.janelaFim;
+      // O corte que ESTE snapshot usou. Rolante, então muda todo dia — a tela
+      // precisa dele para saber se o período pedido cai perto da janela validada.
+      m.indices.corteWalkforward = i.corte_walkforward ?? m.indices.corteWalkforward;
       m.indices.transferencia[String(i.indice)] = bqNum(i.coef_transferencia);
       switch (String(i.indice)) {
         case 'I1_dia': m.indices.i1Dia.push(nivel); break;
