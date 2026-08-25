@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarDays, Loader2, Lock, Moon, RefreshCw, Sun } from "lucide-react";
+import { CalendarDays, Loader2, Moon, RefreshCw, Sun } from "lucide-react";
 import { CalendarioGerado, MarcaCalendario, ModoCalendario } from "../../types";
 import { useTheme } from "../../contexts/ThemeContext";
-import { gerarCalendarioDemo, MARCAS_SEM_MODELO, procedenciaDoCatalogo } from "../../utils/calendarioDemo";
+import { gerarCalendarioDemo, procedenciaDoCatalogo } from "../../utils/calendarioDemo";
 import { configDoContexto, type ContextoBigQuery, type ResultadoContexto } from "../../utils/calendarioContexto";
 import { EdicaoSlot, chaveSlot, editarSlot, removerSlot } from "../../utils/editarCalendario";
 import CalendarioGrid from "./CalendarioGrid";
@@ -113,8 +113,6 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
     let cancelado = false;
     setContexto(null);
     setErroContexto(null);
-    if (MARCAS_SEM_MODELO.includes(marca)) return;
-
     setCarregandoContexto(true);
     fetch(`/api/calendario/contexto?marca=${encodeURIComponent(marca)}`)
       .then(async (r) => {
@@ -144,9 +142,8 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
   // no BigQuery — sem isso o botão volta a parecer instantâneo (o refresh some no meio
   // dos ~1-2s de RTT) e é impossível saber se o plano é da leitura atual ou da anterior.
   const [gerando, setGerando] = useState(false);
-  const marcaSemModelo = MARCAS_SEM_MODELO.includes(marca);
   const periodoValido = Boolean(dataInicio && dataFim && dataInicio <= dataFim);
-  const podeGerar = periodoValido && !marcaSemModelo && !carregandoContexto && !gerando;
+  const podeGerar = periodoValido && !carregandoContexto && !gerando;
   const slotAberto = calendario?.slots.find((s) => chaveSlot(s) === slotSelecionado) ?? null;
 
   // Deriva da marca DO CALENDÁRIO, não da marca selecionada no formulário: depois de gerar,
@@ -195,23 +192,21 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
       // de ontem. Uma geração precisa refletir o dado mais fresco disponível, senão o
       // rótulo "procedencia: dados" mente sobre quão atuais são os dados.
       let cfgFrescoDoContexto = contexto?.config;
-      if (!marcaSemModelo) {
-        try {
-          const resp = await fetch(`/api/calendario/contexto?marca=${encodeURIComponent(marca)}&recarregar=1`);
-          const corpo = await resp.json();
-          if (resp.ok && corpo?.data) {
-            const novoResultado = configDoContexto(corpo.data as ContextoBigQuery);
-            setContexto(novoResultado);
-            setErroContexto(null);
-            cfgFrescoDoContexto = novoResultado.config;
-          } else if (!resp.ok) {
-            // Não é fatal: se o refresh falhar, gera com o contexto que já está em memória
-            // e sinaliza. Melhor um plano com dado de 10min atrás do que nenhum plano.
-            setErroContexto(corpo?.error ?? 'Não foi possível atualizar o contexto — usando o último carregado.');
-          }
-        } catch (err: any) {
-          setErroContexto(err?.message ?? 'Falha de rede ao atualizar o contexto — usando o último carregado.');
+      try {
+        const resp = await fetch(`/api/calendario/contexto?marca=${encodeURIComponent(marca)}&recarregar=1`);
+        const corpo = await resp.json();
+        if (resp.ok && corpo?.data) {
+          const novoResultado = configDoContexto(corpo.data as ContextoBigQuery);
+          setContexto(novoResultado);
+          setErroContexto(null);
+          cfgFrescoDoContexto = novoResultado.config;
+        } else if (!resp.ok) {
+          // Não é fatal: se o refresh falhar, gera com o contexto que já está em memória
+          // e sinaliza. Melhor um plano com dado de 10min atrás do que nenhum plano.
+          setErroContexto(corpo?.error ?? 'Não foi possível atualizar o contexto — usando o último carregado.');
         }
+      } catch (err: any) {
+        setErroContexto(err?.message ?? 'Falha de rede ao atualizar o contexto — usando o último carregado.');
       }
       const gerado = gerarCalendarioDemo(
         {
@@ -341,32 +336,27 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
         <div className="flex flex-col gap-1">
           <span className={LABEL}>Marca</span>
           <p className="text-xs text-[var(--shell-text-muted)]">
-            Os índices são estimados por marca e nunca copiados de outra. Cinco marcas de seis estão
-            no modelo.
+            Os índices são estimados por marca e nunca copiados de outra. As seis marcas estão no
+            modelo.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {MARCAS.map(({ key, label, cor }) => {
             const ativa = marca === key;
-            const semModelo = MARCAS_SEM_MODELO.includes(key);
             return (
               <button
                 key={key}
                 id={`calendario-marca-${key.toLowerCase()}`}
                 onClick={() => trocarMarca(key)}
-                title={semModelo ? 'Marca sem cobertura do modelo — atribuição indisponível na origem' : undefined}
                 className={`px-4 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all duration-300 flex items-center gap-2 cursor-pointer border ${
                   ativa
                     ? 'text-white border-transparent shadow-lg'
-                    : `bg-[var(--shell-panel-soft)] border-[var(--shell-border)] hover:text-[var(--shell-text)] ${
-                        semModelo ? 'text-[var(--shell-text-muted)] opacity-50' : 'text-[var(--shell-text-muted)]'
-                      }`
+                    : 'bg-[var(--shell-panel-soft)] border-[var(--shell-border)] text-[var(--shell-text-muted)] hover:text-[var(--shell-text)]'
                 }`}
                 style={ativa ? { backgroundColor: cor } : undefined}
               >
                 <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ativa ? '#FFFFFF' : cor }} />
                 {label}
-                {semModelo && <Lock className="w-3 h-3" />}
               </button>
             );
           })}
@@ -376,7 +366,7 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
       {/* Cair para o CONFIG estático é aceitável; cair em silêncio não é. Sem este
           aviso, um plano de números inventados fica visualmente idêntico a um plano
           medido, e a única diferença some junto com a conexão. */}
-      {erroContexto && !marcaSemModelo && (
+      {erroContexto && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">
             Contexto do BigQuery indisponível — usando catálogo estático
@@ -389,27 +379,6 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
         </div>
       )}
 
-      {marcaSemModelo ? (
-        /* Gocase segue no seletor porque a pendência será resolvida — mas selecioná-la não
-           leva a nada, e a tela precisa dizer por quê em vez de fingir que gera. */
-        <div className={`${CARD} flex flex-col gap-3`}>
-          <div className="flex items-center gap-2">
-            <Lock className="w-4 h-4 text-amber-400" />
-            <h2 className={TITULO_CARD}>Gocase ainda não entra no modelo</h2>
-          </div>
-          <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-3xl">
-            A marca tem 247 milhões de envios registrados, mas a tabela de pedidos é Spree e não
-            tem coluna de UTM nenhuma — sem isso não há como casar receita com disparo, e o padrão
-            de atribuição que sustenta todos os índices fica impossível de aplicar.
-          </p>
-          <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-3xl">
-            Não é fila de trabalho: é bloqueio de origem. Desbloquear é tarefa de engenharia de
-            dados na carga do Spree, fora deste modelo. Enquanto isso, qualquer número aqui seria
-            inventado — por isso a tela não gera.
-          </p>
-        </div>
-      ) : (
-        <>
           {/* Modo — a tensão é matemática, não uma preferência de configuração */}
           <div className={`${CARD} flex flex-col gap-4`}>
             <div className="flex flex-col gap-1">
@@ -917,8 +886,6 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
               </button>
             </div>
           </div>
-        </>
-      )}
 
     </div>
   );

@@ -2130,9 +2130,9 @@ export default {
 
       const doMarca = ctx[marca.toLowerCase()];
       if (!doMarca) {
-        // Gocase cai aqui, e é o caso mais importante de distinguir: ela não está em
-        // marca_config porque a tabela de pedidos é Spree e não tem UTM — atribuição
-        // impossível. Não é fila de trabalho, é bloqueio de origem.
+        // 404 quando a marca não está em marca_config.ativo. As seis marcas do Grupo
+        // estão no modelo desde 25/08/2026 (Gocase foi a última a entrar); este ramo
+        // hoje só cobre nome escrito errado ou marca desativada manualmente.
         return json({
           error: `Marca "${marca}" não está no modelo.`,
           marcasDisponiveis: Object.keys(ctx),

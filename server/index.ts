@@ -956,9 +956,9 @@ app.get("/api/calendario/contexto", (req, res) => {
 
   const doMarca = getContextoMarca(marca);
   if (!doMarca) {
-    // Gocase cai aqui, e é o caso mais importante de distinguir: ela não está em
-    // marca_config porque a tabela de pedidos é Spree e não tem UTM — atribuição
-    // impossível (§2.9). Não é fila de trabalho, é bloqueio de origem.
+    // 404 quando a marca não está em marca_config.ativo. As seis marcas do Grupo
+    // estão no modelo desde 25/08/2026 (Gocase foi a última a entrar); este ramo
+    // hoje só cobre nome escrito errado ou marca desativada manualmente.
     return res.status(404).json({
       error: `Marca "${marca}" não está no modelo.`,
       marcasDisponiveis: Object.keys(ctx),

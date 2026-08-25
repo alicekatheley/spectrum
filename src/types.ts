@@ -15,8 +15,10 @@ export type ContaInsider = 'Apice' | 'Barbours' | 'Rituaria' | 'Lescent' | 'Koke
 
 // Marcas atendidas pela aba de Geração de Calendários — conjunto mais amplo que `Brand`,
 // que segue restrito às duas marcas com playbook de conteúdo.
-// `Gocase` fica no seletor mas não gera: a origem (Spree) não tem coluna de UTM nenhuma,
-// o que torna a atribuição da §2.4 impossível. É bloqueio de origem, não de prioridade (§2.9).
+// Gocase entrou em 25/08/2026 depois que o Spree passou a gravar UTM (v2 da tabela,
+// retroativa até 27/04). Foi ativada com janela útil de 102 dias efetivos (buraco
+// 08/07-25/07 filtrado no ETL). A atribuição da §2.4 volta a ser possível, com a
+// ressalva de que o dia da semana (I1) ainda está com peso 0 até a janela crescer.
 export type MarcaCalendario = 'Apice' | 'Barbours' | 'Rituaria' | 'Gocase' | 'Kokeshi' | 'Lescent';
 
 // Nomes por extenso, como o modelo emite em `dia_semana`. A abreviação de 3 letras é

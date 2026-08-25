@@ -23,12 +23,15 @@ import {
 // porque uma fixture que as violasse produziria uma tela que mente sobre o modelo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Marcas que o modelo não cobre. Gocase tem 247M de envios registrados mas a tabela de
-// pedidos é Spree e não tem coluna de UTM nenhuma — a atribuição da §2.4 é impossível.
-// Bloqueio de origem, não fila de trabalho (§2.9).
-export const MARCAS_SEM_MODELO: MarcaCalendario[] = ['Gocase'];
+// Marcas que o modelo não cobre. Vazio desde 25/08/2026: a Gocase entrou depois que
+// o Spree passou a gravar UTM (v2 da tabela, retroativa a 27/04). O buraco de dados
+// 08/07-25/07 é filtrado direto no sp_carrega_fato_slot, então o front não precisa
+// saber dele.
+export const MARCAS_SEM_MODELO: MarcaCalendario[] = [];
 
-type MarcaAtiva = Exclude<MarcaCalendario, 'Gocase'>;
+// `MarcaAtiva` era Exclude<..., 'Gocase'> enquanto ela não gerava. Hoje as 6 marcas
+// entram no CONFIG placeholder, então é apenas o próprio `MarcaCalendario`.
+type MarcaAtiva = MarcaCalendario;
 
 // Elasticidade de volume dentro do dia (§6.1). receita ∝ V^0.31, portanto RPM ∝ V^-0.69.
 const ALPHA = 0.31;
@@ -261,6 +264,19 @@ const CONFIG: Record<MarcaAtiva, ConfigMarca> = {
     volumeSemana: 270_000,
     rpmBase: 17.8,
     familias: familiasSinteticas(4),
+    procedencia: 'sintetico',
+    ...PADRAO_MEDIDO,
+  },
+  // Gocase é 15x maior que as outras em volume (fato_slot medido 25/08: 178M envios em
+  // 102 dias, ~12,25M/semana). O RPM sai baixo (~R$ 7/mil vs 17-34 das outras) porque
+  // a base é enorme e a conversão por email é dilúida — coerente com marca de acessório.
+  // Fim de semana com apenas 2 horários (Dom/Sáb: 10 e 19), único na frota.
+  Gocase: {
+    diasAtivos: [0, 1, 2, 3, 4, 5, 6],
+    maxDiasCom3: 5,
+    volumeSemana: 12_250_000,
+    rpmBase: 7.1,
+    familias: familiasSinteticas(6),
     procedencia: 'sintetico',
     ...PADRAO_MEDIDO,
   },
