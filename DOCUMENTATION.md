@@ -1,214 +1,372 @@
 # Spectrum — Documentação Técnica
 
-> Gerador de pautas de CRM (email marketing) para as marcas **Ápice** (cuidado capilar feminino) e **Barbours** (beleza acessível de luxo). App full-stack single-process: servidor Express serve API + SPA React.
->
-> Este documento existe para dar uma visão externa de como o Spectrum está construído hoje — modelo de dados, serviços implementados e integrações externas — como ponto de partida para unificar padrões entre aplicações do time.
+> Atualizado em **25/08/2026** contra o código em `HEAD`. A versão anterior era de
+> 18/08 e descrevia a aplicação como processo único Express com Gemini — as duas
+> coisas deixaram de ser verdade.
+
+Spectrum gera pautas de CRM (e-mail marketing) para **Ápice** e **Barbours**, e
+monta calendários de disparo para **cinco** marcas (`apice`, `barbours`,
+`kokeshi`, `lescent`, `rituaria`) a partir de um modelo estatístico que vive no
+BigQuery.
 
 ---
 
-## 1. Visão geral da arquitetura
+## 1. Os dois servidores
 
-```
-Browser (React SPA, src/)
-     │
-     ▼
-Express (server.ts → server/index.ts)
-     ├─ /api/historico            GET   → disparos históricos carregados no boot
-     ├─ /api/mecanicas            GET   → catálogo de mecânicas (fixas + geradas por IA)
-     ├─ /api/generate-pauta       POST  → geração principal de pauta (Gemini)
-     ├─ /api/analyze-frame        POST  → extrai metadados visuais de um frame (Gemini)
-     ├─ /api/generate-image       POST  → gera 1 frame de imagem (PiApp)
-     ├─ /api/generate-gif         POST  → gera 3 frames em paralelo (PiApp)
-     ├─ /api/parse-estilo-visual  POST  → parseia estilo de texto livre (Claude/Anthropic)
-     ├─ /api/generate-variation   POST  → variação de copy de uma pauta existente (Gemini)
-     ├─ /api/save-frame           POST  → salva um frame no Supabase Storage
-     ├─ /api/approve-pauta        POST  → grava pauta aprovada em crm_ai.ia_outputs
-     └─ /*                        → Vite middleware (dev) ou dist/ estático (prod)
-```
+A aplicação tem **dois** servidores que implementam a mesma API em runtimes
+diferentes. Não é redundância: é o custo de a plataforma de produção não ser Node.
 
-- **Entry point:** [server.ts](server.ts) apenas carrega `.env` e chama `startServer()` de [server/index.ts](server/index.ts).
-- **Framework do servidor:** Express (não Hono, apesar de `hono` estar como dependência no `package.json` — não está em uso em `server/`).
-- **Módulos do servidor** (`server/`):
-  | Arquivo | Responsabilidade |
-  |---|---|
-  | [server/index.ts](server/index.ts) | Rotas HTTP, orquestração, boot do servidor |
-  | [server/supabase.ts](server/supabase.ts) | Clientes Supabase, cache em memória, loaders de contexto |
-  | [server/gemini.ts](server/gemini.ts) | Prompt engineering + chamadas ao Gemini |
-  | [server/piapp.ts](server/piapp.ts) | Integração com PiApp (geração de imagem via MCP) |
-  | [server/validators.ts](server/validators.ts) | Validação/sanitização determinística do playbook |
-  | [server/data.ts](server/data.ts) | Constantes: DNA das marcas, fallback de histórico, variantes de composição/iluminação |
-  | [server/types.ts](server/types.ts) | Tipos de contexto (`MarcaDnaContext`, `EmailHitContext`) |
-- **Frontend:** React 19 + Vite, sem router (abas controladas por estado em `App.tsx`), Tailwind 4.
-- **Persistência:** Supabase (Postgres + Storage), com fallback para dados hardcoded em memória quando as credenciais não estão presentes.
-
-⚠️ **CLAUDE.md está desatualizado** em relação ao código atual: descreve `server.ts` como monolito Express direto e não menciona o schema `crm_ai`, o catálogo de mecânicas, nem a integração PiApp/Anthropic. Este documento reflete o estado real do código lido em `server/*.ts`, `src/lib/*.ts` e `supabase/migrations/*.sql`.
-
----
-
-## 2. Modelo de banco de dados
-
-**Projeto Supabase:** `krxuwejvkdkrjrppcwsw` (região us-west-1) — schema público `public` + schema separado `crm_ai`.
-
-### 2.1 Schema `public` (versionado em `supabase/migrations/`)
-
-#### `disparos_historicos`
-Histórico de referência (few-shot) usado no prompt do Gemini. Carregado inteiro na memória do servidor no boot.
-
-| Coluna | Tipo | Constraint |
+| | `server/index.ts` (1.274 linhas) | `worker.ts` (2.671 linhas) |
 |---|---|---|
-| `id` | `text` | PK |
-| `marca` | `text` | `NOT NULL`, `CHECK IN ('Apice','Barbours')` |
-| `mecanica` | `text` | `NOT NULL` |
-| `disparos` | `integer` | `NOT NULL DEFAULT 0` |
-| `receita_media` | `numeric` | `NOT NULL DEFAULT 0` |
-| `performance` | `text` | `NOT NULL` |
-| `contextos_recomendados` | `text[]` | `NOT NULL DEFAULT '{}'` |
-| `created_at` | `timestamptz` | `NOT NULL DEFAULT now()` |
+| Entry point | `server.ts` → `startServer()` | `export default { async fetch }` |
+| Runtime | Node + Express 4 | Workers (GoDeploy) |
+| Roda quando | `npm run dev` | **produção** |
+| Imports | livres (`@google-cloud/bigquery`, `sharp`, `node-cron`) | **nenhum** — arquivo autocontido |
+| BigQuery | SDK oficial + ADC | REST API, JWT RS256 assinado com WebCrypto |
+| Supabase | `@supabase/supabase-js` | REST na mão (`supabaseRestGet`, `supabaseRpc`) |
+| Agendamento | `node-cron` in-process | `POST /tasks/agente-gif-tick` chamado pela plataforma |
+| SPA/estáticos | serve `dist/` | **não serve** — fallback é `404 JSON` |
+| Build | `npm run build` → `dist/server.cjs` | **nenhum build no repo** |
 
-RLS: habilitado, policy `allow_read_disparos` — leitura pública (`USING (true)`), sem policy de escrita (seed via `supabase/seeds/disparos_historicos.sql`).
+**Consequência prática:** bibliotecas Node não podem ser usadas no `worker.ts`. E
+testar em `localhost:3000` não testa o servidor de produção. Para exercitar o
+worker de verdade:
 
-#### `pautas_geradas`
-Histórico de pautas geradas pela IA (substitui o antigo `localStorage`).
+```bash
+npx tsx scripts/verificar-worker-calendario.ts   # chama worker.fetch() contra BigQuery real
+npx tsx scripts/servir-worker.ts                 # sobe o worker num HTTP local (:3100)
+```
 
-| Coluna | Tipo | Constraint | Migration |
+### Armadilha da REST API do BigQuery
+
+Ela devolve **todo** valor como string, inclusive `BOOLEAN` e `INTEGER` — e
+`Boolean("false") === true`. `TIMESTAMP` vem como epoch em notação científica.
+As coerções ficam em `bqNum` / `bqBool` / `bqTimestamp` no `worker.ts`.
+
+---
+
+## 2. Rotas
+
+18 rotas no total. **Cinco divergem entre os servidores** — essa tabela é a parte
+mais importante deste documento.
+
+| Rota | Express | Worker | Situação |
+|---|:---:|:---:|---|
+| `GET /api/historico` | ✅ | ✅ | ⚠️ **fontes diferentes**: Express lê `disparos_historicos` do Supabase; worker devolve `hardcodedDisparos` embutido |
+| `GET /api/mecanicas` | ✅ | ✅ | ⚠️ **fontes diferentes**: Express lê `mecanicas_catalog`; worker devolve `DEFAULT_MECANICAS` embutido |
+| `POST /api/generate-pauta` | ✅ | ✅ | Express via `@google/genai`; worker via AI proxy |
+| `POST /api/generate-variation` | ✅ | ✅ | idem |
+| `POST /api/generate-image` | ✅ | ✅ | PiApp nos dois |
+| `POST /api/generate-gif` | ✅ | ✅ | PiApp nos dois, 3 frames em paralelo |
+| `POST /api/save-frame` | ✅ | ✅ | Storage `campaign-images` |
+| `POST /api/approve-pauta` | ✅ | ✅ | insert em `crm_ai.ia_outputs` |
+| `POST /api/feedback-agente-gif` | ✅ | ✅ | |
+| `GET /api/calendario/status` | ✅ | ✅ | |
+| `GET /api/calendario/contexto` | ✅ | ✅ | catálogo + índices do BigQuery |
+| `GET /api/calendario/nao-classificadas` | ✅ | ✅ | |
+| `POST /api/calendario/explicar` | ✅ | ✅ | AI proxy nos dois; 503 sem chave |
+| `GET /api/teste-ab` | ✅ | ✅ | |
+| `POST /api/parse-estilo-visual` | ✅ | ⚠️ | **stub no worker** — ver abaixo |
+| `POST /api/analyze-frame` | ✅ | ❌ | **só Express, e ninguém chama** — código morto dos dois lados |
+| `POST /api/teste-ab-regenerar` | ❌ | ✅ | **só worker** — `src/App.tsx:297` chama ⇒ 404 em `npm run dev` |
+| `POST /api/teste-ab-enviar-insider` | ❌ | ✅ | **só worker** — `src/App.tsx:383` chama ⇒ 404 em `npm run dev` |
+| `POST /tasks/agente-gif-tick` | ❌ | ✅ | cron da plataforma. No Express o equivalente é `node-cron` in-process |
+
+### `/api/parse-estilo-visual` — divergência funcional silenciosa
+
+No Express (`server/index.ts:839`) a rota chama a API da Anthropic
+(`claude-haiku-4-5-20251001`) e parseia estilo visual de texto livre.
+
+No worker (`worker.ts:2387`) ela devolve uma **paleta fixa por marca sem chamar
+IA nenhuma**. Em produção esse endpoint não parseia coisa alguma — devolve
+sempre `#688D65` para Ápice e `#BF0F26` para o resto, com `Georgia, serif`.
+
+O código não tem comentário justificando, ao contrário do resto do arquivo, que é
+fartamente comentado. **Não está determinado** se é degradação aceita ou
+esquecimento.
+
+### Espelho do bug de calendário, na direção contrária
+
+O `CLAUDE.md` documenta o caso em que rotas foram escritas só no Express e
+falharam em produção. Hoje existe o inverso: duas rotas de teste A/B existem só
+no worker e o frontend as chama. Quem desenvolve localmente vê esses fluxos
+quebrados; em produção funcionam.
+
+### Agente de GIF (Modo C) — mesma cota, estratégias diferentes
+
+Ambos limitam a **5 pautas modo `C` por dia**. A diferença é como completam:
+
+- Express (`ensureDailyAgenteGifQuota`, `server/index.ts:713`) — conta quantas
+  faltam e gera todas num laço, espaçando as chamadas.
+- Worker (`/tasks/agente-gif-tick`, `worker.ts:2651`) — gera **no máximo 1 por
+  chamada** e devolve `skipped:true` se já houver 5. Quem garante a cota é a
+  frequência do agendamento.
+
+---
+
+## 3. Camada de IA — migração pela metade
+
+O destino é o **AI proxy do Grupo**: `https://ai-proxy.gogroupbr.com/v1`,
+OpenAI-compatível (`messages[]`), modelo padrão `gpt-5.5`. Cliente em
+`server/ai-proxy.ts` (199 linhas) e `callGemini()` em `worker.ts:75`.
+
+O estado real hoje:
+
+| Onde | Provedor | Modelo |
+|---|---|---|
+| `worker.ts` — **tudo** | AI proxy | `gpt-5.5` (hardcoded, `worker.ts:83`) |
+| `server/gemini.ts:633` `explicarCalendario` | AI proxy | `AI_PROXY_MODEL` ou `gpt-5.5` |
+| `server/gemini.ts:322` `generatePautaContent` | **`@google/genai`** | `gemini-2.5-flash` |
+| `server/gemini.ts:399` `generateGifAgentConcept` | **`@google/genai`** | `gemini-2.5-flash` |
+| `server/gemini.ts:442` `generateAbTestProposal` | **`@google/genai`** | `gemini-2.5-flash` |
+| `server/gemini.ts:488` `generateVariationContent` | **`@google/genai`** | `gemini-2.5-flash` |
+| `server/index.ts:188` (analyze-frame) | **`@google/genai`** | `gemini-2.0-flash` |
+| `server/index.ts:334` (metadados de frame) | **`@google/genai`** | `gemini-2.0-flash` |
+| `server/index.ts:839` (parse-estilo-visual) | Anthropic, `fetch` direto | `claude-haiku-4-5-20251001` |
+| `scripts/analisar-conteudos-links.ts:113` | **`@google/genai`** | `gemini-2.5-flash` |
+
+**Seis call sites ativos ainda dependem de `GEMINI_API_KEY`**, apesar de
+`.env.example` e `CLAUDE.md` afirmarem que essa variável não existe. Ela é lida em
+`server/gemini.ts:7`. `@google/genai@^1.29.0` continua no `package.json`.
+
+Isso só não quebrou porque o worker — que é produção — já está 100% no proxy. O
+Express é que ficou para trás.
+
+### Duas armadilhas do proxy
+
+1. Apontar o SDK `@google/genai` para a URL do proxy **não funciona**. Os
+   protocolos são diferentes (`contents[].parts[]` vs `messages[]`) e o sintoma é
+   um 400 *"API key not valid"* — culpa a chave quando o problema é o formato.
+2. `response_format: {type:"json_schema"}` é **aceito e silenciosamente ignorado**
+   (HTTP 200 devolvendo markdown). Só `{type:"json_object"}` funciona, e ele
+   garante sintaxe JSON, não conformidade com schema. Por isso `chatJson<T>` exige
+   um type guard obrigatório.
+
+---
+
+## 4. Modelo de calendário (BigQuery)
+
+Dataset **`gogroup-crm.crm_modelo`**, região `southamerica-east1`. É a fonte da
+aba de calendário. Não há fallback para dados sintéticos — sem BigQuery, a aba
+fica indisponível de propósito.
+
+### Objetos
+
+- **12 tabelas** — `marca_config`, `marca_oferta_familia`, `fato_slot`,
+  `fato_pessoa_dia`, `fato_gap_pessoa`, `snapshot_indices`, `calendario_publicado`,
+  `calendario_realizado`, `job_log`, `monitor_classificador` (+ 2 backups
+  `_bkp_*_20260825`)
+- **7 views** — `v_indices_atuais`, `v_config_derivada`, `v_horas_dow`,
+  `v_viabilidade`, `v_validacao`, `v_saude_marca`, `v_oferta_sem_familia`
+- **8 procedures** — `sp_carrega_fato_slot`, `sp_carrega_pessoa_dia`,
+  `sp_carrega_gap_pessoa`, `sp_monitor_classificador`, `sp_deriva_config`,
+  `sp_deriva_grade_horarios`, `sp_deriva_indices`, `sp_glm_pois_1x`
+
+### Scheduled queries
+
+| Nome | Quando (UTC) | O que faz |
+|---|---|---|
+| `crm_modelo - ETL diario` | todo dia 11:30 | fatos + as três derivações, por marca |
+| `crm_modelo - ETL semanal (pessoa)` | segunda 12:30 | `fato_pessoa_dia` e `fato_gap_pessoa` |
+| `crm_modelo - alerta de saude` | todo dia 12:00 | dá `RAISE` se algo está quebrado |
+
+O alerta **se derruba de propósito**: o `RAISE` faz o Data Transfer Service
+disparar o e-mail nativo de "scheduled query failed" (`enableFailureEmail`), sem
+infra de alerta adicional. Destinatário: `avila.farias@gobeaute.com.br`.
+
+O ETL diário termina ~11:46 e o alerta roda 12:00 — **13,7 minutos de margem**.
+É pouco e está registrado como pendência.
+
+### Tudo é derivado, nada é semeado à mão
+
+A ordem das três procedures de derivação **é obrigatória e não é estética**:
+`sp_deriva_config` GRAVA `marca_config.min_enviados_slot`, e as duas seguintes
+LEEM essa coluna. Invertida, a grade e os índices do dia saem calculados com o
+limiar de ontem — sem erro, sem log, sem sintoma.
+
+Estado atual de `marca_config` (5 marcas, todas ativas, janela de 138 dias):
+
+| marca | min_enviados_slot | max_dias_com_3 | volume_maximo_semana |
 |---|---|---|---|
-| `id` | `text` | PK | 20260522000002 |
-| `marca` | `text` | `NOT NULL CHECK IN ('Apice','Barbours')` | 20260522000002 |
-| `modo` | `text` | `NOT NULL CHECK IN ('A','B')` | 20260522000002 |
-| `status` | `text` | `NOT NULL DEFAULT 'rascunho' CHECK IN ('rascunho','aprovado','descartado')` | 20260522000002 |
-| `data_criacao` | `timestamptz` | `NOT NULL` | 20260522000002 |
-| `copy` | `jsonb` | `NOT NULL DEFAULT '{}'` | 20260522000002 |
-| `visual` | `jsonb` | `NOT NULL DEFAULT '{}'` | 20260522000002 |
-| `operacional` | `jsonb` | `NOT NULL DEFAULT '{}'` | 20260522000002 |
-| `previsao` | `jsonb` | `NOT NULL DEFAULT '{}'` | 20260522000002 |
-| `riscos` | `jsonb` | `NOT NULL DEFAULT '[]'` | 20260522000002 |
-| `created_at` | `timestamptz` | `NOT NULL DEFAULT now()` | 20260522000002 |
-| `updated_at` | `timestamptz` | `NOT NULL DEFAULT now()`, atualizado via trigger `pautas_geradas_updated_at` | 20260522000002 |
-| `tipo_geracao` | `text` | `NOT NULL DEFAULT 'texto_imagem' CHECK IN ('texto','imagem','texto_imagem')` | 20260528000001 |
-| `input_original` | `jsonb` | nullable | 20260610000001 |
+| apice | 24.254 | 5 | 4.684.665 |
+| barbours | 36.400 | 6 | 5.847.350 |
+| kokeshi | 36.809 | 7 | 2.921.522 |
+| lescent | 14.179 | 6 | 2.194.349 |
+| rituaria | 42.389 | 5 | 3.672.078 |
 
-RLS: habilitado, policy `allow_all_pautas` — leitura/escrita liberadas (`USING (true) WITH CHECK (true)`), ou seja, sem controle de acesso por usuário hoje.
+### Índices e peso de transferência
 
-Mapeamento snake_case (DB) ↔ camelCase (TS) fica em [src/lib/pautas-service.ts](src/lib/pautas-service.ts):
-`data_criacao↔dataCriacao`, `tipo_geracao↔tipoGeracao`, `input_original↔inputOriginal`.
-
-#### `mecanicas_catalog`
-Catálogo de mecânicas de campanha (fixas + auto-registradas pela IA quando ela inventa uma mecânica nova).
-
-| Coluna | Tipo | Constraint |
-|---|---|---|
-| `id` | `SERIAL` | PK |
-| `nome` | `TEXT` | `UNIQUE NOT NULL` |
-| `categoria` | `TEXT` | `NOT NULL DEFAULT 'manipulacao'` |
-| `criado_por` | `TEXT` | `NOT NULL DEFAULT 'sistema'` (`'sistema'` ou `'ia_auto'`) |
-| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` |
-
-RLS: habilitado, policies `allow_read_mecanicas` (SELECT público) e `allow_insert_mecanicas` (INSERT público). Seed com 10 mecânicas clássicas (`Abra o presente`, `Puxe o Adesivo`, `Jogo da Velha`, etc.).
-
-#### Storage bucket `campaign-images`
-Bucket público, 10 MB por arquivo, mime types `image/png|jpeg|webp|gif`. Policies: leitura pública, insert/update liberados para a anon key (usada pelo próprio servidor Express para subir os frames gerados). Caminho de armazenamento: `{marca_lowercase}/{pautaId}/{frameName}.png`.
-
-### 2.2 Schema `crm_ai` (⚠️ NÃO versionado neste repositório)
-
-O servidor consome um segundo schema, `crm_ai`, exclusivamente via **RPC functions** (`SECURITY DEFINER` no schema `public`, contornando a restrição padrão do PostgREST a schemas não expostos). Não há migration em `supabase/migrations/` para esse schema — ele foi criado fora deste repo (provavelmente diretamente no painel/outra fonte), então **precisa ser reverse-engenheirado no Supabase antes de qualquer unificação**.
-
-RPCs consumidas (ver [server/supabase.ts](server/supabase.ts:60)):
-- `crm_ai_get_marcas()` → linhas com `nome`, `marca_id`, `tom_de_voz`, `paleta_cores` (jsonb com chaves de cor incluindo `primaria`/`secundaria`)
-- `crm_ai_get_lists()` → `{ mecanicas: [{id, valor}], estilos: [{id, valor}] }`
-- `crm_ai_get_top_emails({ limit_n })` → linhas com `marca_id`, `mecanica_id`, `descricao_visual`, `receita`, `taxa_abertura`, `ctor`
-- `crm_ai_insert_ia_output({ p_marca_id, p_tipo_canal, p_analisado, p_prompt, p_modelo, p_parametros, p_imagens })` → grava registro de geração de imagem/GIF
-
-Tabela `crm_ai.ia_outputs` é escrita diretamente (não via RPC) em `/api/approve-pauta` através do client `supabaseCrmAi` (cliente Supabase configurado com `db.schema = 'crm_ai'`). Colunas inferidas do código ([server/index.ts](server/index.ts:763)): `output_id` (retornado no insert), `marca_id`, `tipo_canal`, `o_que_foi_analisado`, `fontes_referenciadas` (jsonb), `modelo`, `parametros` (jsonb), `recomendacao_texto`, `recomendacao_estruturada` (jsonb), `imagens_geradas` (jsonb), `aprovado` (boolean).
-
-**Ação recomendada para unificação:** rodar `supabase db pull` ou `list_tables`/`get_advisors` (MCP Supabase) contra o projeto remoto para capturar o DDL real de `crm_ai` e trazê-lo para uma migration versionada.
-
----
-
-## 3. Serviços implementados
-
-### 3.1 Endpoints HTTP (`server/index.ts`)
-
-| Rota | Método | Entrada principal | Saída | Efeito colateral |
-|---|---|---|---|---|
-| `/api/historico` | GET | — | `{status, data: DisparoHistorico[]}` | leitura de cache em memória |
-| `/api/mecanicas` | GET | — | `{status, data: string[]}` | leitura de cache em memória |
-| `/api/generate-pauta` | POST | `{modo, input, aspectRatio, direcionamentoIA, tipoGeracao, referenciaImagem\|referenciasImagem}` | `{status, data: PautaGerada[]}` | chama Gemini; auto-registra mecânica nova em `mecanicas_catalog` |
-| `/api/analyze-frame` | POST | `{imageDataUrl}` | JSON de metadados visuais (cores, posições, tipografia) | chama Gemini (`gemini-2.0-flash`, vision) |
-| `/api/generate-image` | POST | `{frameDescription, marca, aspectRatio, imageModel, ...}` | `{imageBytes, mimeType, publicUrl}` | chama PiApp; opcionalmente redimensiona com `sharp`; upload no Storage; grava `crm_ai.ia_outputs` via RPC (fire-and-forget) |
-| `/api/generate-gif` | POST | `{frameInicial, frameIntermediario, frameFinal, marca, ...}` | `{frames: [{frameName, imageBytes, mimeType, publicUrl}]}` | 3 chamadas PiApp em paralelo; upload no Storage; grava `crm_ai.ia_outputs` via RPC |
-| `/api/parse-estilo-visual` | POST | `{estiloVisualTexto, marca}` | JSON com cores/fonte/estilo de botão | chama API da Anthropic diretamente (fetch) |
-| `/api/generate-variation` | POST | `{pauta}` | `{status, data: PautaCopy}` | chama Gemini |
-| `/api/save-frame` | POST | `{pautaId, frameName, imageDataUrl}` | `{publicUrl}` | upload no Storage bucket `campaign-images` |
-| `/api/approve-pauta` | POST | `{pauta, frameImages}` | `{success, output_id}` | insert direto em `crm_ai.ia_outputs` |
-
-Validação de segurança notável: `/api/generate-pauta` detecta tentativas de prompt injection no campo `direcionamentoIA` via regex (`ignore|esqueça|não siga|desconsidere` + `regra|playbook|instrução`) e as neutraliza, registrando um risco de nível alto.
-
-### 3.2 Validação determinística do playbook ([server/validators.ts](server/validators.ts))
-
-Roda **antes** da chamada ao Gemini (Modo B) e **depois** (sanitização do output), garantindo que as regras invioláveis nunca dependam só do LLM:
-
-- `validateSubjectModoB(assunto, marca)` — detecta `%`, `OFF`, `GRÁTIS`/`GRATIS`, `R$`, caixa alta total, >2 emojis, e comprimento fora da faixa da marca (Ápice 27–47, Barbours 16–39). Retorna lista de `RiscoAlerta`.
-- `sanitizeAssunto(assunto, marca, riscosExistentes)` — remove termos proibidos e normaliza caixa alta total, devolvendo assunto limpo + riscos.
-- `sanitizeBannerText(texto)` — remove os mesmos termos proibidos de headline/sub-headline do banner.
-- `risksUnique(lista)` — deduplica riscos por `campo + mensagem`.
-
-### 3.3 Camada de dados/estado do servidor ([server/supabase.ts](server/supabase.ts))
-
-Mantém estado mutável em memória, populado no boot (`startServer()`):
-- `loadDisparosFromSupabase()` — carrega `disparos_historicos`; fallback para `hardcodedDisparos` (em `server/data.ts`) se Supabase falhar ou não tiver linhas.
-- `loadMecanicasFromSupabase()` — carrega `mecanicas_catalog.nome`; fallback para `DEFAULT_MECANICAS`.
-- `loadCrmAiContext()` — carrega marcas/paletas, listas de mecânica/estilo e top emails por receita do schema `crm_ai` via RPC; fallback silencioso (log de warning) se falhar.
-- `buildVisualHitsBlock(marca)` — formata os top emails da marca em texto para injetar no prompt do Gemini.
-- `autoRegisterMecanica(nome)` — upsert em `mecanicas_catalog` quando a IA usa uma mecânica ainda não catalogada.
-
-### 3.4 Serviço de persistência de pautas — frontend ([src/lib/pautas-service.ts](src/lib/pautas-service.ts))
-
-- `getPautas(): Promise<PautaGerada[] | null>` — lê `pautas_geradas` ordenado por `data_criacao desc`; retorna `null` em erro/sem Supabase (caller cai para `localStorage`, ver `App.tsx`).
-- `upsertPautas(pautas: PautaGerada[]): Promise<void>` — upsert em lote por `id`.
-- `clearPautas(): Promise<void>` — limpa todas as linhas (`neq('id','')`).
-
-Mapeamento de campos camelCase↔snake_case fica isolado neste arquivo (`fromDb`/`toDb`), então nenhum outro lugar do frontend lida com nomes de coluna do banco.
-
-### 3.5 Autenticação/controle de acesso ([src/lib/supabase.ts](src/lib/supabase.ts))
-
-Cliente Supabase Auth configurado com PKCE + `localStorage` (`storageKey: 'spectrum-auth-token'`). Não há RLS por usuário nas tabelas (`allow_all_pautas` é irrestrito) — o controle de acesso hoje é só um allowlist de domínio de email:
+`sp_deriva_indices` faz walk-forward: constrói os índices num período de treino e
+mede num período de teste posterior via GLM Poisson. A relação é
 
 ```
-ALLOWED_DOMAINS = ['gocase.com', 'gogroup.com', 'gobeaute.com', 'gobeaute.com.br']
-isEmailAllowed(email) // usado no fluxo de login para restringir quem pode entrar
+taxa_teste(k) / base = idx_treino(k) ^ b
 ```
 
+`b` **não é uma nota de aprovação — é o expoente**. `snapshot_indices` grava
+`coef_transferencia` (b), `transf_se`, `peso_transferencia` (b encolhido por
+James-Stein positive-part, piso 0 e teto 1,5) e `valor_efetivo = valor^peso`.
+
+**Os consumidores devem ler `valorEfetivo`, não `valor`.** O cálculo vive no SQL
+justamente porque Express e worker já divergiram uma vez, e `v_indices_atuais` é
+`SELECT s.*` — coluna nova chega aos dois servidores sem edição dupla.
+
+O corte do walk-forward é **rolante**: `hoje − 1 mês`, recalculado a cada
+execução. Passar `p_corte` explícito só é útil para reprocessar o passado.
+
+Detalhe completo da derivação nos cabeçalhos de `sql/bigquery/*.sql` — em
+particular `peso_transferencia_e_corte_rolante.sql`, que tem ~110 linhas
+explicando por que o piso é 0 e não permite inverter índice negativo.
+
+### Acesso
+
+| Service account | Papel |
+|---|---|
+| `crm-calendario-etl@` | `dataEditor` em `crm_modelo`, `dataViewer` nas 12 origens |
+| `crm-calendario-app@` | `dataViewer` **só** em `crm_modelo` — não há caminho para dado bruto |
+
+`scripts/dts.mjs` é um cliente mínimo do Data Transfer Service (assina JWT RS256
+na mão, porque o `gcloud` da máquina está sem auth). Comandos: `list`, `show`,
+`patch`, `runs`, `sql`.
+
+⚠️ **Scheduled query não é objeto SQL** — é Data Transfer Service, só REST, sem
+DDL. E `updateMask=params.query` é aceito e **silenciosamente ignorado**; tem que
+ser `updateMask=params` com releitura para confirmar. O `patch` do `dts.mjs` já
+faz a releitura sozinho.
+
 ---
 
-## 4. Integrações com API externa
+## 5. Banco de dados (Supabase)
 
-| Serviço | Uso | Onde | Autenticação | Env var |
-|---|---|---|---|---|
-| **Google Gemini** (`@google/genai`) | Geração de pauta (copy+visual+operacional+previsão+riscos), variação de copy, análise visual de frame, extração de metadados de frame de referência | [server/gemini.ts](server/gemini.ts), [server/index.ts](server/index.ts:176) | API key | `GEMINI_API_KEY` |
-| **Supabase** (Postgres + Storage + Auth) | Banco relacional (`public` e `crm_ai`), bucket `campaign-images`, autenticação de usuário no frontend | [server/supabase.ts](server/supabase.ts), [src/lib/supabase.ts](src/lib/supabase.ts) | anon/public key (front e back usam a **mesma** anon key — não há service key separada) | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
-| **PiApp** (geração de imagem, MCP over HTTP) | Geração dos frames de banner/GIF; upload de imagem de referência | [server/piapp.ts](server/piapp.ts) | Bearer token | `PIAPP_API_KEY` (URL fixa no código: `https://piapp-v2.vercel.app/api/ai/mcp`) |
-| **Anthropic (Claude)** | Parser de estilo visual em texto livre → JSON de cores/fonte/botão (`/api/parse-estilo-visual`) | [server/index.ts](server/index.ts:637), modelo `claude-haiku-4-5-20251001` | API key | `ANTHROPIC_API_KEY` — **não documentada em `.env.example`, mas usada em produção** |
+**Projeto:** `krxuwejvkdkrjrppcwsw` (us-west-1). 15 migrations em
+`supabase/migrations/`.
 
-### Detalhes por integração
+### Tabelas versionadas
 
-**Gemini** — modelo `gemini-2.5-flash` para geração estruturada (`responseSchema` tipado via `Type.*`), `gemini-2.0-flash` para as chamadas de visão (análise de frame). Cliente único (`ai`) instanciado uma vez em `server/gemini.ts:5` com header customizado `User-Agent: aistudio-build`. O prompt embute: playbook fixo por marca, histórico de disparos filtrado por marca, top emails de receita do `crm_ai` (quando disponíveis), e o direcionamento do usuário — com uma hierarquia de prioridade explícita (regras de entregabilidade > playbook > direcionamento do usuário).
+| Tabela | Papel |
+|---|---|
+| `disparos_historicos` | 17 campanhas de referência (few-shot no prompt). Carregada no boot do Express |
+| `pautas_geradas` | Histórico de pautas. `modo ∈ (A,B,C)`, `status ∈ (rascunho,aprovado,descartado)` |
+| `mecanicas_catalog` | Mecânicas fixas + auto-registradas pela IA |
+| `teste_ab_propostas` | Propostas do agente de teste A/B (+ `insider_campaign_id`, `variante_a_gif_url`) |
+| `teste_ab_envios` | Log de envios ao Insider |
+| `catalogo_produtos` | Catálogo Yampi por marca. UNIQUE(marca, yampi_product_id), índice GIN trigram |
+| `catalogo_sync_runs` | Log de cada execução do sync Yampi |
+| Bucket `campaign-images` | Público, 10 MB, `{marca}/{pautaId}/{frame}.png` |
 
-**PiApp** — protocolo MCP JSON-RPC sobre HTTP com resposta em formato SSE (`data: <json>`). Fluxo: `upload_reference` (se houver imagem de referência) → `generate_image` (retorna `job_id`) → polling `check_jobs` a cada 3s por até 90s → download do `output_url` e conversão para base64. Modelos válidos ficam em `VALID_IMAGE_MODELS` ([server/data.ts:56](server/data.ts)); default `wavespeed-gpt-image-2-t2i`.
+Colunas de `pautas_geradas` acrescentadas depois da doc anterior: `tipo_geracao`,
+`input_original`, `aspect_ratio`, `frame_urls`, e `modo` passou a aceitar `'C'`.
 
-**Anthropic** — única chamada fora do SDK `@google/genai`, via `fetch` direto ao endpoint REST (`https://api.anthropic.com/v1/messages`), sem SDK. Motivo aparente: tarefa pequena e isolada (parsing de estilo). **Risco de inconsistência de padrão**: é o único ponto do backend que fala com um provedor de LLM sem passar pelo módulo `server/gemini.ts` — candidato natural a unificação se o time padronizar em um único client/wrapper de LLM.
+Mapeamento snake_case ↔ camelCase fica isolado em `src/lib/pautas-service.ts`
+(`fromDb`/`toDb`) — nenhum outro ponto do frontend lida com nome de coluna.
 
-**Domínio `gobeaute.com.br`** (commit recente `feat: adicionar gobeaute.com.br aos domínios permitidos`) — não é uma integração de API, é apenas uma entrada adicionada em `ALLOWED_DOMAINS` (controle de acesso por email, [src/lib/supabase.ts](src/lib/supabase.ts:23)).
+### Não versionado neste repo
 
-### Variáveis de ambiente — estado real vs `.env.example`
+- **Schema `crm_ai`** — consumido via RPCs `SECURITY DEFINER` (`crm_ai_get_marcas`,
+  `crm_ai_get_lists`, `crm_ai_get_top_emails`, `crm_ai_insert_ia_output`) e escrita
+  direta em `crm_ai.ia_outputs`. DDL não está aqui.
+- **`conteudos_links`** — duas migrations fazem `ALTER` nela, mas **nenhuma a cria**.
+  Mesmo problema do `crm_ai`.
 
-`.env.example` hoje lista apenas `GEMINI_API_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `PIAPP_API_KEY`. **Falta `ANTHROPIC_API_KEY`**, que é lida em `server/index.ts:641` e é obrigatória para `/api/parse-estilo-visual` funcionar. Também vale registrar: não existe hoje um `SUPABASE_SERVICE_ROLE_KEY` — todas as operações de escrita (incluindo Storage) usam a anon key, o que depende inteiramente das RLS policies acima para segurança.
+Ambos precisam de `supabase db pull` antes de qualquer unificação.
+
+### RLS
+
+`pautas_geradas` e `mecanicas_catalog` aceitam escrita irrestrita pela anon key
+(`allow_all_pautas`). `catalogo_produtos` é a exceção: leitura pública, escrita só
+`service_role`. Não há RLS por usuário — o controle de acesso é um allowlist de
+domínio de e-mail no frontend (`gocase.com`, `gogroup.com`, `gobeaute.com`,
+`gobeaute.com.br`).
+
+### Sync Yampi
+
+Edge Function `sync-catalogo-yampi` (Deno), agendada por `pg_cron` + `pg_net` às
+**07:00 UTC** (04h BRT). Uma conta Yampi administra as 5 lojas: um par
+`YAMPI_USER_TOKEN`/`YAMPI_USER_SECRET_KEY` compartilhado + um alias por marca.
+Marca sem alias é pulada (warn); sem o par, todas são puladas.
+
+O header é `User-Secret-Key` (com "-Key"). Se aparecer 401 *"Missing
+User-Secret-Key header"*, alguém quebrou o nome do header.
 
 ---
 
-## 5. Pontos de atenção para unificação entre apps
+## 6. Integrações externas
 
-- **RLS permissiva por padrão**: `pautas_geradas` e `mecanicas_catalog` aceitam escrita irrestrita pela anon key. Qualquer app compartilhando este projeto Supabase herda esse mesmo nível de exposição.
-- **Schema `crm_ai` não versionado**: existe e é ativamente lido/escrito pelo Spectrum, mas seu DDL não está em `supabase/migrations/`. Precisa ser importado antes de outra aplicação depender dele.
-- **Padrão de integração LLM inconsistente**: Gemini via SDK oficial, Anthropic via `fetch` manual — vale padronizar se mais apps forem falar com LLMs.
-- **Duas fontes de verdade para "marca"**: hardcoded em `server/data.ts` (`BRAND_DNA_FALLBACK`, `hardcodedDisparos`) e dinâmico no `crm_ai` (paletas, tom de voz, mecânicas canônicas) — o código sempre prioriza o dinâmico e cai para o hardcoded, mas os dois precisam ser mantidos em sincronia manualmente.
-- **`CLAUDE.md` desatualizado**: descreve uma arquitetura anterior (server.ts monolítico, sem `crm_ai`, sem PiApp/Anthropic). Recomendo atualizá-lo junto com qualquer trabalho de unificação para não confundir quem chegar depois.
+| Serviço | Uso | Onde | Credencial |
+|---|---|---|---|
+| **AI proxy do Grupo** | Toda IA nova | `server/ai-proxy.ts`, `worker.ts:75` | `AI_PROXY_KEY` / `GOGROUP_TOKEN` |
+| **Google Gemini** | 6 call sites legados no Express | `server/gemini.ts` | `GEMINI_API_KEY` |
+| **Anthropic** | `parse-estilo-visual` (só Express) | `server/index.ts:839` | `ANTHROPIC_API_KEY` |
+| **BigQuery** | Modelo de calendário | `server/bigquery.ts`, REST no worker | ADC / `GCP_SERVICE_ACCOUNT_JSON` |
+| **Supabase** | Postgres + Storage + Auth | `server/supabase.ts`, `src/lib/supabase.ts` | anon key |
+| **PiApp** | Geração de imagem (MCP over HTTP) | `server/piapp.ts` | `PIAPP_API_KEY` |
+| **Insider** | Criação de campanha de e-mail | `worker.ts` (**só worker**) | `INSIDER_API_KEY_<MARCA>` ×6 |
+| **Yampi** | Catálogo de produtos | Edge Function | `YAMPI_USER_*` |
+
+**PiApp** — JSON-RPC sobre HTTP com resposta SSE (`data: <json>`). Fluxo:
+`upload_reference` → `generate_image` (devolve `job_id`) → polling `check_jobs` a
+cada 3s por até 90s → download e base64. Modelos em `server/data.ts:56`, default
+`wavespeed-gpt-image-2-t2i`.
+
+**Insider** — `POST https://mail.useinsider.com/content/v1/campaign/create`, com
+templates HTML de Ápice/Barbours/Gocase embutidos no `worker.ts`. Seis API keys,
+uma por marca. Existe **só em produção**.
+
+---
+
+## 7. Variáveis de ambiente
+
+`.env.example` está atualizado e é a referência. Ressalvas conhecidas:
+
+| Variável | Situação |
+|---|---|
+| `GEMINI_API_KEY` | `.env.example` afirma que **não existe**; ainda é lida em `server/gemini.ts:7` por 6 call sites ativos |
+| `ANTHROPIC_API_KEY` | Lida em `server/index.ts:885`, **não documentada** |
+| `INSIDER_API_KEY_*` (6) | Secrets do worker, **não documentadas** |
+| `SUPABASE_KEY` / `SUPABASE_SERVICE_KEY` | Nomes que o **worker** usa; o `.env.example` só documenta `VITE_SUPABASE_*` |
+| `PORTA_WORKER` | Usada por `scripts/servir-worker.ts` (default 3100), não documentada |
+| `YAMPI_*`, `SUPABASE_ACCESS_TOKEN` | Documentadas, mas lidas **só** pelo script de setup — nunca em runtime |
+
+Existem service role keys hoje (`SPECTRUM_SERVICE_ROLE_KEY`, `SUPABASE_SERVICE_KEY`
+no worker, e a chave no `vault` do Postgres para o `pg_cron`) — a afirmação
+anterior de que "tudo usa anon key" deixou de valer.
+
+---
+
+## 8. Scripts
+
+| Script | O que faz |
+|---|---|
+| `verificar-worker-calendario.ts` | Chama `worker.fetch()` contra BigQuery real. Com `--ia`, exercita o proxy |
+| `servir-worker.ts` | Sobe o `worker.ts` num HTTP Node local servindo `dist/` |
+| `verificar-calendario.ts` | Invariantes do gerador determinístico (todas as marcas × modos × períodos) |
+| `dts.mjs` | Cliente do BigQuery Data Transfer Service |
+| `analisar-conteudos-links.ts` | Extrai frames de GIFs e classifica via Gemini |
+| `aplicar-analise.ts` / `extrair-frames.ts` / `verificar-frames.ts` | Utilitários de frame |
+| `setup-yampi-sync.sh` | Setup idempotente do sync Yampi |
+
+---
+
+## 9. Dívidas conhecidas
+
+Ordenadas por risco de morder alguém.
+
+1. **`parse-estilo-visual` é stub em produção** (§2). O usuário recebe paleta fixa
+   e nada indica isso na tela.
+2. **Duas rotas de teste A/B não existem no Express** (§2) — fluxo quebrado em dev.
+3. **Migração de IA pela metade** (§3) — 6 call sites em `@google/genai` com uma
+   variável que a documentação diz não existir.
+4. **13,7 min de margem** entre o ETL diário e o alerta de saúde (§4).
+5. **`crm_ai` e `conteudos_links` sem DDL versionado** (§5).
+6. **`catalogo_produtos` é código morto no frontend** — `src/lib/catalogo-service.ts`
+   existe e funciona, mas **nenhum componente o importa**. O catálogo Yampi é
+   sincronizado diariamente e não é consumido em lugar nenhum.
+7. **`/api/analyze-frame` é código morto** — existe só no Express e nenhum
+   componente chama.
+8. **`worker.ts` não tem build nem pipeline no repo** — não há script npm, nem
+   `wrangler.toml`, nem workflow. Como ele é deployado **não está determinado**.
+9. **`hono` está no `package.json` e não é usado** em lugar nenhum.
+10. **`sb:types` gera `src/lib/database.types.ts`**, arquivo que não existe no repo.
+11. **Não há test runner.** `npm run lint` é `tsc --noEmit`. Os scripts
+    `verificar-*` são o mais próximo de teste que existe, e precisam ser rodados
+    à mão.
