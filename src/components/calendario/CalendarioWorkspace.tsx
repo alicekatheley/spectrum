@@ -581,6 +581,24 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
             </div>
 
             <div className={`${CARD} @container flex flex-col gap-5 min-h-[420px]`}>
+              {/* Defeito de configuração aparece ANTES de gerar, e fica visível depois. Um
+                  contexto quebrado não produz erro — produz um plano vazio com cara de plano,
+                  e foi exatamente assim que a grade NULL passou despercebida. */}
+              {contexto && contexto.avisos.length > 0 && (
+                <div className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                    Contexto incompleto — o plano abaixo não é confiável
+                  </p>
+                  <ul className="mt-1.5 space-y-1.5">
+                    {contexto.avisos.map((a) => (
+                      <li key={a} className="text-xs leading-relaxed text-[var(--shell-text-muted)]">
+                        {a}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {calendario ? (
                 <>
                   {/* Fica acima da grade, não no rodapé: quem lê o nome de uma oferta precisa
@@ -649,6 +667,28 @@ export default function CalendarioWorkspace({ userEmail, onLogout }: CalendarioW
                           ))}
                         </ul>
                       )}
+                    </div>
+                  )}
+
+                  {/* Zero slots nunca é uma recomendação. O gerador só devolve um plano vazio
+                      quando não sobrou lugar onde encaixar disparo — grade sem hora, catálogo
+                      sem oferta agendável ou período sem dia ativo. Antes disto a tela mostrava
+                      uma grade em branco e deixava a conclusão por conta de quem olhava. */}
+                  {calendario.slots.length === 0 && (
+                    <div className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                        Nenhum disparo gerado
+                      </p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-[var(--shell-text-muted)]">
+                        O modelo não encontrou nenhum lugar onde encaixar um disparo neste período.
+                        Isso não significa que a recomendação seja não disparar — significa que
+                        alguma entrada ficou vazia. Verifique, nesta ordem: a grade de horários da
+                        marca ({contexto?.config.grade?.reduce((s, h) => s + (h?.length ?? 0), 0) ?? 0}{' '}
+                        horas em toda a semana), o catálogo de ofertas agendáveis{' '}
+                        ({contexto?.config.familias.length ?? 0}{' '}
+                        {(contexto?.config.familias.length ?? 0) === 1 ? 'família' : 'famílias'}) e se
+                        o período escolhido contém algum dia ativo.
+                      </p>
                     </div>
                   )}
 

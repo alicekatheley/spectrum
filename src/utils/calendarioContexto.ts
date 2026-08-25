@@ -71,6 +71,52 @@ const OFERTAS_RESIDUO = ['outros'];
 export interface ResultadoContexto {
   config: ConfigMarca;
   excluidas: { familia: string; ofertas: string[]; motivo: string }[];
+  // Defeitos no contexto que o gerador NÃO consegue reportar sozinho, porque para ele
+  // "nenhuma hora disponível" e "nenhuma hora boa" são o mesmo estado. Ver `avisosDoContexto`.
+  avisos: string[];
+}
+
+const NOME_DOW = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+/**
+ * `marca_config.grade_horarios` é nullable e ficou NULL em 4 das 5 marcas por omissão nos
+ * seeds. O caminho do NULL até a tela era mudo de ponta a ponta: o worker traduz JSON
+ * ausente para sete listas vazias, o gerador não tem hora onde encaixar oferta nenhuma e
+ * devolve um calendário de zero slots — sem erro, sem log, com o mesmo banner verde de
+ * "catálogo extraído do histórico" que um plano correto exibe. Quem olhava via uma aba
+ * vazia e concluía que o modelo não tinha achado nada para recomendar.
+ *
+ * Hoje a grade é derivada diariamente de `fato_slot` por `sp_deriva_grade_horarios`, então
+ * a causa original está fechada. Estes avisos existem para o dia em que ela reabrir por
+ * outro motivo — procedure que falhou, marca nova ainda sem histórico, dia ativo declarado
+ * que a operação nunca usou de fato. Um plano vazio precisa dizer por que está vazio.
+ */
+function avisosDoContexto(ctx: ContextoBigQuery): string[] {
+  const avisos: string[] = [];
+  const grade = ctx.config.gradeHorarios ?? [];
+  const totalHoras = grade.reduce((soma, horas) => soma + (horas?.length ?? 0), 0);
+
+  if (totalHoras === 0) {
+    avisos.push(
+      `Grade de horários vazia para ${ctx.marca}: nenhum dia da semana tem hora disponível ` +
+        `em marca_config.grade_horarios. Sem hora não existe slot, então qualquer calendário ` +
+        `gerado agora sai sem nenhum disparo — e isso é falha de configuração, não recomendação ` +
+        `do modelo. Rode CALL crm_modelo.sp_deriva_grade_horarios('${ctx.marca}', 0.30) e gere de novo.`,
+    );
+    return avisos;
+  }
+
+  const diasSemHora = (ctx.config.diasAtivos ?? []).filter((d) => (grade[d]?.length ?? 0) === 0);
+  if (diasSemHora.length > 0) {
+    avisos.push(
+      `${diasSemHora.map((d) => NOME_DOW[d]).join(', ')} ${diasSemHora.length === 1 ? 'está declarado' : 'estão declarados'} ` +
+        `como dia ativo de ${ctx.marca}, mas não ${diasSemHora.length === 1 ? 'tem' : 'têm'} hora nenhuma na grade — ` +
+        `o gerador vai pular ${diasSemHora.length === 1 ? 'esse dia' : 'esses dias'} em silêncio. ` +
+        `Ou a operação nunca disparou neles com recorrência suficiente, ou dias_ativos está desatualizado.`,
+    );
+  }
+
+  return avisos;
 }
 
 function ehAutomacao(familia: string): boolean {
@@ -133,7 +179,20 @@ export function configDoContexto(ctx: ContextoBigQuery): ResultadoContexto {
       diasAtivos: ctx.config.diasAtivos,
       maxDiasCom3: ctx.config.maxDiasCom3,
       familias: [...porFamilia.values()],
-      volumeSemana: ctx.config.volumeMaximoSemana ?? ctx.baseline.volumeSemana,
+      // `volume_maximo_semana` é um TETO (H4, "saúde da base"), mas o gerador usa
+      // `volumeSemana` como o total que ele vai distribuir — ver o defeito conhecido em
+      // calendarioDemo.ts:392. Enquanto as duas coisas forem o mesmo campo, ler o teto
+      // direto faz o plano CRESCER até ele: a coluna acabou de ser preenchida com o p90
+      // das semanas completas de cada marca, e em Barbour's isso seria saltar de 4,21M
+      // (ritmo real das últimas 4 semanas) para 5,85M — +39% de receita prevista sem
+      // nenhum ganho de modelagem, só porque um NULL virou número.
+      //
+      // Então: planeje no ritmo atual, e deixe o teto TETAR. Se a marca já está acima do
+      // próprio p90, o plano recua para o teto — que é o comportamento que H4 descreve.
+      volumeSemana: Math.min(
+        ctx.baseline.volumeSemana,
+        ctx.config.volumeMaximoSemana ?? Number.POSITIVE_INFINITY,
+      ),
       rpmBase: ctx.baseline.rpm,
       procedencia: 'dados',
       grade: ctx.config.gradeHorarios,
@@ -145,5 +204,6 @@ export function configDoContexto(ctx: ContextoBigQuery): ResultadoContexto {
       indiceFamilia: undefined,
     },
     excluidas,
+    avisos: avisosDoContexto(ctx),
   };
 }
