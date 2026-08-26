@@ -125,8 +125,33 @@ async function main() {
     checa('Express carregou contexto', false, 'falhou — comparação pulada');
   } else {
     const exp = getContextoMarca('lescent') as any;
+    // Comparação com tolerância em float, não JSON.stringify cru. Os dois caminhos
+    // somam os mesmos valores do BigQuery em ordens diferentes, e ponto flutuante não
+    // é associativo: a receita saía 278099.07999999996 no worker e 278099.08 no
+    // Express. Isso é ruído de somatório, não divergência de decisão — e deixar a
+    // checagem estourar nele treina quem roda o script a ignorar o vermelho, que é
+    // justamente o que faria a próxima divergência de verdade passar batido.
+    const TOLERANCIA_REL = 1e-9;
+    const equivalente = (a: any, b: any): boolean => {
+      if (typeof a === 'number' && typeof b === 'number') {
+        if (Number.isNaN(a) && Number.isNaN(b)) return true;
+        const escala = Math.max(Math.abs(a), Math.abs(b), 1);
+        return Math.abs(a - b) <= TOLERANCIA_REL * escala;
+      }
+      if (Array.isArray(a) || Array.isArray(b)) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        return a.every((v, i) => equivalente(v, b[i]));
+      }
+      if (a && b && typeof a === 'object' && typeof b === 'object') {
+        const ka = Object.keys(a).sort();
+        const kb = Object.keys(b).sort();
+        if (ka.length !== kb.length || ka.some((k, i) => k !== kb[i])) return false;
+        return ka.every((k) => equivalente(a[k], b[k]));
+      }
+      return a === b;
+    };
     const cmp = (nome: string, a: any, b: any) =>
-      checa(nome, JSON.stringify(a) === JSON.stringify(b), `worker=${JSON.stringify(a)} express=${JSON.stringify(b)}`);
+      checa(nome, equivalente(a, b), `worker=${JSON.stringify(a)} express=${JSON.stringify(b)}`);
     cmp('config', d.config, exp.config);
     cmp('catálogo', d.catalogo, exp.catalogo);
     cmp('viabilidade', d.viabilidade, exp.viabilidade);
@@ -137,9 +162,15 @@ async function main() {
   }
 
   console.log('\n── marca fora do modelo ──');
-  const r404 = await chamar('/api/calendario/contexto?marca=Gocase');
+  // A marca aqui é propositalmente inexistente, não uma marca real. A checagem já foi
+  // escrita com 'Gocase' e virou falso vermelho no dia em que a v2 do Spree passou a
+  // atribuir e a Gocase entrou no modelo (e4f3c0a) — o teste passou a cobrar um 404 de
+  // uma marca que agora responde 200, correto. A invariante que importa não é "Gocase
+  // não tem modelo", é "marca sem modelo não recebe catálogo inventado", e essa não
+  // caduca quando o modelo ganha marca nova.
+  const r404 = await chamar('/api/calendario/contexto?marca=MarcaQueNaoExiste');
   const j404 = (await r404.json()) as any;
-  checa('Gocase devolve 404, não catálogo inventado', r404.status === 404, `status ${r404.status}`);
+  checa('marca sem modelo devolve 404, não catálogo inventado', r404.status === 404, `status ${r404.status}`);
   checa('404 lista marcas disponíveis', Array.isArray(j404.marcasDisponiveis));
 
   // A leitura assistida custa uma chamada de IA por execução, então fica atrás de

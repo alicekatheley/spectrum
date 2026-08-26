@@ -9,6 +9,15 @@ import type { ConfigMarca } from './calendarioDemo';
  * assunto do bloco EXCLUSÕES abaixo.
  */
 
+export interface NivelIndice {
+  nivel: string;
+  valor: number;
+  valorEfetivo: number;
+  peso: number | null;
+  nObservacoes: number | null;
+  veredito: string;
+}
+
 export interface ContextoBigQuery {
   marca: string;
   config: {
@@ -20,8 +29,11 @@ export interface ContextoBigQuery {
   };
   catalogo: { oferta: string; familia: string; agressividade: number }[];
   indices: {
-    i1Dia: { nivel: string; valor: number; valorEfetivo: number; peso: number | null; nObservacoes: number; veredito: string }[];
-    i4Oferta: { nivel: string; valor: number; valorEfetivo: number; peso: number | null; nObservacoes: number; veredito: string }[];
+    i1Dia: NivelIndice[];
+    /** Nível é FAIXA DE INTERVALO desde o último disparo da família ('<12h', '2-4d'), não família. */
+    i2Gap: NivelIndice[];
+    i3Hora: NivelIndice[];
+    i4Oferta: NivelIndice[];
     alpha: number;
     corteWalkforward?: string | null;
   };
@@ -120,6 +132,50 @@ function avisosDoContexto(ctx: ContextoBigQuery): string[] {
   return avisos;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ENCOLHIMENTO POR NÍVEL
+//
+// `valor_efetivo` do BigQuery é `valor^peso`, e `peso` é UM POR ÍNDICE: sai do
+// walk-forward do índice inteiro, não do nível. Consequência: dentro do mesmo
+// índice, um nível medido 97 vezes e outro medido 1 vez recebem exatamente o
+// mesmo expoente. Quando o peso passa de 1 — Gocase tem peso 1,5 em I3 — o
+// expoente AMPLIFICA em vez de encolher, e o nível de amostra 1 vira o mais
+// extremo da tabela. Medição real de 25/08/2026: a hora 11 da Gocase tem uma
+// observação, valor 2,238, e `valor_efetivo` 3,349. Ligar I3 sem esta função
+// faria todo plano da marca se empilhar às 11h por causa de um disparo.
+//
+// A correção é creditar cada nível pela própria amostra, não pela do índice:
+//
+//     expoente = peso · n/(n+K)
+//
+// n/(n+K) é credibilidade clássica — 0 sem dado, →1 com muito dado. K=10 é o
+// ponto em que um nível passa a valer metade do que a marca ganhou no
+// walk-forward; com os n observados hoje (1 a 97) ele separa bem o medido do
+// anedótico: n=1 fica em 9% do expoente, n=43 em 81%, n=97 em 91%.
+//
+// O teto de banda existe para o caso que o expoente sozinho não cobre: peso alto
+// COM amostra alta ainda pode gerar multiplicador extremo, e nenhuma decisão de
+// calendário deveria depender de acreditar que um horário rende 3× outro.
+const K_CREDIBILIDADE = 10;
+const PISO_INDICE = 0.6;
+const TETO_INDICE = 1.8;
+
+function indiceEncolhido(nivel: NivelIndice): number {
+  const valor = nivel.valor;
+  if (!Number.isFinite(valor) || valor <= 0) return 1;
+  const peso = nivel.peso ?? 0;
+  const n = nivel.nObservacoes ?? 0;
+  if (peso <= 0 || n <= 0) return 1;
+  const expoente = peso * (n / (n + K_CREDIBILIDADE));
+  return Math.min(TETO_INDICE, Math.max(PISO_INDICE, Math.pow(valor, expoente)));
+}
+
+function mapaPorNivel(niveis: NivelIndice[]): Record<string, number> {
+  const mapa: Record<string, number> = {};
+  for (const nivel of niveis) mapa[nivel.nivel] = indiceEncolhido(nivel);
+  return mapa;
+}
+
 function ehAutomacao(familia: string): boolean {
   return FAMILIAS_AUTOMACAO.includes(familia.trim().toLowerCase());
 }
@@ -188,13 +244,35 @@ export function configDoContexto(ctx: ContextoBigQuery): ResultadoContexto {
   // em vez de 1,20. Se o teto passar a valer para mais de uma marca, o certo é
   // pooling parcial de b entre marcas, não subir o teto.
   //
-  // Fallback para `valor` só protege contexto vindo de snapshot antigo, gravado
-  // antes da coluna existir.
+  // O expoente aplicado aqui NÃO é o `peso` puro: é `peso · n/(n+K)`, por nível.
+  // Ver `indiceEncolhido`. Para I1 a diferença é pequena (os 7 dias têm n de 32 a
+  // 56), mas a fórmula é a mesma dos outros três índices de propósito — índice
+  // que entra na conta por caminho próprio é como os quatro divergem.
   const indiceDia = [1, 1, 1, 1, 1, 1, 1];
   for (const linha of ctx.indices.i1Dia) {
     const dow = DOW_POR_NOME[linha.nivel];
-    if (dow !== undefined) indiceDia[dow] = linha.valorEfetivo ?? linha.valor;
+    if (dow !== undefined) indiceDia[dow] = indiceEncolhido(linha);
   }
+
+  // I3 e I4 estavam medidos, chegavam na API e eram descartados aqui: o gerador
+  // escolhia hora por espaçamento e oferta por rodízio, e FABRICAVA os dois
+  // índices a partir de um hash do nome da marca com as datas do período. Os
+  // números apareciam no plano como se fossem medidos. O que a validação de
+  // 25/08/2026 diz (peso do walk-forward, 0 = descartado, 1,5 = teto):
+  //
+  //     I3_hora    gocase 1,50 · rituaria 0,88 · kokeshi 0,83 · barbours 0,05
+  //     I4_oferta  barbours 0,65 · rituaria 0,57 · lescent 0,29 · gocase 0,14
+  //
+  // Ou seja: transferem, e com força, em três marcas cada. A afirmação de que
+  // "hora e oferta transferiram a 0,00" era verdadeira para a Lescent quando foi
+  // escrita e foi generalizada para as seis. Nas marcas de peso 0 estes mapas
+  // saem neutros sozinhos, pela própria fórmula — não é preciso caso especial.
+  const indiceHora: Record<string, number> = mapaPorNivel(ctx.indices.i3Hora ?? []);
+  const indiceOferta: Record<string, number> = mapaPorNivel(ctx.indices.i4Oferta ?? []);
+  // I2 é indexado por FAIXA DE INTERVALO desde o disparo anterior da família, não
+  // por família. É a medida direta da fadiga que o rodízio já tentava evitar às
+  // cegas; agora o rodízio tem o tamanho do efeito.
+  const indiceGap: Record<string, number> = mapaPorNivel(ctx.indices.i2Gap ?? []);
 
   const suporte3 = [0, 0, 0, 0, 0, 0, 0];
   for (const v of ctx.viabilidade) suporte3[v.dow] = v.dias3Ofertas;
@@ -224,9 +302,13 @@ export function configDoContexto(ctx: ContextoBigQuery): ResultadoContexto {
       indiceDia,
       suporte3,
       alpha: ctx.indices.alpha,
-      // Sem índice por família no BigQuery — ver a nota longa em calendarioDemo.ts.
-      // Deixar indefinido faz o gerador usar neutro, que é a leitura honesta.
+      // Continua sem índice POR FAMÍLIA no BigQuery, e continua sendo neutro por
+      // isso. O que entrou no lugar é I2 por faixa de gap (`indiceGap`), que é o
+      // que de fato foi medido sobre fadiga.
       indiceFamilia: undefined,
+      indiceHora,
+      indiceOferta,
+      indiceGap,
     },
     excluidas,
     avisos: avisosDoContexto(ctx),

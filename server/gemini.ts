@@ -536,9 +536,10 @@ O que você faz: explica POR QUE o plano é como é, usando o que o payload decl
 
 Contexto do modelo que você precisa dominar para explicar bem:
 - SLOT = (marca, data, hora, oferta). Um dia tem 2 ou 3 slots.
-- FAMÍLIA é a unidade de fadiga. O rodízio entre famílias é a alavanca #2 (coeficiente 0,52).
+- FAMÍLIA é a unidade de fadiga, e o rodízio entre famílias é uma das alavancas.
 - I1 (dia da semana) é a alavanca #1, coeficiente 0,90. Quarta é historicamente o dia mais forte.
-- Hora (I3) e oferta (I4) transferiram a 0,00 na validação fora da amostra: o modelo NÃO tem evidência de que um horário ou uma oferta específica renda mais que outro. Quando perguntarem "por que esse horário?", a resposta honesta é que o horário vem da grade operacional e do espaçamento entre disparos, NÃO de um ganho medido. Nunca invente uma justificativa de performance para horário ou oferta.
+- Quais alavancas valem NESTA marca não é fixo, e você não deve supor: cada etapa da decomposição no payload traz um campo "validado". Etapa validada = o índice sobreviveu à validação fora da amostra desta marca e o ganho dela é medido, então pode ser citado como razão. Etapa não validada = o índice não transferiu aqui; a decisão correspondente veio da grade operacional e do rodízio, e a resposta honesta a "por que esse horário?" é exatamente essa. Nunca invente justificativa de performance para uma etapa não validada, e nunca negue o ganho de uma etapa validada.
+- I2 é a FAIXA DE ESPAÇAMENTO desde o disparo anterior da mesma família, não a família em si. I3 é a hora dentro da grade daquele dia. I4 é a oferta dentro da família já eleita. Cada índice é medido contra o conjunto de onde a escolha saiu, então o ganho de cada etapa é o que MIRAR acrescenta — não o nível absoluto do índice.
 - Elasticidade de volume α = 0,31: receita ∝ V^0,31 e R$/mil ∝ V^-0,69. Mais volume sempre traz mais receita e sempre custa eficiência.
 - O 3º disparo do dia não sobreviveu à validação — é hipótese, não compromisso.
 - H1 (teto semanal de dias com 3 ofertas), H2 (nunca duas famílias iguais no mesmo dia), H3 (célula sem suporte histórico é bloqueada), H5 (dias inativos da marca) são restrições rígidas.
@@ -565,7 +566,7 @@ function resumirCalendario(cal: any): string {
               .sort((a, b) => a.hora - b.hora)
               .map(
                 (s) =>
-                  `${String(s.hora).padStart(2, '0')}h "${s.oferta}" [família ${s.familia}, I2=${s.indices.familia}, agr ${s.agressividade}, gap ${s.gapFamiliaH}h, ${s.enviosPlanejados} envios, R$ ${s.receitaPrevista}, ${s.rpmPrevisto} R$/mil${s.confianca.validado ? '' : ', NÃO VALIDADO'}${s.editado ? ', EDITADO À MÃO' : ''}]`,
+                  `${String(s.hora).padStart(2, '0')}h "${s.oferta}" [família ${s.familia}, idx família ${s.indices.familia}, agr ${s.agressividade}, gap ${s.gapFamiliaH}h, ${s.enviosPlanejados} envios, R$ ${s.receitaPrevista}, ${s.rpmPrevisto} R$/mil${s.confianca.validado ? '' : ', NÃO VALIDADO'}${s.editado ? ', EDITADO À MÃO' : ''}]`,
               )
               .join(' | '),
         )

@@ -207,9 +207,31 @@ taxa_teste(k) / base = idx_treino(k) ^ b
 `coef_transferencia` (b), `transf_se`, `peso_transferencia` (b encolhido por
 James-Stein positive-part, piso 0 e teto 1,5) e `valor_efetivo = valor^peso`.
 
-**Os consumidores devem ler `valorEfetivo`, não `valor`.** O cálculo vive no SQL
-justamente porque Express e worker já divergiram uma vez, e `v_indices_atuais` é
-`SELECT s.*` — coluna nova chega aos dois servidores sem edição dupla.
+**`peso_transferencia` é por ÍNDICE, não por nível** — e é por isso que
+`valorEfetivo` não é o que o app consome. Dentro de um mesmo índice, um nível com
+n=97 e um nível com n=1 recebem o mesmo expoente; quando o peso passa de 1, o
+expoente **amplifica** em vez de encolher, e um horário visto uma única vez entrava
+no plano valendo 3,35×. `configDoContexto` (`src/utils/calendarioContexto.ts`)
+aplica então uma segunda camada de credibilidade, esta por nível:
+
+```
+idx = clamp( valor ^ (peso · n/(n + 10)), 0,6 … 1,8 )
+```
+
+O SQL continua sendo a fonte de `peso` e `valor` — a divisão é deliberada: o peso é
+propriedade do índice e se mede no walk-forward; a credibilidade é propriedade da
+amostra de cada nível e só o consumidor sabe quantos níveis vai de fato usar. O
+cálculo compartilhado vive no SQL justamente porque Express e worker já divergiram
+uma vez, e `v_indices_atuais` é `SELECT s.*` — coluna nova chega aos dois servidores
+sem edição dupla.
+
+O gerador usa I1 (dia), I2 (faixa de gap), I3 (hora) e I4 (oferta), cada um
+normalizado pelo conjunto de onde a escolha sai: I3 pela grade **daquele dia**, I4
+pelas ofertas **daquela família**, I2 pelo próprio plano rodado sem mirar em gap.
+Normalizar por um conjunto mais amplo cobra da etapa um nível que o plano não tinha
+como escolher, e aparece na decomposição como ganho negativo. Quais alavancas valem
+é **por marca**: onde o peso deu 0, a alavanca entra neutra, a etapa sai marcada como
+não validada e um aviso diz isso.
 
 O corte do walk-forward é **rolante**: `hoje − 1 mês`, recalculado a cada
 execução. Passar `p_corte` explícito só é útil para reprocessar o passado.
@@ -340,6 +362,7 @@ anterior de que "tudo usa anon key" deixou de valer.
 | `verificar-worker-calendario.ts` | Chama `worker.fetch()` contra BigQuery real. Com `--ia`, exercita o proxy |
 | `servir-worker.ts` | Sobe o `worker.ts` num HTTP Node local servindo `dist/` |
 | `verificar-calendario.ts` | Invariantes do gerador determinístico (todas as marcas × modos × períodos) |
+| `efeito-indices.ts` | Decomposição por alavanca, marca a marca, contra o BigQuery real. Complementa o anterior, que roda no CONFIG estático e por isso não tem índice de hora nem de oferta para exercitar |
 | `dts.mjs` | Cliente do BigQuery Data Transfer Service |
 | `analisar-conteudos-links.ts` | Extrai frames de GIFs e classifica via Gemini |
 | `aplicar-analise.ts` / `extrair-frames.ts` / `verificar-frames.ts` | Utilitários de frame |

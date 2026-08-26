@@ -110,11 +110,18 @@ for (const marca of MARCAS) {
       // casos o rodízio genuinamente não agrega, e pode ficar alguns milésimos negativo.
       // Isso é resultado do modelo, não defeito. O que NÃO se tolera é queda visível.
       //
-      // Limiar mais frouxo (0,2%) do que a versão anterior (0,05%) porque a rotação passou
-      // a incluir penalidade explícita por (dow, família): duas quartas seguidas evitam a
-      // mesma família em vez de deixar a de maior qualidade dominar. Custa alguns décimos
-      // no q_família_dia médio — trade-off deliberado pra plano não ficar estático semana
-      // a semana. Queda visível na tela (R$ 1k+ em 5k) continua estourando este check.
+      // Limiar mais frouxo (0,2%) do que a versão original (0,05%) porque a rotação inclui
+      // penalidade explícita por (dow, família): duas quartas seguidas evitam a mesma
+      // família em vez de deixar a de maior qualidade dominar. Custa alguns décimos no
+      // q_família_dia médio — trade-off deliberado pra plano não ficar estático semana a
+      // semana. Medido: a etapa de família chega a -0,12% na Kokeshi, então 0,05% não passa
+      // e 0,2% passa com folga.
+      //
+      // Este script roda no CONFIG ESTÁTICO, que não tem índice de hora, de oferta nem de
+      // gap — ele não exercita I2/I3/I4, e por isso o limiar aqui não diz nada sobre eles.
+      // Sobre dado real (`efeito-indices.ts`) o resíduo fica abaixo de 0,02% em todas as
+      // etapas, porque lá cada índice é normalizado pelo conjunto de onde a escolha sai.
+      // Queda visível na tela (R$ 1k+ em 5k) continua estourando este check.
       for (let i = 1; i < cal.decomposicao.length; i++) {
         const anterior = cal.decomposicao[i - 1];
         const atual = cal.decomposicao[i];
@@ -175,8 +182,16 @@ for (const marca of MARCAS) {
   }
 }
 
-// Marca bloqueada continua bloqueada.
-anotar(MARCAS_SEM_MODELO.includes('Gocase'), 'Gocase saiu da lista de marcas sem modelo');
+// Marca bloqueada continua bloqueada. A asserção nomeava a Gocase e ficou obsoleta
+// quando ela entrou no modelo — a lista está vazia desde então. A invariante que
+// continua valendo é a genérica: quem está na lista não pode ser gerado.
+for (const marca of MARCAS) {
+  if (!MARCAS_SEM_MODELO.includes(marca)) continue;
+  const cal = gerarCalendarioDemo({
+    marca, modo: 'receita_maxima', dataInicio: '2026-08-24', dataFim: '2026-09-13', eventosEspeciais: '',
+  });
+  anotar(cal.slots.length === 0, `${marca}: está em MARCAS_SEM_MODELO mas gerou ${cal.slots.length} slots`);
+}
 
 // Modo A vs modo B: a troca precisa mover o plano ao longo da curva, não para fora dela.
 for (const marca of MARCAS) {

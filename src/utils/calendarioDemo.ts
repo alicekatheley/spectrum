@@ -101,6 +101,16 @@ export interface ConfigMarca {
   alpha: number; // §6.1 — elasticidade de volume: receita ∝ V^alpha
   /** I2 real por família, quando vem do BigQuery. Ausente ⇒ derivado da semente. */
   indiceFamilia?: Record<string, number>;
+
+  // Os três abaixo chegam já encolhidos por nível (ver `indiceEncolhido` em
+  // calendarioContexto.ts). Ausentes ⇒ neutros: é o que acontece com o catálogo
+  // sintético, que não tem medição nenhuma para oferecer.
+  /** I3 — chave é a hora cheia em texto ('9', '19'). */
+  indiceHora?: Record<string, number>;
+  /** I4 — chave é o nome da oferta. */
+  indiceOferta?: Record<string, number>;
+  /** I2 — chave é a faixa de intervalo desde o disparo anterior da família ('<12h', '2-4d'). */
+  indiceGap?: Record<string, number>;
 }
 
 const TODOS_OS_DIAS = [0, 1, 2, 3, 4, 5, 6];
@@ -143,7 +153,7 @@ const familiasSinteticas = (n: number): ConfigMarca['familias'] =>
 //      percebidos como ofertas distintas mesmo com o mesmo desconto nominal.
 //
 // Isso puxa o catálogo para MAIS famílias, e granularidade não é neutra: família é a
-// unidade de fadiga (H2 + I2, coeficiente 0,52). Quanto mais fino o corte, menos fadiga
+// unidade de fadiga (H2 e o descanso de 48h operam sobre ela). Quanto mais fino o corte, menos fadiga
 // o modelo enxerga — "Cupom 15%" e "Cupom 18%" em dias seguidos contam como famílias
 // diferentes e o cliente vê a mesma coisa. O corte abaixo é uma PROPOSTA de granularidade,
 // não uma conclusão; é o item que mais precisa de revisão antes de valer alguma coisa.
@@ -393,6 +403,12 @@ export function gerarCalendarioDemo(
    * ficar em branco ou fingir dado.
    */
   configExterna?: ConfigMarca,
+  /**
+   * Uso interno. Desliga a mira em faixa de gap para gerar o plano de REFERÊNCIA
+   * contra o qual o I2 é calibrado — ver `mediaGapReferencia`. Também é o que
+   * impede a recursão de passar de um nível.
+   */
+  semMiraGap = false,
 ): CalendarioGerado {
   const cfg = configExterna ?? CONFIG[input.marca as MarcaAtiva] ?? CONFIG.Lescent;
 
@@ -419,28 +435,126 @@ export function gerarCalendarioDemo(
   const restricoesRelaxadas: string[] = [];
   const avisos: string[] = [];
 
+  // ── I2, I3, I4 — medidos, e até agora descartados ────────────────────────
+  // As três entram por uma função só porque a regra é a mesma e é ela que impede
+  // crédito de graça: o índice é dividido pela média do próprio domínio, então usar
+  // a mistura média rende 1× e só desviar dela paga. Sem isso o nível médio do
+  // índice — que já está dentro do RPM âncora — seria contado duas vezes, e todo
+  // plano nasceria com ganho positivo por construção.
+  //
+  // Qual é "o próprio domínio" não é detalhe: é o contrafactual da etapa. Cada uma
+  // das três é escolhida DENTRO de um conjunto que os passos anteriores já fecharam,
+  // e normalizar sobre um conjunto maior que esse compara o plano com uma mistura
+  // que ele não tem como produzir — o que aparece na tela como etapa negativa.
+  //
+  // Devolver `null` quando o mapa é neutro não é atalho: é o que distingue "a
+  // marca tem peso 0 neste índice" de "a marca tem índice plano". No primeiro
+  // caso a alavanca não deve aparecer creditada na decomposição, e é assim que
+  // a tela fica sabendo.
+  const bandaGap = (h: number): string =>
+    h < 12 ? '<12h'
+      : h < 24 ? '12-24h'
+        : h < 48 ? '24-48h'
+          : h < 96 ? '2-4d'
+            : h < 168 ? '4-7d'
+              : h < 720 ? '7-30d'
+                : '30d+';
+
+  const normalizador = (
+    mapa: Record<string, number> | undefined,
+    dominio: string[],
+  ): ((chave: string) => number) | null => {
+    if (!mapa || dominio.length === 0) return null;
+    const valores = dominio.map((k) => mapa[k] ?? 1);
+    if (valores.every((v) => Math.abs(v - 1) < 1e-9)) return null;
+    const media = valores.reduce((a, b) => a + b, 0) / valores.length;
+    if (!(media > 0)) return null;
+    return (chave: string) => (mapa[chave] ?? media) / media;
+  };
+
+  // I2 — o divisor não é uma lista de faixas escrita à mão, é o próprio plano SEM
+  // mirar em gap.
+  //
+  // A faixa de gap não é escolhida livremente: com F famílias e S disparos por dia, o
+  // rodízio precisa repetir uma família a cada ~F/S dias, e H2 e o descanso de 48h só
+  // empurram dentro dessa margem. Quais bandas são alcançáveis é, portanto, propriedade
+  // do catálogo e da cadência — uma marca com 5 famílias e 2,6 disparos/dia vive em
+  // '24-48h' e '2-4d', e nenhuma lista fixa acerta isso para todas. Normalizar contra as
+  // bandas erradas cobra do I2 (ou credita a ele) um nível que o plano nunca teve como
+  // escolher, e foi o que fez a etapa aparecer negativa.
+  //
+  // O plano de referência é o mesmo rodízio com o fator de gap desligado: é o
+  // espaçamento que a operação produz sem olhar para o índice. Contra ele, o I2 mede
+  // só o que MIRAR acrescenta — e uma marca sem margem de manobra sai em 0, que é a
+  // leitura certa, em vez de em negativo.
+  const BANDAS_GAP = ['<12h', '12-24h', '24-48h', '2-4d', '4-7d', '7-30d', '30d+'];
+  const gapTemSinal = normalizador(cfg.indiceGap, BANDAS_GAP) !== null;
+  let mediaGapReferencia = 0;
+  if (gapTemSinal && !semMiraGap) {
+    let soma = 0;
+    let envios = 0;
+    for (const s of gerarCalendarioDemo(input, cfg, true).slots) {
+      // Primeira saída da família no plano entra neutra dos dois lados; incluí-la
+      // aqui deslocaria o divisor por uma faixa que nenhum dos planos usa.
+      if (s.janelaFamilia === '—') continue;
+      soma += s.enviosPlanejados * (cfg.indiceGap![s.janelaFamilia] ?? 1);
+      envios += s.enviosPlanejados;
+    }
+    mediaGapReferencia = envios > 0 ? soma / envios : 0;
+  }
+  const qualidadeGap =
+    mediaGapReferencia > 0
+      ? (banda: string) => (cfg.indiceGap![banda] ?? mediaGapReferencia) / mediaGapReferencia
+      : null;
+
+  // I3 — normalizado DENTRO da linha da grade do dia, não sobre a união das grades.
+  // A diferença de um dia para o outro já é I1; se o I3 a carregasse de novo ela
+  // seria contada duas vezes, e num dia cuja grade é toda fraca até a melhor hora
+  // praticável ficaria abaixo da média global. O que o I3 mede é a escolha dentro
+  // do dia, que é a única que ele controla.
+  const qualidadeHoraPorDow = new Map<number, ((h: string) => number) | null>();
+  for (let dow = 0; dow < 7; dow++) {
+    qualidadeHoraPorDow.set(dow, normalizador(cfg.indiceHora, (cfg.grade[dow] ?? []).map(String)));
+  }
+  const horasDaGrade = [...new Set(cfg.grade.flat())].map(String);
+  const temIndiceHora = normalizador(cfg.indiceHora, horasDaGrade) !== null;
+
+  // I4 — normalizado DENTRO da família, porque é lá que a oferta é eleita: a família
+  // já foi decidida no passo anterior e o contrafactual honesto é "a oferta média
+  // DESTA família", não a média do catálogo. Sobre o catálogo inteiro, a melhor
+  // oferta de uma família fraca pontuava abaixo de 1 e a etapa descia.
+  const ofertasDoCatalogo = cfg.familias.flatMap((f) => f.ofertas);
+  const qualidadeOfertaPorFamilia = new Map<string, ((o: string) => number) | null>();
+  for (const f of cfg.familias) {
+    qualidadeOfertaPorFamilia.set(f.nome, normalizador(cfg.indiceOferta, f.ofertas));
+  }
+  const temIndiceOferta = normalizador(cfg.indiceOferta, ofertasDoCatalogo) !== null;
+
   // Qualidade por família. Três procedências, e a diferença entre elas importa:
   //
   //  - cfg.indiceFamilia presente  → medido, usa como está.
-  //  - procedência 'dados'         → NEUTRO (1.0 para todas). Ver abaixo.
+  //  - I4 disponível               → média dos índices das ofertas da família.
   //  - resto (sintético/ditado)    → derivado da semente, como antes.
   //
-  // O ramo neutro é o que muda de verdade. A linha anterior derivava a qualidade de
-  // cada família de um HASH do nome da marca e do período — variância inventada, que
-  // mexe em qual família ganha o melhor horário e em quanta receita a tela mostra.
-  // Num catálogo sintético isso é inofensivo (os rótulos já são falsos). Sobre dados
-  // reais seria pior que inútil: daria a famílias reais uma diferença de performance
-  // que ninguém mediu, embrulhada em número.
+  // O ramo do meio é o que sobrou de pé depois que o I4 passou a ser normalizado
+  // dentro da família: normalizar lá dentro joga fora a diferença ENTRE famílias, e
+  // esta média a recupera um passo acima, em vez de perdê-la. O BigQuery não indexa
+  // família — indexa oferta e faixa de gap — mas família aqui é agrupamento de
+  // ofertas, então a média dos I4 delas é a estimativa que existe, e é medida.
   //
-  // E não há o que colocar no lugar. O BigQuery não expõe índice por família: I2 é
-  // por FAIXA DE GAP ('2-4d', '7-30d'), não por família, e I4 é por OFERTA e vem com
-  // veredito 'NAO transfere' nas 22 — com transferência global negativa (-0,436),
-  // que é reversão à média em amostra pequena, não sinal. Neutro é a leitura honesta:
-  // o rodízio de famílias continua acontecendo por H2 e por fadiga, que são regras
-  // observadas, e deixa de fingir que uma família rende mais que a outra.
+  // O que não volta é o hash: derivar a qualidade de uma família real de
+  // `semente >> i` dava a ela uma diferença de performance que ninguém mediu,
+  // embrulhada em número. Num catálogo sintético isso é inofensivo (os rótulos já
+  // são falsos); sobre dados reais era pior que inútil.
+  const mediaI4Familia = (f: { ofertas: string[] }): number | undefined => {
+    if (!cfg.indiceOferta || f.ofertas.length === 0) return undefined;
+    const valores = f.ofertas.map((o) => cfg.indiceOferta![o] ?? 1);
+    return valores.reduce((a, b) => a + b, 0) / valores.length;
+  };
+  const familiaMedida = cfg.indiceFamilia !== undefined || temIndiceOferta;
   const indiceFamilia = new Map<string, number>();
   cfg.familias.forEach((f, i) => {
-    const medido = cfg.indiceFamilia?.[f.nome];
+    const medido = cfg.indiceFamilia?.[f.nome] ?? (temIndiceOferta ? mediaI4Familia(f) : undefined);
     indiceFamilia.set(
       f.nome,
       medido !== undefined
@@ -451,8 +565,13 @@ export function gerarCalendarioDemo(
     );
   });
   const mediaFamilia = [...indiceFamilia.values()].reduce((a, b) => a + b, 0) / cfg.familias.length;
+  // Expoente 1 no caminho medido: o 0,52 vinha da leitura antiga de que I2 era o
+  // índice de família, e I2 é faixa de gap. O valor que entra aqui já foi encolhido
+  // pela credibilidade da própria amostra em `configDoContexto`; encolher de novo
+  // seria descontar duas vezes a mesma incerteza.
+  const expoenteFamilia = familiaMedida ? 1 : 0.52;
   const qualidadeFamilia = (nome: string) =>
-    Math.pow((indiceFamilia.get(nome) ?? mediaFamilia) / mediaFamilia, 0.52);
+    Math.pow((indiceFamilia.get(nome) ?? mediaFamilia) / mediaFamilia, expoenteFamilia);
 
   // DEFEITO CONHECIDO (não corrigido aqui, ver conversa): volume_maximo_semana fixa o total
   // de envios INDEPENDENTEMENTE do número de slots, e PESOS_SLOT só reparte esse total. Ou
@@ -641,15 +760,66 @@ export function gerarCalendarioDemo(
   const usosFamiliaPorDow = new Map<string, Map<number, number>>();
   const usosOfertaPorDow = new Map<string, Map<number, number>>();
   const PENALIDADE_DOW_FAMILIA = 3;
-  // Receita da etapa intermediária da decomposição (só I1 ligado, família ainda neutra).
-  let receitaSoDia = 0;
-  let receitaPlanoExata = 0;
+  // Etapas cumulativas da decomposição: cada uma liga UMA alavanca a mais sobre o
+  // mesmo volume. Precisam ser acumuladas aqui, dentro do laço, porque a mistura
+  // que define cada etapa é do dia, não do plano.
+  let receitaSoDia = 0; // I1 + α
+  let receitaAteFamilia = 0; // + família (I4 agregado)
+  let receitaAteGap = 0; // + I2
+  let receitaAteHora = 0; // + I3
+  let receitaPlanoExata = 0; // + I4 (plano completo)
+
+  // Espaçamento mínimo entre disparos do mesmo dia. Vira restrição SOFT porque em
+  // grade apertada ele impediria de preencher o dia, e um slot a menos custa mais
+  // que dois disparos próximos.
+  const MIN_GAP_HORAS = 3;
+  let relaxouEspacamento = false;
+
+  /**
+   * Escolha de horário. Antes era espaçamento puro — primeiro e último da grade —
+   * e o índice medido não era consultado. Agora o critério é o índice, com o
+   * espaçamento como restrição, não como critério: pega a melhor hora, depois a
+   * melhor entre as que ficam a 3h ou mais dela, e assim por diante.
+   *
+   * A grade operacional continua sendo o universo. O índice reordena o que já é
+   * praticável; ele não inventa horário que a marca nunca usou.
+   */
+  const escolherHoras = (horas: number[], n: number, dow: number): number[] => {
+    if (horas.length === 0) return [];
+    const qHoraDoDia = qualidadeHoraPorDow.get(dow);
+    if (!qHoraDoDia) {
+      return n === 2 && horas.length >= 2
+        ? [horas[0], horas[horas.length - 1]]
+        : horas.slice(0, n);
+    }
+    const porQualidade = [...horas].sort(
+      (a, b) => qHoraDoDia(String(b)) - qHoraDoDia(String(a)),
+    );
+    const escolhidas: number[] = [];
+    for (const h of porQualidade) {
+      if (escolhidas.length >= n) break;
+      if (escolhidas.every((j) => Math.abs(j - h) >= MIN_GAP_HORAS)) escolhidas.push(h);
+    }
+    for (const h of porQualidade) {
+      if (escolhidas.length >= n) break;
+      if (!escolhidas.includes(h)) {
+        escolhidas.push(h);
+        relaxouEspacamento = true;
+      }
+    }
+    return escolhidas.sort((a, b) => a - b);
+  };
 
   dias.forEach((data, indiceDia) => {
     const iso = paraISO(data);
     const dow = data.getDay();
-    const n = nSlotsPorDia(iso);
     const horas = GRADE[dow];
+    // A grade manda no número de slots: pedir 3 disparos onde só há 2 horários
+    // praticáveis produziria dois envios na mesma hora — sem erro e sem sintoma,
+    // até alguém olhar o dia.
+    const horasDoDia = escolherHoras(horas, nSlotsPorDia(iso), dow);
+    const n = horasDoDia.length;
+    if (n === 0) return;
     const volumeDoDia = (volumeTotal * pesoDia[indiceDia]) / somaPesos;
     const familiasUsadasHoje = new Set<string>();
     // Os slots do dia são escolhidos primeiro; a receita só pode ser calculada depois,
@@ -666,12 +836,14 @@ export function gerarCalendarioDemo(
       idxHora: number;
       idxOferta: number;
       qFamilia: number;
+      qHora: number;
+      qOferta: number;
+      qGap: number;
     }[] = [];
 
     for (let s = 0; s < n; s++) {
-      // Fase 5b — horário. O critério NÃO é o índice de hora (transferência 0,00):
-      // nos dias de 2 slots sai o primeiro e o último da grade, para maximizar o intervalo.
-      const hora = n === 2 ? [horas[0], horas[horas.length - 1]][s] : horas[s % horas.length];
+      // Fase 5b — horário, já eleito para o dia inteiro por `escolherHoras`.
+      const hora = horasDoDia[s];
 
       // Fase 4 — rodízio de família. Duas regras, nesta ordem: H2 elimina quem já saiu hoje
       // (rígida, nunca relaxada); o descanso elimina quem disparou nas últimas 48h. Se o
@@ -712,11 +884,27 @@ export function gerarCalendarioDemo(
       // um dow não fica "poupado" só porque a família aparece em outros dias. Com K=3,
       // uma segunda semana com uma família de qualidade 1,5× já perde para uma família
       // vizinha que ainda não saiu naquele dow — que é o comportamento pedido.
+      //
+      // O I2 entra AQUI, e não só na receita: o rodízio já espaçava as famílias, mas
+      // sem olhar para quanto cada faixa de descanso vale. Sem este fator o
+      // espaçamento saía como subproduto de H2 e do descanso de 48h, e a etapa I2 da
+      // decomposição media uma faixa que ninguém tinha escolhido. Com ele, entre duas
+      // famílias igualmente elegíveis o rodízio prefere a que cai numa faixa medida
+      // como melhor.
+      const gapSeSairAgora = (nome: string) => {
+        const uso = ultimoUso.get(nome);
+        return uso ? (indiceDia - uso.dia) * 24 + (hora - uso.hora) : null;
+      };
       const familia = pool.reduce((melhor, f) => {
         const score = (g: typeof f) => {
           const usosGeral = usosFamilia.get(g.nome) ?? 0;
           const usosNoDow = usosFamiliaPorDow.get(g.nome)?.get(dow) ?? 0;
-          return qualidadeFamilia(g.nome) / (1 + usosGeral + PENALIDADE_DOW_FAMILIA * usosNoDow);
+          const gap = gapSeSairAgora(g.nome);
+          const qGap = gap === null ? 1 : (qualidadeGap?.(bandaGap(gap)) ?? 1);
+          return (
+            (qualidadeFamilia(g.nome) * qGap) /
+            (1 + usosGeral + PENALIDADE_DOW_FAMILIA * usosNoDow)
+          );
         };
         return score(f) > score(melhor) ? f : melhor;
       });
@@ -736,17 +924,32 @@ export function gerarCalendarioDemo(
       // O critério antigo `ofertas[(semente + indiceDia*7 + s) % L]` era determinístico
       // mas coincidia toda vez que L | 7 (ex.: L=7 ⇒ mesma oferta em toda segunda do plano).
       // Agora escolhemos a oferta MENOS usada no dow atual, com semente só como desempate.
+      // O índice de oferta (I4) entra AQUI, e é a diferença entre eleger a oferta e
+      // apenas rodar o catálogo. A forma é a mesma da escolha de família — qualidade
+      // dividida por uso — e pela mesma razão: argmax puro fixaria a melhor oferta
+      // da família em todos os slots, e rodízio puro trataria uma oferta medida como
+      // boa igual a uma medida como ruim. Com qualidade/(1+usos), a melhor sai mais
+      // vezes sem que as outras parem de sair.
+      //
+      // Quando a marca tem peso 0 em I4 — Ápice e Kokeshi hoje — `qualidadeOferta` é
+      // null, o numerador vira 1 e isto degrada exatamente para o rodízio anterior.
       const ofertas = familia.ofertas;
-      const escolhida = ofertas.reduce((menor, o, i) => {
-        const usosOMenor = usosOfertaPorDow.get(menor)?.get(dow) ?? 0;
-        const usosO = usosOfertaPorDow.get(o)?.get(dow) ?? 0;
-        if (usosO < usosOMenor) return o;
-        if (usosO > usosOMenor) return menor;
+      const qOfertaDaFamilia = qualidadeOfertaPorFamilia.get(familia.nome);
+      const scoreOferta = (o: string) => {
+        const usosNoDow = usosOfertaPorDow.get(o)?.get(dow) ?? 0;
+        const usosSemana = usoOfertaNaSemana.get(o) ?? 0;
+        return (qOfertaDaFamilia?.(o) ?? 1) / (1 + usosNoDow + usosSemana);
+      };
+      const escolhida = ofertas.reduce((melhor, o, i) => {
+        const sO = scoreOferta(o);
+        const sMelhor = scoreOferta(melhor);
+        if (sO > sMelhor + 1e-9) return o;
+        if (sO < sMelhor - 1e-9) return melhor;
         // Desempate: hash da semente + índice na lista, pra manter reprodutibilidade
         // dentro do mesmo (marca, período) sem fixar a mesma oferta em toda semana.
         const desempateAtual = (semente + i * 13 + dow * 7 + s) % ofertas.length;
-        const desempateMenor = (semente + ofertas.indexOf(menor) * 13 + dow * 7 + s) % ofertas.length;
-        return desempateAtual < desempateMenor ? o : menor;
+        const desempateMenor = (semente + ofertas.indexOf(melhor) * 13 + dow * 7 + s) % ofertas.length;
+        return desempateAtual < desempateMenor ? o : melhor;
       });
       if (!usosOfertaPorDow.has(escolhida)) usosOfertaPorDow.set(escolhida, new Map());
       const mapaOfertaDow = usosOfertaPorDow.get(escolhida)!;
@@ -760,9 +963,14 @@ export function gerarCalendarioDemo(
       const peso = PESOS_SLOT[n][s];
       const envios = Math.round(volumeDoDia * peso);
 
+      // Estes três eram fabricados: `0.95 + ((semente >> (s+5)) % 12)/100` para a
+      // hora e `0.92 + ((semente >> (s+7)) % 28)/100` para a oferta — um hash do
+      // nome da marca com as datas do período, gravado no plano no campo que a tela
+      // e o assistente leem como índice medido. Agora são os índices do BigQuery,
+      // já encolhidos pela própria amostra de cada nível.
       const idxFamilia = indiceFamilia.get(familia.nome) ?? 1;
-      const idxHora = 0.95 + ((semente >> (s + 5)) % 12) / 100;
-      const idxOferta = 0.92 + ((semente >> (s + 7)) % 28) / 100;
+      const idxHora = cfg.indiceHora?.[String(hora)] ?? 1;
+      const idxOferta = cfg.indiceOferta?.[escolhida] ?? 1;
 
       rascunho.push({
         s,
@@ -775,6 +983,17 @@ export function gerarCalendarioDemo(
         idxFamilia,
         idxHora,
         idxOferta,
+        qHora: qualidadeHoraPorDow.get(dow)?.(String(hora)) ?? 1,
+        qOferta: qOfertaDaFamilia?.(escolhida) ?? 1,
+        // I2 é a fadiga MEDIDA. `idxGap` fica de fora do slot só porque o schema
+        // (§9.1) expõe quatro índices e não cinco; o efeito entra na receita igual.
+        //
+        // Primeira saída da família NO PLANO é neutra, não '30d+'. O 999 é sentinela
+        // de "não sei", não medição: o plano começa em cima de um histórico real onde
+        // a família provavelmente saiu há pouco, e tratar o desconhecido como um mês
+        // de silêncio é inventar a faixa — a mesma classe de erro dos índices que
+        // vinham de hash.
+        qGap: usoAnterior ? (qualidadeGap?.(bandaGap(gapFamiliaH)) ?? 1) : 1,
         // Sem penalidade de fadiga aqui, e isso é deliberado. Quando o descanso cede, a receita
         // real cai — mas o "ritmo de hoje" contra o qual comparamos também é uma operação com
         // fadiga, e não existe medição do descanso típico da marca para calibrar a diferença.
@@ -790,22 +1009,36 @@ export function gerarCalendarioDemo(
     const idxDia = INDICE_DIA[dow];
     const qDia = qualidadeDia(dow) / mediaQualidadeDia;
     const fatorVolume = Math.pow(volumeDoDia / enviosAncoraDia, ALPHA);
-    // Qualidade de família do dia = média ponderada pelos pesos de volume dos slots.
-    const qFamiliaDia = rascunho.reduce((a, r) => a + r.peso * r.qFamilia, 0);
+    // Mistura do dia = média ponderada pelos pesos de volume dos slots. Cada fator
+    // já vem normalizado pela média do próprio domínio, então um dia que usa a
+    // mistura média dá 1 e não ganha nada — o ganho só aparece ao desviar dela.
+    const mixDia = rascunho.reduce(
+      (a, r) => a + r.peso * r.qFamilia * r.qGap * r.qHora * r.qOferta,
+      0,
+    );
 
-    const receitaDia = receitaAncoraDia * qDia * qFamiliaDia * fatorVolume;
+    const receitaDia = receitaAncoraDia * qDia * mixDia * fatorVolume;
     // Acumuladores EXATOS. A decomposição compara etapas entre si, então as duas pontas
     // precisam vir da mesma aritmética: somar os valores já arredondados por slot injetaria
     // ruído de centavos que apareceria na tela como uma alavanca ganhando ou perdendo 0,1%.
     receitaPlanoExata += receitaDia;
-    // Etapa intermediária da decomposição: I1 ligado, família ainda neutra.
-    receitaSoDia += receitaAncoraDia * qDia * fatorVolume;
+    // Etapas intermediárias: cada uma liga uma alavanca a mais, na ordem em que a
+    // decomposição as apresenta. Como Σ peso = 1, com todos os fatores neutros as
+    // quatro colapsam no mesmo número — que é o comportamento certo para uma marca
+    // cujos índices não transferiram.
+    const baseDia = receitaAncoraDia * qDia * fatorVolume;
+    receitaSoDia += baseDia;
+    receitaAteFamilia += baseDia * rascunho.reduce((a, r) => a + r.peso * r.qFamilia, 0);
+    receitaAteGap += baseDia * rascunho.reduce((a, r) => a + r.peso * r.qFamilia * r.qGap, 0);
+    receitaAteHora +=
+      baseDia * rascunho.reduce((a, r) => a + r.peso * r.qFamilia * r.qGap * r.qHora, 0);
 
     for (const r of rascunho) {
-      // A repartição preserva a soma: Σ (peso·q_fam / q_fam_dia) = 1.
-      const receita = (receitaDia * r.peso * r.qFamilia) / qFamiliaDia;
+      // A repartição preserva a soma: Σ (peso·q_slot / mix_dia) = 1.
+      const receita =
+        (receitaDia * r.peso * r.qFamilia * r.qGap * r.qHora * r.qOferta) / mixDia;
       const rpm = (receita / r.envios) * 1000;
-      const score = qDia * r.qFamilia;
+      const score = qDia * r.qFamilia * r.qGap * r.qHora * r.qOferta;
 
       slots.push({
         data: iso,
@@ -823,7 +1056,10 @@ export function gerarCalendarioDemo(
           familia: Number(r.idxFamilia.toFixed(3)),
         },
         gapFamiliaH: r.gapFamiliaH,
-        janelaFamilia: r.gapFamiliaH < 72 ? '2-3d' : r.gapFamiliaH < 120 ? '4-7d' : '7d+',
+        // Mesmas faixas do I2 no BigQuery. Antes eram três buckets próprios
+        // ('2-3d'/'4-7d'/'7d+') que não casavam com nível nenhum do índice, então
+        // o rótulo na tela e a faixa que entra na receita podiam discordar.
+        janelaFamilia: r.gapFamiliaH >= 999 ? '—' : bandaGap(r.gapFamiliaH),
         score: Number(score.toFixed(3)),
         rpmPrevisto: Number(rpm.toFixed(1)),
         receitaPrevista: Math.round(receita),
@@ -868,6 +1104,9 @@ export function gerarCalendarioDemo(
       }
       receitaPlanoExata *= fatorReceita;
       receitaSoDia *= fatorReceita;
+      receitaAteFamilia *= fatorReceita;
+      receitaAteGap *= fatorReceita;
+      receitaAteHora *= fatorReceita;
       volumeTotal = Math.round(volumeTotal * fator);
       const corteFinal = (1 - volumeTotal / volumeBase) * 100;
       avisos.push(
@@ -894,34 +1133,92 @@ export function gerarCalendarioDemo(
   const previsao: PrevisaoCalendario = {
     ritmoDeHoje,
     validado,
-    // O in-sample dá crédito integral aos 4 índices, inclusive aos dois que transferiram
-    // a 0,00. A distância entre ele e o validado é o tamanho do viés.
+    // Marcador FIXO de 18%, não um in-sample recalculado: existe só para dar escala
+    // ao viés de ler índice na própria amostra em que ele foi estimado. Não use.
     inSampleNaoUsar: Math.round(validado * 1.18),
     ganhoValidadoPct: Number((((validado - ritmoDeHoje) / ritmoDeHoje) * 100).toFixed(1)),
   };
 
-  // Cada etapa liga UMA alavanca a mais no mesmo motor, sempre com o mesmo volume total.
-  // A ordem é a de transferência decrescente (§6.2), e por construção a curva não desce:
-  // a alocação da Fase 3 é o ótimo do passo 2, e o rodízio da Fase 4 escolhe famílias
-  // acima da média. Se um dia descer, é bug do gerador, não resultado do modelo.
+  // Cada etapa liga UMA alavanca a mais no mesmo motor, sempre com o mesmo volume total,
+  // e na ordem em que o gerador de fato decide: dia, família, espaçamento, horário,
+  // oferta.
+  //
+  // A curva não desce porque cada alavanca é normalizada pelo conjunto DE ONDE ela foi
+  // escolhida, e não por um conjunto maior: a alocação da Fase 3 é o ótimo do passo
+  // anterior; horário é o melhor de dentro da grade daquele dia; oferta, a melhor de
+  // dentro da família já eleita; e o espaçamento é medido contra o próprio rodízio sem
+  // mira. Comparar contra qualquer conjunto mais amplo cobra da etapa um nível que o
+  // plano não tinha como escolher, e é assim que uma etapa negativa aparece.
+  //
+  // Sobra um resíduo da ordem de 0,01%, que arredonda para zero: o rodízio não é argmax
+  // puro — divide a qualidade pelo uso acumulado para não zerar o catálogo — então a
+  // mistura que ele produz fica perto do ótimo, não exatamente nele. Uma queda VISÍVEL
+  // (0,1% ou mais) não é isso, e o primeiro suspeito é um domínio de normalização ter
+  // deixado de bater com o conjunto de onde a escolha sai.
   const soDia = Math.round(receitaSoDia);
+  const ateFamilia = Math.round(receitaAteFamilia);
+  const ateGap = Math.round(receitaAteGap);
+  const ateHora = Math.round(receitaAteHora);
+  const ganho = (de: number, para: number) =>
+    de > 0 ? Number((((para - de) / de) * 100).toFixed(1)) : 0;
+  // `validado` é por MARCA, não por modelo: a alavanca aparece creditada quando o
+  // walk-forward daquela marca deu peso a ela. Numa marca de peso 0 o normalizador
+  // devolve null, o ganho sai 0 e a etapa entra como não validada — que é a leitura
+  // honesta e é o que faz a tela distinguir "não medimos" de "medimos e deu zero".
   const decomposicao: EtapaDecomposicao[] = [
     { etapa: 'Perfil de hoje (ritmo atual)', receita: ritmoDeHoje, ganhoPct: 0, validado: true },
     {
       etapa: 'Redistribuir volume entre dias (I1 + α)',
       receita: soDia,
-      ganhoPct: Number((((soDia - ritmoDeHoje) / ritmoDeHoje) * 100).toFixed(1)),
+      ganhoPct: ganho(ritmoDeHoje, soDia),
       validado: true,
     },
     {
-      etapa: 'Rodízio de família (I2)',
-      receita: validado,
-      ganhoPct: Number((((validado - soDia) / soDia) * 100).toFixed(1)),
-      validado: true,
+      etapa: 'Família eleita no rodízio (I4 agregado)',
+      receita: ateFamilia,
+      ganhoPct: ganho(soDia, ateFamilia),
+      validado: familiaMedida,
     },
-    { etapa: 'Horas da grade', receita: validado, ganhoPct: 0, validado: false },
-    { etapa: 'Oferta eleita por dia', receita: validado, ganhoPct: 0, validado: false },
+    {
+      etapa: 'Espaçamento entre disparos da mesma família (I2)',
+      receita: ateGap,
+      ganhoPct: ganho(ateFamilia, ateGap),
+      validado: gapTemSinal,
+    },
+    {
+      etapa: 'Horário eleito dentro da grade (I3)',
+      receita: ateHora,
+      ganhoPct: ganho(ateGap, ateHora),
+      validado: temIndiceHora,
+    },
+    {
+      etapa: 'Oferta eleita dentro da família (I4)',
+      receita: validado,
+      ganhoPct: ganho(ateHora, validado),
+      validado: temIndiceOferta,
+    },
   ];
+
+  if (relaxouEspacamento) {
+    restricoesRelaxadas.push('S3: mínimo de 3h entre disparos do mesmo dia');
+  } else if (temIndiceHora) {
+    restricoesAplicadas.push('S3: mínimo de 3h entre disparos do mesmo dia');
+  }
+
+  // Qual alavanca esta MARCA de fato tem. Sem isto, uma marca cujo índice de hora
+  // não transferiu produz um plano visualmente idêntico ao de uma marca em que ele
+  // transferiu a 1,5 — e quem lê não tem como saber que ali o horário saiu da grade
+  // e não de medição. É a mesma regra da procedência do catálogo, aplicada a índice.
+  const inativas = [
+    gapTemSinal ? null : 'espaçamento entre disparos da mesma família (I2)',
+    temIndiceHora ? null : 'horário (I3)',
+    temIndiceOferta ? null : 'oferta (I4)',
+  ].filter((x): x is string => x !== null);
+  if (inativas.length > 0 && cfg.procedencia === 'dados') {
+    avisos.push(
+      `Nesta marca ${inativas.length === 1 ? 'a alavanca' : 'as alavancas'} ${inativas.join(', ')} ${inativas.length === 1 ? 'não sobreviveu' : 'não sobreviveram'} à validação fora da amostra: o padrão aprendido no treino não se repetiu no período de teste. ${inativas.length === 1 ? 'Ela entra' : 'Elas entram'} neutra${inativas.length === 1 ? '' : 's'} no plano, e a decisão correspondente vem da grade operacional e do rodízio, não de ganho medido. Isso é resultado do modelo, não pendência de dado.`,
+    );
+  }
 
   const fronteira: PontoFronteira[] = [-20, -10, 0, 10, 20].map((delta) => {
     const fator = 1 + delta / 100;
