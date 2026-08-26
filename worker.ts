@@ -2181,6 +2181,64 @@ export default {
       }
     }
 
+    // Modelo de segmentação — decide quais tiers recebem e-mail, em quais dias e turnos.
+    // Views vivem em `crm_modelo_seg` (dataset separado do modelo de ofertas). Só Barbours
+    // implementada — ver HANDOFF_CALENDARIO_APP.md.
+    if (url.pathname === '/api/calendario/segmentacao') {
+      const marca = (url.searchParams.get('marca') ?? 'Barbours').toLowerCase();
+      const cred = bqCredencial(env);
+      if (!cred) {
+        return json({ error: 'credencial do BigQuery não configurada no ambiente do Worker' }, 503);
+      }
+      try {
+        const DS_SEG = `${cred.projeto}.crm_modelo_seg`;
+        const [resumo, slots] = await Promise.all([
+          bqConsultar(env, `
+            SELECT celula, slots_passo1, slots_sugeridos, pessoas_semana,
+                   envios_semana_hoje, dose_media_hoje, indice_valor,
+                   pct_envios, pct_receita
+            FROM \`${DS_SEG}.v_celula_resumo\`
+            ORDER BY indice_valor DESC`),
+          bqConsultar(env, `
+            SELECT celula, dow_num, dow, turno, indice, rank_slot, envios
+            FROM \`${DS_SEG}.v_slot_celula\`
+            ORDER BY celula, rank_slot`),
+        ]);
+        return json({
+          status: 'success',
+          data: {
+            marca,
+            resumo: resumo.map((r: any) => ({
+              celula: String(r.celula),
+              slotsPasso1: Number(r.slots_passo1 ?? 0),
+              slotsSugeridos: Number(r.slots_sugeridos ?? 0),
+              pessoasSemana: Number(r.pessoas_semana ?? 0),
+              enviosSemanaHoje: Number(r.envios_semana_hoje ?? 0),
+              doseMediaHoje: bqNum(r.dose_media_hoje),
+              indiceValor: Number(r.indice_valor ?? 0),
+              pctEnvios: bqNum(r.pct_envios),
+              pctReceita: bqNum(r.pct_receita),
+            })),
+            slots: slots.map((s: any) => ({
+              celula: String(s.celula),
+              dowNum: Number(s.dow_num),
+              dow: String(s.dow),
+              turno: String(s.turno),
+              indice: Number(s.indice ?? 0),
+              rankSlot: Number(s.rank_slot),
+              envios: Number(s.envios ?? 0),
+            })),
+          },
+        });
+      } catch (err: any) {
+        console.error('[BigQuery] Erro ao carregar segmentacao:', err.message);
+        return json({
+          error: 'Modelo de segmentação indisponível — sem conexão com o BigQuery ou views ausentes.',
+          detalhe: err.message,
+        }, 503);
+      }
+    }
+
     if (url.pathname === '/api/calendario/explicar' && request.method === 'POST') {
       try {
         const body = await request.json() as any;

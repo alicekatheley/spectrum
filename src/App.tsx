@@ -14,7 +14,7 @@ import HistoryGallery from "./components/HistoryGallery";
 import PreviewModal from "./components/PreviewModal";
 import WeeklyPlanner from "./components/WeeklyPlanner";
 import Sidebar, { AppSection } from "./components/Sidebar";
-import CalendarioWorkspace from "./components/calendario/CalendarioWorkspace";
+import CalendarioSecao from "./components/calendario/CalendarioSecao";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot } from "lucide-react";
 import { loadGifshot } from "./utils/loadGifshot";
@@ -968,7 +968,7 @@ function AppInner() {
       <div className={`${section === 'calendarios' ? 'w-full' : 'max-w-7xl'} mx-auto flex flex-col gap-8`}>
 
         {section === 'calendarios' ? (
-          <CalendarioWorkspace
+          <CalendarioSecao
             userEmail={session?.user?.email}
             onLogout={() => supabase?.auth.signOut()}
           />

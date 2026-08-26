@@ -19,6 +19,9 @@ import { BigQuery } from "@google-cloud/bigquery";
 
 const PROJETO = process.env.BIGQUERY_PROJECT_ID ?? "gogroup-crm";
 const DATASET = `${PROJETO}.crm_modelo`;
+// Dataset do modelo de segmentação (calendário por célula: cli/lea × tier).
+// Só Barbours está implementado nele; ver HANDOFF_CALENDARIO_APP.md.
+const DATASET_SEG = `${PROJETO}.crm_modelo_seg`;
 
 export const bq: BigQuery | null = (() => {
   try {
@@ -254,6 +257,80 @@ export async function campanhasNaoClassificadas(
     WHERE nome IS NULL OR (${cfg.oferta_case}) = 'OUTROS'
     ORDER BY envios DESC
     LIMIT ${Math.max(1, Math.min(500, Math.trunc(limite)))}`);
+}
+
+// ─── Modelo de segmentação (crm_modelo_seg) ──────────────────────────────────
+// Views separadas do modelo de ofertas: respondem "para quem e quando", não
+// "o quê". Barbours é a única marca implementada — o handoff é explícito.
+
+export interface CelulaResumo {
+  celula: string;
+  slotsPasso1: number;
+  slotsSugeridos: number;
+  pessoasSemana: number;
+  enviosSemanaHoje: number;
+  doseMediaHoje: number | null;
+  indiceValor: number;
+  pctEnvios: number | null;
+  pctReceita: number | null;
+}
+
+export interface SlotCelula {
+  celula: string;
+  dowNum: number;      // 1=dom .. 7=sáb (convenção do BigQuery, MANTIDA aqui — a UI recebe crua)
+  dow: string;         // Sun..Sat
+  turno: string;       // 1_manha_8_12 | 2_tarde_12_19 | 3_noite_19_00
+  indice: number;
+  rankSlot: number;    // 1 = melhor slot daquela célula
+  envios: number;
+}
+
+export interface SegmentacaoCalendario {
+  marca: string;
+  resumo: CelulaResumo[];
+  slots: SlotCelula[];
+}
+
+export async function segmentacaoCalendario(marca: string): Promise<SegmentacaoCalendario> {
+  // As views hoje já filtram Barbours no SQL da view (marca única implementada).
+  // Manter o argumento como interface para o dia em que outra marca entrar sem
+  // reescrever o front — a normalização vai igual à do resto do módulo.
+  const [resumo, slots] = await Promise.all([
+    consultar(`
+      SELECT celula, slots_passo1, slots_sugeridos, pessoas_semana,
+             envios_semana_hoje, dose_media_hoje, indice_valor,
+             pct_envios, pct_receita
+      FROM \`${DATASET_SEG}.v_celula_resumo\`
+      ORDER BY indice_valor DESC`),
+    consultar(`
+      SELECT celula, dow_num, dow, turno, indice, rank_slot, envios
+      FROM \`${DATASET_SEG}.v_slot_celula\`
+      ORDER BY celula, rank_slot`),
+  ]);
+
+  return {
+    marca: marca.toLowerCase(),
+    resumo: resumo.map((r: any) => ({
+      celula: String(r.celula),
+      slotsPasso1: Number(r.slots_passo1 ?? 0),
+      slotsSugeridos: Number(r.slots_sugeridos ?? 0),
+      pessoasSemana: Number(r.pessoas_semana ?? 0),
+      enviosSemanaHoje: Number(r.envios_semana_hoje ?? 0),
+      doseMediaHoje: comoNumero(r.dose_media_hoje),
+      indiceValor: Number(r.indice_valor ?? 0),
+      pctEnvios: comoNumero(r.pct_envios),
+      pctReceita: comoNumero(r.pct_receita),
+    })),
+    slots: slots.map((s: any) => ({
+      celula: String(s.celula),
+      dowNum: Number(s.dow_num),
+      dow: String(s.dow),
+      turno: String(s.turno),
+      indice: Number(s.indice ?? 0),
+      rankSlot: Number(s.rank_slot),
+      envios: Number(s.envios ?? 0),
+    })),
+  };
 }
 
 /**

@@ -20,7 +20,7 @@ import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique 
 import { aiProxyConfigurado } from "./ai-proxy.ts";
 import {
   carregarContextoModelo, getContextoModelo, getContextoMarca, getStatusBigQuery,
-  campanhasNaoClassificadas,
+  campanhasNaoClassificadas, segmentacaoCalendario,
 } from "./bigquery.ts";
 import {
   generatePautaContent, generateVariationContent, generateGifAgentConcept, generateAbTestProposal,
@@ -983,6 +983,23 @@ app.get("/api/calendario/nao-classificadas", async (req, res) => {
     });
   } catch (err: any) {
     res.status(503).json({ error: err.message });
+  }
+});
+
+// Modelo de segmentação — decide quais tiers recebem e-mail, em quais dias e turnos,
+// e quantas vezes por semana. Diferente do gerador de ofertas (que decide "o quê"),
+// este responde "para quem e quando". Só Barbours implementada (ver HANDOFF_CALENDARIO_APP.md).
+app.get("/api/calendario/segmentacao", async (req, res) => {
+  const marca = typeof req.query.marca === "string" ? req.query.marca : "Barbours";
+  try {
+    const dados = await segmentacaoCalendario(marca);
+    res.json({ status: "success", data: dados });
+  } catch (err: any) {
+    console.error("[BigQuery] Erro ao carregar segmentacao:", err.message);
+    res.status(503).json({
+      error: "Modelo de segmentação indisponível — sem conexão com o BigQuery ou views ausentes.",
+      detalhe: err.message,
+    });
   }
 });
 
