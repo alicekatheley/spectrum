@@ -6,6 +6,7 @@ import { downloadFile, generatePautaBriefingText } from "../utils";
 import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont } from "../utils/composeFrame";
 import { loadGifshot } from "../utils/loadGifshot";
 import { TituloFontColorFields, SubtituloFontColorFields, BotaoFontColorFields } from "./EstiloTextoFields";
+import SeletorFramesGif, { getFramesExcluidosGif } from "./SeletorFramesGif";
 
 function SliderRow({
   label, value, min, max, step, unit, onChange,
@@ -115,20 +116,51 @@ export default function PreviewModal({
     setRawPreviewFailed(false);
   }, [activePreviewIndex, pauta.id]);
 
-  useEffect(() => {
-    setActivePreviewIndex(0);
-  }, [pauta.id]);
+  // Frames que entram no GIF final — o usuário pode excluir frames específicos (ex.: 2, 4 e 5
+  // de 10) na aba de edição. Fica salvo em inputOriginal.framesExcluidosGif (índice 0-based).
+  const framesArrayForGif = pauta.visual?.frames ?? [
+    pauta.visual?.frameInicial ?? '',
+    pauta.visual?.frameIntermediario ?? '',
+    pauta.visual?.frameFinal ?? '',
+  ].filter(Boolean);
+  const framesDisponiveisGif = framesArrayForGif
+    .map((_, i) => ({ index: i, src: frameImages[`frame_${i}`] }))
+    .filter((f): f is { index: number; src: string } => !!f.src);
+  const [framesExcluidosGif, setFramesExcluidosGif] = useState<number[]>(() => getFramesExcluidosGif(pauta));
+  const framesIncluidosGif = framesDisponiveisGif.filter((f) => !framesExcluidosGif.includes(f.index));
+  // Exclusão salva que não deixou nenhum frame gerado (ex.: frames regerados) → usa todos.
+  const framesNoGif = framesIncluidosGif.length > 0 ? framesIncluidosGif : framesDisponiveisGif;
+  const framesNoGifKey = framesNoGif.map((f) => f.index).join(',');
 
   useEffect(() => {
-    if (Object.keys(frameImages).length < 2) return;
+    setActivePreviewIndex(0);
+    setFramesExcluidosGif(getFramesExcluidosGif(pauta));
+  }, [pauta.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFramesExcluidosChange = (excluidos: number[]) => {
+    setFramesExcluidosGif(excluidos);
+    if (onUpdatePauta) {
+      onUpdatePauta({
+        ...pauta,
+        inputOriginal: {
+          ...(pauta as any).inputOriginal,
+          framesExcluidosGif: excluidos.length > 0 ? excluidos : undefined,
+        },
+      } as any);
+    }
+  };
+
+  // A prévia anima só pelos frames que vão pro GIF, pra mostrar o resultado real.
+  useEffect(() => {
+    const indices = framesNoGifKey ? framesNoGifKey.split(',').map(Number) : [];
+    if (indices.length === 0) return;
+    setActivePreviewIndex(prev => (indices.includes(prev) ? prev : indices[0]));
+    if (indices.length < 2) return;
     const iv = setInterval(() => {
-      setActivePreviewIndex(prev => {
-        const total = Object.keys(frameImages).length;
-        return (prev + 1) % total;
-      });
+      setActivePreviewIndex(prev => indices[(indices.indexOf(prev) + 1) % indices.length]);
     }, 700);
     return () => clearInterval(iv);
-  }, [Object.keys(frameImages).length]);
+  }, [framesNoGifKey]);
 
   const isApice = pauta.marca === 'Apice';
 
@@ -581,6 +613,7 @@ export default function PreviewModal({
             corBotaoEscolhida: corBotaoEscolhida || undefined,
             corTextoBotao: corTextoBotao || undefined,
             fonteBotao: fonteBotao || undefined,
+            framesExcluidosGif: framesExcluidosGif.length > 0 ? framesExcluidosGif : undefined,
           },
         } as any);
       }
@@ -610,23 +643,8 @@ export default function PreviewModal({
     downloadFile(`pauta_crm_${pauta.marca.toLowerCase()}_${idStr}.txt`, text);
   };
 
-  const framesArrayForGif = pauta.visual?.frames ?? [
-    pauta.visual?.frameInicial ?? '',
-    pauta.visual?.frameIntermediario ?? '',
-    pauta.visual?.frameFinal ?? '',
-  ].filter(Boolean);
-  const framesGeradosForGif = framesArrayForGif
-    .map((_, i) => frameImages[`frame_${i}`])
-    .filter(Boolean) as string[];
-
-  // Quantidade de frames a incluir no GIF final — permite baixar só os N primeiros
-  // frames em vez de exigir o conjunto completo.
-  const [gifFrameLimit, setGifFrameLimit] = useState<number | null>(null);
-  const gifFramesSelecionados = Math.max(2, Math.min(gifFrameLimit ?? framesGeradosForGif.length, framesGeradosForGif.length));
-
-  const downloadGifAnimado = async (frameCount?: number) => {
-    const count = Math.max(2, Math.min(frameCount ?? gifFramesSelecionados, framesGeradosForGif.length));
-    const framesParaGif = framesGeradosForGif.slice(0, count);
+  const downloadGifAnimado = async () => {
+    const framesParaGif = framesNoGif.map((f) => f.src);
     if (framesParaGif.length === 0) {
       alert('Aguarde os frames serem gerados antes de baixar o GIF.');
       return;
@@ -886,12 +904,13 @@ export default function PreviewModal({
                       </div>
                     </div>
                   )}
-                  {Object.keys(frameImages).length > 1 && (
+                  {framesNoGif.length > 1 && (
                     <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
-                      {Object.keys(frameImages).sort().map((key, i) => (
+                      {framesNoGif.map(({ index: i }) => (
                         <button
-                          key={key}
+                          key={i}
                           onClick={() => setActivePreviewIndex(i)}
+                          title={`Frame ${i + 1}`}
                           className={`w-2 h-2 rounded-full transition-all cursor-pointer ${
                             activePreviewIndex === i ? 'bg-white scale-125' : 'bg-white/40 hover:bg-white/70'
                           }`}
@@ -1245,6 +1264,22 @@ export default function PreviewModal({
                       />
                     </div>
 
+                    {/* Frames que entram no GIF final */}
+                    {framesDisponiveisGif.length > 1 && (
+                      <div className="mt-2 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3">
+                        <span className="text-[10px] uppercase font-extrabold tracking-widest text-indigo-300">
+                          Frames do GIF
+                        </span>
+                        <SeletorFramesGif
+                          frames={framesDisponiveisGif}
+                          excluidos={framesExcluidosGif}
+                          onChange={handleFramesExcluidosChange}
+                          aspectRatioCss={previewCssAspectRatio}
+                          tema="escuro"
+                        />
+                      </div>
+                    )}
+
                     <button
                       type="button"
                       onClick={handleReajustarCopy}
@@ -1301,29 +1336,13 @@ export default function PreviewModal({
                   Baixe a pauta de CRM para integrá-la às suas plataformas de envio de email ou encaminhe os briefings de layouts criados diretamente para sua equipe de design!
                 </p>
 
-                {framesGeradosForGif.length > 2 && (
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 mb-3">
-                    <span>Frames a incluir no GIF final</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setGifFrameLimit(Math.max(2, gifFramesSelecionados - 1))}
-                        disabled={gifFramesSelecionados <= 2}
-                        className="w-6 h-6 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                      >
-                        −
-                      </button>
-                      <span className="w-14 text-center font-mono text-slate-200">{gifFramesSelecionados} / {framesGeradosForGif.length}</span>
-                      <button
-                        type="button"
-                        onClick={() => setGifFrameLimit(Math.min(framesGeradosForGif.length, gifFramesSelecionados + 1))}
-                        disabled={gifFramesSelecionados >= framesGeradosForGif.length}
-                        className="w-6 h-6 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
+                {framesDisponiveisGif.length > 1 && framesNoGif.length < framesDisponiveisGif.length && (
+                  <p className="text-[11px] font-bold text-slate-400 mb-3">
+                    GIF sem os frames {framesDisponiveisGif.filter((f) => framesExcluidosGif.includes(f.index)).map((f) => f.index + 1).join(', ')}
+                    {activeTab !== 'edit' && (
+                      <> · <button type="button" onClick={() => setActiveTab('edit')} className="underline hover:text-slate-200 cursor-pointer">alterar</button></>
+                    )}
+                  </p>
                 )}
                 <div className="flex flex-col sm:flex-row gap-3">
                   {/* Botão de download do Briefing de texto */}
@@ -1345,7 +1364,7 @@ export default function PreviewModal({
                     }`}
                   >
                     <Download className="w-4 h-4" />
-                    Baixar GIF Animado{gifFramesSelecionados > 0 ? ` (${gifFramesSelecionados}${gifFramesSelecionados < framesGeradosForGif.length ? ` de ${framesGeradosForGif.length}` : ''} frames)` : ''}
+                    Baixar GIF Animado{framesNoGif.length > 0 ? ` (${framesNoGif.length}${framesNoGif.length < framesDisponiveisGif.length ? ` de ${framesDisponiveisGif.length}` : ''} frames)` : ''}
                   </button>
                 </div>
               </div>

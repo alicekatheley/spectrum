@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
 import GifViewer from "./GifViewer";
+import { getFramesExcluidosGif } from "./SeletorFramesGif";
 import { loadGifshot } from "../utils/loadGifshot";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
@@ -395,14 +396,15 @@ export default function ResultPauta({
     .filter(Boolean) as string[];
   const todosFramesProntos = framesGerados.length === framesArray.length && framesArray.length > 0;
 
-  // Quantidade de frames a incluir no GIF final — permite baixar só os N primeiros
-  // frames (ex: gostou até o 4º de 5) em vez de exigir o conjunto completo.
-  const [gifFrameLimit, setGifFrameLimit] = useState<number | null>(null);
-  const gifFramesSelecionados = Math.max(2, Math.min(gifFrameLimit ?? framesGerados.length, framesGerados.length));
+  // Frames excluídos do GIF final (escolhidos em "Reajustar Copy" → Frames do GIF).
+  const framesExcluidosGif = getFramesExcluidosGif(pauta);
+  const framesIncluidosGif = framesArray
+    .map((_, i) => (framesExcluidosGif.includes(i) ? undefined : frameImages[`frame_${i}`]))
+    .filter(Boolean) as string[];
+  const framesParaGif = framesIncluidosGif.length > 0 ? framesIncluidosGif : framesGerados;
+  const gifFramesSelecionados = framesParaGif.length;
 
-  const downloadGifAnimado = async (frameCount?: number) => {
-    const count = Math.max(2, Math.min(frameCount ?? gifFramesSelecionados, framesGerados.length));
-    const framesParaGif = framesGerados.slice(0, count);
+  const downloadGifAnimado = async () => {
     try {
       if (framesParaGif.length === 0) {
         alert('Aguarde os frames serem gerados antes de baixar o GIF.');
@@ -836,26 +838,18 @@ export default function ResultPauta({
             <div className="mt-4 flex flex-col gap-2">
               {framesGerados.length > 2 && (
                 <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
-                  <span>Frames a incluir no GIF final</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setGifFrameLimit(Math.max(2, gifFramesSelecionados - 1))}
-                      disabled={gifFramesSelecionados <= 2}
-                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                    >
-                      −
-                    </button>
-                    <span className="w-14 text-center font-mono text-slate-700">{gifFramesSelecionados} / {framesGerados.length}</span>
-                    <button
-                      type="button"
-                      onClick={() => setGifFrameLimit(Math.min(framesGerados.length, gifFramesSelecionados + 1))}
-                      disabled={gifFramesSelecionados >= framesGerados.length}
-                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                    >
-                      +
-                    </button>
-                  </div>
+                  <span>
+                    {gifFramesSelecionados < framesGerados.length
+                      ? `GIF sem os frames ${framesExcluidosGif.filter((i) => frameImages[`frame_${i}`]).map((i) => i + 1).join(', ')}`
+                      : 'Todos os frames no GIF'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenPreview(pauta, 'edit')}
+                    className="text-[10px] underline text-slate-500 hover:text-slate-700 cursor-pointer"
+                  >
+                    Escolher frames
+                  </button>
                 </div>
               )}
               <button
