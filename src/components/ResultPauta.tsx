@@ -1,12 +1,20 @@
 import { useState, useEffect, useRef } from "react";
-import { PautaGerada } from "../types";
+import { ContaInsider, PautaEnvioInsider, PautaGerada } from "../types";
 import BannerSimulador from "./BannerSimulador";
 import GifViewer from "./GifViewer";
+import { getFramesExcluidosGif } from "./SeletorFramesGif";
+import { TextoDestaque } from "./TextoDestaque";
+import { removerDestaque } from "../utils/destaque";
 import { loadGifshot } from "../utils/loadGifshot";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
-  HelpCircle, AlertTriangle, Sparkles, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image, Repeat, PenLine
+  HelpCircle, AlertTriangle, Sparkles, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image, Repeat, PenLine,
+  Send, CheckCircle2, ChevronDown
 } from "lucide-react";
+
+// Contas da Insider com acesso já configurado (chave em INSIDER_API_KEY_<MARCA>) — o envio
+// de uma pauta como campanha única é separado por conta, já que cada uma tem chave própria.
+const CONTAS_INSIDER: ContaInsider[] = ['Apice', 'Barbours', 'Rituaria', 'Lescent', 'Kokeshi', 'Gocase'];
 
 interface ResultPautaProps {
   pauta: PautaGerada;
@@ -23,6 +31,13 @@ interface ResultPautaProps {
   onFrameGenerated: (pautaId: string, frameName: string, imageData: string, publicUrl?: string) => void;
   onCanStartGenerating: (pautaId: string) => boolean;
   onFinishedGenerating: (pautaId: string) => void;
+  // Envia esta pauta pra Insider como campanha única (sem A/B), separado por marca de destino.
+  onEnviarInsider?: (
+    pauta: PautaGerada,
+    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string; utmCampaign?: string },
+  ) => void;
+  enviandoInsiderId?: string | null;
+  insiderEnvios?: PautaEnvioInsider[];
 }
 
 export default function ResultPauta({
@@ -39,6 +54,9 @@ export default function ResultPauta({
   onFrameGenerated,
   onCanStartGenerating,
   onFinishedGenerating,
+  onEnviarInsider,
+  enviandoInsiderId,
+  insiderEnvios = [],
 }: ResultPautaProps) {
   // Usa o aspect ratio gravado nesta pauta (o que foi usado pra gerar as imagens dela),
   // não o seletor global — que pode ter mudado desde a geração e faria o recompose/GIF
@@ -70,8 +88,14 @@ export default function ResultPauta({
   const [showDiscardReason, setShowDiscardReason] = useState(false);
   const [discardReason, setDiscardReason] = useState('');
 
+  // Envio pra Insider (campanha única) — form inline aberto por marca de destino escolhida.
+  const [insiderMarcaAberta, setInsiderMarcaAberta] = useState<ContaInsider | null>(null);
+  const [insiderForm, setInsiderForm] = useState<{ nomeCampanha: string; assunto: string; linkCampanha: string; utmCampaign: string }>({
+    nomeCampanha: '', assunto: pauta.copy?.assunto ?? '', linkCampanha: '', utmCampaign: '',
+  });
+
   const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(removerDestaque(text));
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 1500);
   };
@@ -116,8 +140,8 @@ export default function ResultPauta({
           recompensa: pauta.operacional.recompensaEscolhida ?? pauta.copy.subHeadlineBanner,
           referenciaImagem: referenciaImagem ?? undefined,
           referenciasImagem: referenciasImagem ?? [],
-          headline: pauta.copy.headlineBanner,
-          subheadline: pauta.copy.subHeadlineBanner,
+          headline: removerDestaque(pauta.copy.headlineBanner),
+          subheadline: removerDestaque(pauta.copy.subHeadlineBanner),
           cta: pauta.copy.ctaBotao,
           referenceFrameUrls: referenceFrameUrls ?? [],
           direcionamento: (pauta as any).inputOriginal?.direcionamento ?? '',
@@ -193,6 +217,7 @@ export default function ResultPauta({
               corSubheadline: inputOriginal?.corSubtitulo || estiloVisual?.corSubheadline,
               familiaFonteBotao: inputOriginal?.fonteBotao || estiloVisual?.familiaFonteBotao,
               corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
+              corDestaque: inputOriginal?.corDestaque || undefined,
               headlineTopPercent: inputOriginal?.headlineTopPercent,
               headlineSizePx: inputOriginal?.headlineSizePx,
               subheadlineTopPercent: inputOriginal?.subheadlineTopPercent,
@@ -364,10 +389,10 @@ export default function ResultPauta({
       ctx.fillStyle = '#FFFFFF';
       ctx.font = `bold ${Math.round(canvas.width * 0.07)}px serif`;
       ctx.textAlign = 'center';
-      ctx.fillText(pauta.copy.headlineBanner, canvas.width / 2, canvas.height * 0.14);
+      ctx.fillText(removerDestaque(pauta.copy.headlineBanner), canvas.width / 2, canvas.height * 0.14);
       ctx.font = `${Math.round(canvas.width * 0.038)}px sans-serif`;
       ctx.fillStyle = '#F0F0F0';
-      ctx.fillText(pauta.copy.subHeadlineBanner, canvas.width / 2, canvas.height * 0.22);
+      ctx.fillText(removerDestaque(pauta.copy.subHeadlineBanner), canvas.width / 2, canvas.height * 0.22);
       const btnW = canvas.width * 0.5;
       const btnH = canvas.height * 0.07;
       const btnX = (canvas.width - btnW) / 2;
@@ -395,14 +420,15 @@ export default function ResultPauta({
     .filter(Boolean) as string[];
   const todosFramesProntos = framesGerados.length === framesArray.length && framesArray.length > 0;
 
-  // Quantidade de frames a incluir no GIF final — permite baixar só os N primeiros
-  // frames (ex: gostou até o 4º de 5) em vez de exigir o conjunto completo.
-  const [gifFrameLimit, setGifFrameLimit] = useState<number | null>(null);
-  const gifFramesSelecionados = Math.max(2, Math.min(gifFrameLimit ?? framesGerados.length, framesGerados.length));
+  // Frames excluídos do GIF final (escolhidos em "Reajustar Copy" → Frames do GIF).
+  const framesExcluidosGif = getFramesExcluidosGif(pauta);
+  const framesIncluidosGif = framesArray
+    .map((_, i) => (framesExcluidosGif.includes(i) ? undefined : frameImages[`frame_${i}`]))
+    .filter(Boolean) as string[];
+  const framesParaGif = framesIncluidosGif.length > 0 ? framesIncluidosGif : framesGerados;
+  const gifFramesSelecionados = framesParaGif.length;
 
-  const downloadGifAnimado = async (frameCount?: number) => {
-    const count = Math.max(2, Math.min(frameCount ?? gifFramesSelecionados, framesGerados.length));
-    const framesParaGif = framesGerados.slice(0, count);
+  const downloadGifAnimado = async () => {
     try {
       if (framesParaGif.length === 0) {
         alert('Aguarde os frames serem gerados antes de baixar o GIF.');
@@ -430,9 +456,11 @@ export default function ResultPauta({
       const gifshot = await loadGifshot();
       const { resolveCanvasSize } = await import('../utils/composeFrame');
       const [rawW, rawH] = resolveCanvasSize(pautaAspectRatio);
-      const scale = 600 / Math.max(rawW, rawH);
-      const gifWidth = Math.round(rawW * scale);
-      const gifHeight = Math.round(rawH * scale);
+      // Sem downscale artificial — usa a resolução nativa do frame (já limitada a 1200px no
+      // lado maior por resolveCanvasSize). O cap fixo de 600px daqui cortava 25-50% da
+      // resolução do GIF final sem necessidade real de economia de tamanho de arquivo.
+      const gifWidth = rawW;
+      const gifHeight = rawH;
 
       gifshot.createGIF({
         images: framesBase64,
@@ -441,7 +469,11 @@ export default function ResultPauta({
         interval: 0.7,
         numFrames: framesBase64.length,
         frameDuration: 1,
-        sampleInterval: 10,
+        // sampleInterval baixo = amostragem densa de pixels ao treinar a paleta NeuQuant.
+        // Com 10 (default do gifshot), highlights pequenos/brilhantes ficam sub-representados
+        // na paleta e o quantizador "estoura" essas regiões pra branco puro, criando feixes/
+        // riscos de luz no GIF final — mesmo quando o frame original (PNG do PiApp) está limpo.
+        sampleInterval: 1,
         numWorkers: 2,
       }, (obj: any) => {
         if (!obj.error) {
@@ -454,7 +486,7 @@ export default function ResultPauta({
           // Fallback: baixar frames individuais
           framesBase64.forEach((src, i) => {
             const link = document.createElement('a');
-            link.download = `${pauta.marca}-frame-${i + 1}.png`;
+            link.download = `${pauta.marca}-frame-${i + 1}.${src.startsWith('data:image/webp') ? 'webp' : 'png'}`;
             link.href = src;
             link.click();
           });
@@ -566,36 +598,163 @@ export default function ResultPauta({
         )}
       </div>
 
-      <div className="flex gap-2 text-slate-700 flex-wrap mt-2.5">
+      <div className="grid grid-cols-2 gap-2 text-slate-700 mt-2.5">
         <button
           id={`btn-preview-modal-trigger-${pauta.id}`}
           onClick={() => onOpenPreview(pauta)}
-          className="bg-indigo-650 hover:bg-indigo-750 bg-indigo-600 text-white shadow-md shadow-indigo-600/10 px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all"
+          className="bg-indigo-650 hover:bg-indigo-750 bg-indigo-600 text-white shadow-md shadow-indigo-600/10 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer hover:-translate-y-0.5 transition-all text-center"
           title="Visualizar mockup e download da arte"
         >
-          <Eye className="w-4 h-4" />
+          <Eye className="w-4 h-4 shrink-0" />
           Visualizar Mockup
         </button>
 
         <button
           id={`btn-refazer-pauta-${pauta.id}`}
           onClick={() => onRefazer(pauta)}
-          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all text-center"
           title="Preenche o Modo B com tudo que gerou essa pauta, pra ajustar e gerar de novo"
         >
-          <Repeat className="w-4 h-4" />
+          <Repeat className="w-4 h-4 shrink-0" />
           Refazer Pauta
         </button>
 
         <button
           id={`btn-reajustar-copy-${pauta.id}`}
           onClick={() => onOpenPreview(pauta, 'edit')}
-          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+          className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all text-center"
           title="Editar título, subtítulo e botão e redesenhar a arte já gerada, sem chamar a IA de imagem de novo"
         >
-          <PenLine className="w-4 h-4" />
+          <PenLine className="w-4 h-4 shrink-0" />
           Reajustar Copy
         </button>
+
+        {onEnviarInsider && (
+          <div className="relative">
+            <button
+              id={`btn-enviar-insider-${pauta.id}`}
+              type="button"
+              onClick={() => setInsiderMarcaAberta(insiderMarcaAberta ? null : CONTAS_INSIDER[0])}
+              className="w-full bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all text-center"
+              title="Leva o conteúdo deste GIF pra Insider como campanha (sem comparação A/B), escolhendo a conta de destino"
+            >
+              <Send className="w-4 h-4" />
+              Enviar para Insider
+              {insiderEnvios.length > 0 && (
+                <span className="ml-0.5 text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">
+                  {insiderEnvios.length}
+                </span>
+              )}
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${insiderMarcaAberta ? 'rotate-180' : ''}`} />
+            </button>
+
+            {insiderMarcaAberta && (
+              <div className="absolute z-20 top-full right-0 mt-2 w-[min(20rem,90vw)] bg-white border border-slate-200 shadow-xl rounded-2xl p-4 flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Conta de destino na Insider
+                  </label>
+                  <select
+                    value={insiderMarcaAberta}
+                    onChange={(e) => setInsiderMarcaAberta(e.target.value as ContaInsider)}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-400"
+                  >
+                    {CONTAS_INSIDER.map((marca) => {
+                      const envio = insiderEnvios.find((e) => e.marca === marca);
+                      return (
+                        <option key={marca} value={marca}>
+                          {marca}{envio ? ' — já enviada' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {insiderEnvios.some((e) => e.marca === insiderMarcaAberta) && (
+                  <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-[11px] bg-emerald-50 px-3 py-2 border border-emerald-200 rounded-xl">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Já enviada (#{insiderEnvios.find((e) => e.marca === insiderMarcaAberta)?.insiderCampaignId}) — enviar de novo cria outra campanha lá
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Nome da campanha
+                  </label>
+                  <input
+                    type="text"
+                    value={insiderForm.nomeCampanha}
+                    onChange={(e) => setInsiderForm((f) => ({ ...f, nomeCampanha: e.target.value }))}
+                    placeholder={`pauta ${insiderMarcaAberta} ${pauta.operacional?.mecanicaEscolhida ?? 'gif'}`.slice(0, 40)}
+                    maxLength={40}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Assunto do e-mail
+                  </label>
+                  <input
+                    type="text"
+                    value={insiderForm.assunto}
+                    onChange={(e) => setInsiderForm((f) => ({ ...f, assunto: e.target.value }))}
+                    maxLength={200}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Link da campanha (imagem + "clicando aqui")
+                  </label>
+                  <input
+                    type="text"
+                    value={insiderForm.linkCampanha}
+                    onChange={(e) => setInsiderForm((f) => ({ ...f, linkCampanha: e.target.value }))}
+                    placeholder="https://..."
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    UTM Campaign
+                  </label>
+                  <input
+                    type="text"
+                    value={insiderForm.utmCampaign}
+                    onChange={(e) => setInsiderForm((f) => ({ ...f, utmCampaign: e.target.value }))}
+                    placeholder={insiderForm.nomeCampanha || `pauta ${insiderMarcaAberta} ${pauta.operacional?.mecanicaEscolhida ?? 'gif'}`.slice(0, 40)}
+                    maxLength={40}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-400"
+                  />
+                  <span className="text-[9px] text-slate-400">UTM Source e Medium vão fixos como "insider" e "newsletter". Se deixar em branco, usa o nome da campanha.</span>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={enviandoInsiderId === pauta.id}
+                  onClick={() => insiderMarcaAberta && onEnviarInsider(pauta, {
+                    destinoMarca: insiderMarcaAberta,
+                    linkCampanha: insiderForm.linkCampanha || undefined,
+                    assunto: insiderForm.assunto || undefined,
+                    nomeCampanha: insiderForm.nomeCampanha || undefined,
+                    utmCampaign: insiderForm.utmCampaign || undefined,
+                  })}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {enviandoInsiderId === pauta.id
+                    ? 'Enviando...'
+                    : insiderEnvios.some((e) => e.marca === insiderMarcaAberta)
+                      ? `Reenviar pra Insider da ${insiderMarcaAberta} (nova campanha)`
+                      : `Enviar para Insider da ${insiderMarcaAberta}`}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
@@ -723,7 +882,7 @@ export default function ResultPauta({
                 <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Headline do Banner</span>
                 <div className="flex justify-between items-start gap-4 p-2 bg-white rounded-xl border border-slate-150">
                   <p className={`text-sm font-bold uppercase ${isApice ? 'font-serif italic' : ''}`} style={{ color: isApice ? '#52704f' : '#BF0F26' }}>
-                    {pauta.copy.headlineBanner}
+                    <TextoDestaque texto={pauta.copy.headlineBanner} corDestaque={(pauta as any).inputOriginal?.corDestaque} />
                   </p>
                   <button
                     id={`btn-copy-headline-${pauta.id}`}
@@ -741,7 +900,7 @@ export default function ResultPauta({
                 <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sub-Headline do Banner</span>
                 <div className="flex justify-between items-start gap-4 p-2 bg-white rounded-xl border border-slate-150">
                   <p className="text-xs font-medium text-slate-700">
-                    {pauta.copy.subHeadlineBanner}
+                    <TextoDestaque texto={pauta.copy.subHeadlineBanner} corDestaque={(pauta as any).inputOriginal?.corDestaque} />
                   </p>
                   <button
                     id={`btn-copy-subheadline-${pauta.id}`}
@@ -836,26 +995,18 @@ export default function ResultPauta({
             <div className="mt-4 flex flex-col gap-2">
               {framesGerados.length > 2 && (
                 <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
-                  <span>Frames a incluir no GIF final</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setGifFrameLimit(Math.max(2, gifFramesSelecionados - 1))}
-                      disabled={gifFramesSelecionados <= 2}
-                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                    >
-                      −
-                    </button>
-                    <span className="w-14 text-center font-mono text-slate-700">{gifFramesSelecionados} / {framesGerados.length}</span>
-                    <button
-                      type="button"
-                      onClick={() => setGifFrameLimit(Math.min(framesGerados.length, gifFramesSelecionados + 1))}
-                      disabled={gifFramesSelecionados >= framesGerados.length}
-                      className="w-6 h-6 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer"
-                    >
-                      +
-                    </button>
-                  </div>
+                  <span>
+                    {gifFramesSelecionados < framesGerados.length
+                      ? `GIF sem os frames ${framesExcluidosGif.filter((i) => frameImages[`frame_${i}`]).map((i) => i + 1).join(', ')}`
+                      : 'Todos os frames no GIF'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenPreview(pauta, 'edit')}
+                    className="text-[10px] underline text-slate-500 hover:text-slate-700 cursor-pointer"
+                  >
+                    Escolher frames
+                  </button>
                 </div>
               )}
               <button
@@ -1076,6 +1227,16 @@ export default function ResultPauta({
                               Original
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => generateFrameImage(i, i > 0 ? Array.from(new Set([rawFrameImages['frame_0'], rawFrameImages[`frame_${i - 1}`]].filter(Boolean))) : undefined)}
+                            disabled={generatingFrame !== null || generatingGif}
+                            className="text-[9px] font-bold flex items-center gap-0.5 text-slate-500 hover:text-slate-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Gera este frame de novo do zero, seguindo o mesmo briefing original (mecânica, headline, paleta) — sem instrução extra"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${isRegenerating ? 'animate-spin' : ''}`} />
+                            Atualizar
+                          </button>
                           <button
                             type="button"
                             onClick={() => setFrameAdjustOpenFor(isAdjustOpen ? null : frameName)}

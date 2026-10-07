@@ -1,4 +1,5 @@
 import { PautaGerada } from "./types";
+import { removerDestaque } from "./utils/destaque";
 
 export function modoLabel(modo: PautaGerada['modo']): string {
   if (modo === 'A') return 'Descoberta Livre';
@@ -45,10 +46,10 @@ ${pauta.copy.assunto}
 ${pauta.copy.preHeader}
 
 [HEADLINE DO BANNER (MECÂNICA)]
-${pauta.copy.headlineBanner}
+${removerDestaque(pauta.copy.headlineBanner)}
 
 [SUB-HEADLINE DO BANNER]
-${pauta.copy.subHeadlineBanner}
+${removerDestaque(pauta.copy.subHeadlineBanner)}
 
 [BOTÃO CTA DO BANNER]
 ${pauta.copy.ctaBotao}
@@ -401,8 +402,8 @@ export function generateInteractiveHtmlBanner(pauta: PautaGerada): string {
       <div class="banner-container">
         
         <div>
-          <h2 class="banner-headline">${pauta.copy.headlineBanner}</h2>
-          <p class="banner-subheadline">${pauta.copy.subHeadlineBanner}</p>
+          <h2 class="banner-headline">${removerDestaque(pauta.copy.headlineBanner)}</h2>
+          <p class="banner-subheadline">${removerDestaque(pauta.copy.subHeadlineBanner)}</p>
         </div>
 
         <div class="gift-visual-box">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { PautaGerada } from "../types";
 import { TrendingUp, Trash, ListFilter, Download, Calendar, List, Search, X } from "lucide-react";
 import { downloadFile, modoLabel } from "../utils";
+import { removerDestaque } from "../utils/destaque";
 
 interface HistoryListProps {
   history: PautaGerada[];
@@ -89,8 +90,8 @@ export default function HistoryList({
       p.operacional.horarioRecomendado,
       p.copy.assunto.replace(/"/g, '""'),
       p.copy.preHeader.replace(/"/g, '""'),
-      p.copy.headlineBanner.replace(/"/g, '""'),
-      p.copy.subHeadlineBanner.replace(/"/g, '""'),
+      removerDestaque(p.copy.headlineBanner).replace(/"/g, '""'),
+      removerDestaque(p.copy.subHeadlineBanner).replace(/"/g, '""'),
       p.copy.ctaBotao.replace(/"/g, '""'),
       p.operacional.mecanicaEscolhida.replace(/"/g, '""'),
       p.operacional.recompensaEscolhida.replace(/"/g, '""'),

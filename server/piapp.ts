@@ -127,6 +127,48 @@ export async function generateImageViaPiApp(
   throw new Error('Timeout: geração de imagem no PiApp excedeu 90 segundos');
 }
 
+// Versão "dispare e consulte depois" de generateImageViaPiApp — existe pro Modo D (editar frame
+// externo) porque bloquear uma única requisição HTTP por até 150s pra um edit demorado do PiApp
+// estourava o timeout do gateway do GoDeploy, que devolve uma página de erro HTML (não JSON) —
+// o front então quebrava tentando fazer JSON.parse nela. Com isso, cada requisição do navegador
+// fica rápida (só dispara ou só consulta status uma vez); quem espera é o cliente, com polling.
+export async function iniciarGeracaoImagemViaPiApp(
+  prompt: string,
+  aspectRatio: string,
+  model: string = DEFAULT_IMAGE_MODEL,
+  referenceImageUrls?: string[],
+): Promise<string> {
+  const genArgs: Record<string, any> = { prompt, model, aspect_ratio: aspectRatio, quality: 'standard' };
+  if (referenceImageUrls && referenceImageUrls.length > 0) {
+    genArgs.reference_image_urls = referenceImageUrls;
+  }
+  const genResp = await callPiAppMCP('tools/call', { name: 'generate_image', arguments: genArgs });
+  const genData = JSON.parse(genResp.result?.content?.[0]?.text ?? '{}');
+  const jobId: string = genData.job_id;
+  if (!jobId) throw new Error('PiApp não retornou job_id');
+  return jobId;
+}
+
+export type JobImagemStatus =
+  | { done: false }
+  | { done: true; imageBytes: string; mimeType: string };
+
+export async function verificarJobImagemViaPiApp(jobId: string): Promise<JobImagemStatus> {
+  const checkResp = await callPiAppMCP('tools/call', { name: 'check_jobs', arguments: { job_ids: [jobId] } });
+  const checkData = JSON.parse(checkResp.result?.content?.[0]?.text ?? '{}');
+  if (!checkData.all_done) return { done: false };
+
+  const job = checkData.jobs?.[0];
+  if (!job || job.status === 'error') throw new Error(job?.error ?? 'Geração de imagem falhou no PiApp');
+
+  const imgResp = await fetch(job.output_url);
+  if (!imgResp.ok) throw new Error(`Falha ao baixar imagem: ${imgResp.status}`);
+  const buffer = await imgResp.arrayBuffer();
+  const mimeType = imgResp.headers.get('content-type') ?? 'image/png';
+  const imageBytes = Buffer.from(buffer).toString('base64');
+  return { done: true, imageBytes, mimeType };
+}
+
 // Returns brand context for PiApp prompt — uses live crm_ai data when loaded, falls back to hardcoded
 export function getBrandDna(marca: string) {
   const fallback = BRAND_DNA_FALLBACK[marca];

@@ -2,6 +2,7 @@ import { useState, useEffect, type CSSProperties } from "react";
 import { Brand } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Play, Square } from "lucide-react";
+import { TextoDestaque } from "./TextoDestaque";
 
 type MecanicaType = 'presente' | 'caixa' | 'carta' | 'adesivo' | 'postit' | 'fio' | 'velha' | 'papel' | 'balao' | 'cupom' | 'generico';
 type FrameType = 'inicial' | 'intermediario' | 'final';
@@ -810,15 +811,15 @@ export default function BannerSimulador({
             <div className="w-full flex flex-col items-center text-center z-10">
               {isApice ? (
                 <h3 className="font-serif-brand italic text-2xl font-extrabold leading-tight max-w-[280px] drop-shadow-sm" style={{ color: headlineColor }}>
-                  {headline || 'Abra o presente'}
+                  <TextoDestaque texto={headline || 'Abra o presente'} />
                 </h3>
               ) : (
                 <h3 className="font-sans font-black uppercase text-2xl tracking-tight leading-none max-w-[280px] drop-shadow" style={{ color: headlineColor }}>
-                  {(headline || 'Abra o presente').toUpperCase()}
+                  <TextoDestaque texto={(headline || 'Abra o presente').toUpperCase()} />
                 </h3>
               )}
               <p className="text-[10px] font-bold uppercase tracking-wider max-w-[290px] leading-tight mt-1.5" style={{ color: subColor }}>
-                {subHeadline || ''}
+                <TextoDestaque texto={subHeadline || ''} />
               </p>
             </div>
 

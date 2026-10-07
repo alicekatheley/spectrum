@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ContaInsider, PautaGerada, TesteAbProposta } from "../types";
+import { ConteudoGifBusca } from "../lib/conteudos-service";
 import HistoryGallery from "./HistoryGallery";
 import TesteAbCard from "./TesteAbCard";
 import GifViewer from "./GifViewer";
@@ -17,13 +18,15 @@ interface ModoCPanelProps {
   agentePautas: PautaGerada[];
   allFrameImages: Record<string, Record<string, string>>;
   onOpenPautaDetail: (id: string) => void;
+  onEditarCopyA: (pauta: PautaGerada) => void;
   testesAb: TesteAbProposta[];
   onAceitarAb: (proposta: TesteAbProposta) => void;
   onRejeitarAb: (proposta: TesteAbProposta) => void;
+  onSelecionarVarianteBManual: (proposta: TesteAbProposta, conteudo: ConteudoGifBusca) => void;
   regenerandoAbId: string | null;
   onEnviarInsider: (
     proposta: TesteAbProposta,
-    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string },
+    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string; utmCampaign?: string },
   ) => void;
   enviandoInsiderId: string | null;
   onDownloadGif?: (pauta: PautaGerada) => void;
@@ -34,6 +37,7 @@ interface EnvioInsiderForm {
   linkCampanha: string;
   assunto: string;
   nomeCampanha: string;
+  utmCampaign: string;
 }
 
 // Chave do form/estado de expansão — um envio é por (proposta, marca de destino), já que a
@@ -136,7 +140,7 @@ function TimeRangeFilter({
 }
 
 export default function ModoCPanel({
-  agentePautas, allFrameImages, onOpenPautaDetail, testesAb, onAceitarAb, onRejeitarAb, regenerandoAbId,
+  agentePautas, allFrameImages, onOpenPautaDetail, onEditarCopyA, testesAb, onAceitarAb, onRejeitarAb, onSelecionarVarianteBManual, regenerandoAbId,
   onEnviarInsider, enviandoInsiderId, onDownloadGif, baixandoGifId,
 }: ModoCPanelProps) {
   const [step, setStep] = useState<ModoCStep>('passo1');
@@ -152,6 +156,7 @@ export default function ModoCPanel({
       linkCampanha: '',
       assunto: pautaA?.copy?.assunto ?? '',
       nomeCampanha: '',
+      utmCampaign: '',
     };
   const setForm = (propostaId: string, marca: ContaInsider, patch: Partial<EnvioInsiderForm>, base: EnvioInsiderForm) =>
     setFormPorEnvio((prev) => ({ ...prev, [envioKey(propostaId, marca)]: { ...base, ...patch } }));
@@ -169,7 +174,7 @@ export default function ModoCPanel({
       <div className="bg-[var(--shell-panel-soft)] border border-[var(--shell-border)] rounded-3xl p-6 flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <Bot className="w-5 h-5 text-indigo-400" />
-          <h2 className="text-base font-bold text-[var(--shell-text)] uppercase tracking-wider">Modo C: Agente Inteligente</h2>
+          <h2 className="text-base font-bold text-[var(--shell-text)] uppercase tracking-wider">Agente Inteligente</h2>
         </div>
         <p className="text-sm text-[var(--shell-text-muted)] leading-relaxed max-w-3xl">
           Todos os dias o agente sobe até 5 novos conceitos de GIF sozinho, com base no que já funcionou historicamente e no que já foi aprovado/reprovado aqui. Este histórico não se mistura com o Histórico de Pautas geral.
@@ -405,12 +410,27 @@ export default function ModoCPanel({
                                     className="bg-[var(--shell-panel)] border border-[var(--shell-border)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--shell-text)] focus:outline-none focus:border-indigo-400"
                                   />
                                 </div>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--shell-text-muted)]">
+                                    UTM Campaign
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={form.utmCampaign}
+                                    onChange={(e) => setForm(proposta.id, marca, { utmCampaign: e.target.value }, form)}
+                                    placeholder={form.nomeCampanha || `agente ${marca} ${pautaA?.operacional?.mecanicaEscolhida ?? 'teste'}`.slice(0, 40)}
+                                    maxLength={40}
+                                    className="bg-[var(--shell-panel)] border border-[var(--shell-border)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--shell-text)] focus:outline-none focus:border-indigo-400"
+                                  />
+                                  <span className="text-[9px] text-[var(--shell-text-muted)]">UTM Source e Medium vão fixos como "insider" e "newsletter". Se deixar em branco, usa o nome da campanha.</span>
+                                </div>
                                 <button
                                   onClick={() => onEnviarInsider(proposta, {
                                     destinoMarca: marca,
                                     linkCampanha: form.linkCampanha || undefined,
                                     assunto: form.assunto || undefined,
                                     nomeCampanha: form.nomeCampanha || undefined,
+                                    utmCampaign: form.utmCampaign || undefined,
                                   })}
                                   disabled={enviandoInsiderId === proposta.id}
                                   className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all self-start"
@@ -457,6 +477,10 @@ export default function ModoCPanel({
                 frameImagesA={allFrameImages[openAbPautaId] ?? {}}
                 onAceitar={onAceitarAb}
                 onRejeitar={onRejeitarAb}
+                onSelecionarVarianteBManual={onSelecionarVarianteBManual}
+                onEditarCopyA={onEditarCopyA}
+                onDownloadGifA={onDownloadGif}
+                baixandoGifA={pautaAbAberta ? baixandoGifId === pautaAbAberta.id : false}
                 regenerando={regenerandoAbId === abAberta.id}
               />
             ) : (

@@ -1,3 +1,5 @@
+import { parseDestaque, ESCALA_DESTAQUE, COR_DESTAQUE_PADRAO, temDestaque, type SegmentoDestaque } from './destaque';
+
 const RATIO_DIMENSIONS: Record<string, [number, number]> = {
   '1:1':  [800, 800],
   '3:4':  [800, 1067],
@@ -51,6 +53,8 @@ export interface ComposeFrameOptions {
     familiaFonte?: string;
     familiaFonteSubheadline?: string;
     familiaFonteBotao?: string;
+    // Cor dos trechos marcados com ~texto~ (ver utils/destaque.ts).
+    corDestaque?: string;
     // Posição/tamanho manuais — em % do canvas (0-100) ou px de fonte. Quando ausentes,
     // usa o layout automático padrão (headline no topo, sub logo abaixo, botão no rodapé).
     headlineTopPercent?: number;
@@ -249,6 +253,9 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
   const familiaFonte = await loadFont(familiaFonteRaw, pesoFonte);
   const familiaFonteSub = await loadFont(familiaFonteSubRaw, '600');
   const familiaFonteBotao = await loadFont(familiaFonteBotaoRaw, '800');
+  // Trechos *negrito* do sub-headline usam peso 900 — carregar antes pra não cair no fallback.
+  if (temDestaque(opts.subheadline)) await loadFont(familiaFonteSubRaw, '900');
+  const corDestaque = ev.corDestaque || COR_DESTAQUE_PADRAO;
 
   console.log('[composeFrame] Estilo aplicado:', {
     familiaFonte: familiaFonteRaw,
@@ -283,20 +290,84 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem
       // só da sombra (shadowColor/shadowBlur) aplicada em cada elemento abaixo.
 
-      // Helper: wrap com font-size adaptativo
-      const wrap = (text: string, maxW: number, fontSpec: string): string[] => {
-        ctx.font = fontSpec;
-        const words = text.split(' ');
-        const lines: string[] = [];
-        let cur = '';
-        for (const w of words) {
-          const test = cur ? `${cur} ${w}` : w;
-          if (ctx.measureText(test).width > maxW && cur) {
-            lines.push(cur); cur = w;
-          } else cur = test;
+      // Texto rico: cada linha é uma lista de palavras, cada palavra uma lista de trechos com
+      // estilo próprio (negrito/maior/cor — ver utils/destaque.ts). Sem marcadores, cai no mesmo
+      // layout de antes: um trecho por palavra, escala 1, linha centralizada.
+      type Palavra = SegmentoDestaque[];
+      interface Linha { palavras: Palavra[]; largura: number; escala: number }
+
+      const palavrasDe = (text: string): Palavra[] => {
+        const palavras: Palavra[] = [];
+        let atual: Palavra = [];
+        for (const seg of parseDestaque(text)) {
+          const partes = seg.texto.split(' ');
+          partes.forEach((parte, i) => {
+            if (i > 0) { if (atual.length) palavras.push(atual); atual = []; }
+            if (parte) atual.push({ ...seg, texto: parte });
+          });
         }
-        if (cur) lines.push(cur);
-        return lines;
+        if (atual.length) palavras.push(atual);
+        return palavras;
+      };
+
+      const fonteDo = (seg: SegmentoDestaque, size: number, familia: string, peso: string) =>
+        `${seg.negrito ? '900' : peso} ${Math.round(size * (seg.maior ? ESCALA_DESTAQUE : 1))}px ${familia}`;
+
+      const larguraPalavra = (p: Palavra, size: number, familia: string, peso: string) =>
+        p.reduce((acc, seg) => { ctx.font = fonteDo(seg, size, familia, peso); return acc + ctx.measureText(seg.texto).width; }, 0);
+
+      const escalaPalavra = (p: Palavra) => (p.some((s) => s.maior) ? ESCALA_DESTAQUE : 1);
+
+      const wrap = (text: string, maxW: number, size: number, familia: string, peso: string): Linha[] => {
+        ctx.font = `${peso} ${size}px ${familia}`;
+        const espaco = ctx.measureText(' ').width;
+        const linhas: Linha[] = [];
+        let cur: Linha | null = null;
+        for (const p of palavrasDe(text)) {
+          const w = larguraPalavra(p, size, familia, peso);
+          if (cur && cur.largura + espaco + w > maxW) { linhas.push(cur); cur = null; }
+          if (!cur) cur = { palavras: [p], largura: w, escala: escalaPalavra(p) };
+          else { cur.palavras.push(p); cur.largura += espaco + w; cur.escala = Math.max(cur.escala, escalaPalavra(p)); }
+        }
+        if (cur) linhas.push(cur);
+        return linhas;
+      };
+
+      // Altura do bloco: 1ª linha ocupa size×escala, cada linha seguinte soma o entrelinha dela.
+      const alturaBloco = (linhas: Linha[], size: number, fator: number) =>
+        linhas.reduce((acc, l, i) => acc + (i === 0 ? size * l.escala : size * fator * l.escala), 0);
+
+      // Desenha as linhas a partir do topo e devolve o baseline da última.
+      const desenhar = (
+        linhas: Linha[], top: number, size: number, fator: number,
+        familia: string, peso: string, cor: string,
+      ): number => {
+        ctx.font = `${peso} ${size}px ${familia}`;
+        const espaco = ctx.measureText(' ').width;
+        ctx.textAlign = 'left';
+        let y = top;
+        linhas.forEach((linha, i) => {
+          y += i === 0 ? size * linha.escala : size * fator * linha.escala;
+          let x = WIDTH / 2 - linha.largura / 2;
+          linha.palavras.forEach((p, j) => {
+            if (j > 0) x += espaco;
+            for (const seg of p) {
+              ctx.font = fonteDo(seg, size, familia, peso);
+              ctx.fillStyle = seg.cor ? corDestaque : cor;
+              ctx.fillText(seg.texto, x, y);
+              // Headline já sai em peso 900: negrito ali só aparece engrossando o traço.
+              if (seg.negrito && Number(peso) >= 800) {
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.lineWidth = size * (seg.maior ? ESCALA_DESTAQUE : 1) * 0.045;
+                ctx.lineJoin = 'round';
+                ctx.strokeText(seg.texto, x, y);
+              }
+              x += ctx.measureText(seg.texto).width;
+            }
+          });
+        });
+        ctx.textAlign = 'center';
+        return y;
       };
 
       // ZONA DE TEXTO: headline + sub agrupados no topo, máximo 32%
@@ -306,52 +377,31 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
 
       let hSize = headlineSizeBase;
       let sSize = resolveSubheadlineSizePx(hSize, ev.subheadlineSizePx);
-      let hLines: string[] = [];
-      let sLines: string[] = [];
+      let hLines: Linha[] = [];
+      let sLines: Linha[] = [];
 
       if (tamanhoManual) {
         // Tamanho escolhido manualmente — só quebra linha, não encolhe pra caber na zona.
-        hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
-        sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
+        hLines = wrap(headline, maxW, hSize, familiaFonte, pesoFonte);
+        sLines = wrap(subheadline, maxW * 0.86, sSize, familiaFonteSub, '600');
       } else {
         for (let attempt = 0; attempt < 30; attempt++) {
-          hLines = wrap(headline, maxW, `${pesoFonte} ${hSize}px ${familiaFonte}`);
-          sLines = wrap(subheadline, maxW * 0.86, `600 ${sSize}px ${familiaFonteSub}`);
-          // Cálculo CORRETO: sem linha extra no final
-          const hBlockH = (hLines.length - 1) * (hSize * 1.18) + hSize;
-          const sBlockH = (sLines.length - 1) * (sSize * 1.25) + sSize;
-          const totalH = hBlockH + 12 + sBlockH;
+          hLines = wrap(headline, maxW, hSize, familiaFonte, pesoFonte);
+          sLines = wrap(subheadline, maxW * 0.86, sSize, familiaFonteSub, '600');
+          const totalH = alturaBloco(hLines, hSize, 1.18) + 12 + alturaBloco(sLines, sSize, 1.25);
           if (ZONA_TOP_PX + totalH <= ZONA_MAX_PX) break;
           hSize = Math.max(hSize - 2, 22);
           sSize = Math.max(Math.round(hSize * 0.44), 13);
         }
       }
 
-      const hLineH = hSize * 1.18;
-      const sLineH = sSize * 1.25;
-
       // 4. Headline
-      ctx.textAlign = 'center';
-      ctx.fillStyle = corTexto;
-
-      let hY = ZONA_TOP_PX + hSize;
-      hLines.forEach((line, i) => {
-        ctx.font = `${pesoFonte} ${hSize}px ${familiaFonte}`;
-        ctx.fillText(line, WIDTH / 2, hY);
-        if (i < hLines.length - 1) hY += hLineH;
-      });
+      const hY = desenhar(hLines, ZONA_TOP_PX, hSize, 1.18, familiaFonte, pesoFonte, corTexto);
 
       // 5. Sub-headline — por padrão 12px abaixo da ÚLTIMA linha do headline,
       // ou em posição própria se subheadlineTopPercent for definido manualmente.
-      ctx.fillStyle = corSubheadline;
-      let sY = ev.subheadlineTopPercent != null
-        ? HEIGHT * (ev.subheadlineTopPercent / 100) + sSize
-        : hY + 12 + sSize;
-      sLines.forEach((line, i) => {
-        ctx.font = `600 ${sSize}px ${familiaFonteSub}`;
-        ctx.fillText(line, WIDTH / 2, sY);
-        if (i < sLines.length - 1) sY += sLineH;
-      });
+      const sTop = ev.subheadlineTopPercent != null ? HEIGHT * (ev.subheadlineTopPercent / 100) : hY + 12;
+      desenhar(sLines, sTop, sSize, 1.25, familiaFonteSub, '600', corSubheadline);
 
       // 6. Botão CTA
       ctx.shadowBlur = 0;
@@ -394,7 +444,9 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       ctx.shadowOffsetY = 0;
       ctx.fillText(cta.toUpperCase(), WIDTH / 2, btnY + btnH * 0.665);
 
-      resolve(canvas.toDataURL('image/png'));
+      // WebP em vez de PNG: o frame composto vai pro Storage via /api/save-frame e em PNG
+      // cada um ocupava ~1,2 MB — o bucket estourou a cota de 1 GB do plano Free do Supabase.
+      resolve(canvas.toDataURL('image/webp', 0.9));
     };
     img.onerror = () => reject(new Error('Falha ao carregar imagem'));
     img.src = imageDataUrl;

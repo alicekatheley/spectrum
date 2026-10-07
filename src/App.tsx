@@ -1,23 +1,25 @@
 import { useState, useEffect, useRef } from "react";
-import { Brand, ContaInsider, PautaGerada, InputModoA, InputModoB, TesteAbProposta } from "./types";
-import { getPautas, upsertPautas, clearPautas } from "./lib/pautas-service";
+import { Brand, ContaInsider, PautaGerada, PautaEnvioInsider, InputModoB, TesteAbProposta } from "./types";
+import { ConteudoGifBusca } from "./lib/conteudos-service";
+import { getPautas, upsertPautas, clearPautas, getPautaEnviosInsider } from "./lib/pautas-service";
 import { supabase, isEmailAllowed } from "./lib/supabase";
 import LoginPage from "./components/LoginPage";
 import Header from "./components/Header";
-import FormModoA from "./components/FormModoA";
 import FormModoB from "./components/FormModoB";
 import ResultPauta from "./components/ResultPauta";
 import { DEFAULT_IMAGE_MODEL } from "./components/ImageModelSelector";
 import HistoryList from "./components/HistoryList";
 import ModoCPanel from "./components/ModoCPanel";
+import ModoDPanel from "./components/ModoDPanel";
 import HistoryGallery from "./components/HistoryGallery";
 import PreviewModal from "./components/PreviewModal";
 import WeeklyPlanner from "./components/WeeklyPlanner";
 import Sidebar, { AppSection } from "./components/Sidebar";
 import CalendarioWorkspace from "./components/calendario/CalendarioWorkspace";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
-import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot } from "lucide-react";
+import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot, ImagePlus } from "lucide-react";
 import { loadGifshot } from "./utils/loadGifshot";
+import { removerDestaque, temDestaque } from "./utils/destaque";
 
 export default function App() {
   return (
@@ -36,8 +38,10 @@ function AppInner() {
 
   const [section, setSection] = useState<AppSection>('conteudos');
   const [currentBrand, setCurrentBrand] = useState<Brand>('Apice');
-  const [currentMode, setCurrentMode] = useState<'A' | 'B'>('A');
-  const [mainTab, setMainTab] = useState<'geracao' | 'historico' | 'agente'>('geracao');
+  const [mainTab, setMainTab] = useState<'geracao' | 'historico' | 'agente' | 'editor-gif'>('geracao');
+  // Uma vez visitado, o Modo D fica sempre montado (só escondido via CSS) — ver nota junto ao
+  // uso mais abaixo, no render.
+  const [modoDVisitado, setModoDVisitado] = useState(false);
   const [history, setHistory] = useState<PautaGerada[]>([]);
   const [loading, setLoading] = useState(false);
   const [activePreviewPauta, setActivePreviewPauta] = useState<PautaGerada | null>(null);
@@ -279,6 +283,16 @@ function AppInner() {
     return () => clearInterval(interval);
   }, []);
 
+  // Envios de pautas (campanha única, sem A/B) pra Insider — uma por (pauta, marca de destino).
+  const [pautaInsiderEnvios, setPautaInsiderEnvios] = useState<Record<string, PautaEnvioInsider[]>>({});
+  const fetchPautaInsiderEnvios = async () => {
+    const envios = await getPautaEnviosInsider();
+    if (envios) setPautaInsiderEnvios(envios);
+  };
+  useEffect(() => {
+    fetchPautaInsiderEnvios();
+  }, []);
+
   // Aprovar a comparação do teste A/B (o usuário concorda com o conteúdo histórico escolhido
   // pelo agente) — é só um update de status, sem chamada de IA, então faz direto no Supabase.
   const handleAceitarAb = async (proposta: TesteAbProposta) => {
@@ -313,6 +327,33 @@ function AppInner() {
     }
   };
 
+  // Usuário escolhe manualmente qual GIF do histórico vira Variante B, em vez de esperar a IA
+  // sugerir outro candidato — mesma mecânica de update do handleAceitarAb, sem chamada de IA.
+  const handleSelecionarVarianteBManual = async (proposta: TesteAbProposta, conteudo: ConteudoGifBusca) => {
+    setTestesAb(prev => prev.map(t => t.id === proposta.id ? {
+      ...t,
+      conteudoVarianteB: {
+        id: conteudo.id,
+        nomeDesign: conteudo.nomeDesign,
+        storageUrl: conteudo.storageUrl,
+        insiderOriginalUrl: conteudo.insiderOriginalUrl,
+      },
+      racional: 'Variante B selecionada manualmente pelo usuário.',
+      status: 'pendente',
+    } : t));
+    if (!supabase) return;
+    const { error } = await supabase.from('teste_ab_propostas').update({
+      variante_b_conteudo_id: conteudo.id,
+      racional: 'Variante B selecionada manualmente pelo usuário.',
+      status: 'pendente',
+    }).eq('id', proposta.id);
+    if (error) {
+      console.warn('[teste-ab] Falha ao selecionar variante B manualmente:', error.message);
+      alert('Não consegui salvar a variante escolhida. Tenta de novo.');
+      await fetchTestesAb();
+    }
+  };
+
   // Passo 3 — envia a comparação aceita pra Insider como campanha "experiment" (A/B nativo).
   // A Insider só aceita um GIF de verdade por URL (não frames separados), então primeiro
   // codifica os 3 frames compostos num .gif real (gifshot, mesma lib do botão "Baixar GIF"
@@ -320,9 +361,9 @@ function AppInner() {
   const [enviandoInsiderId, setEnviandoInsiderId] = useState<string | null>(null);
   const handleEnviarInsider = async (
     proposta: TesteAbProposta,
-    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string },
+    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string; utmCampaign?: string },
   ) => {
-    const { destinoMarca, linkCampanha, assunto, nomeCampanha } = opts;
+    const { destinoMarca, linkCampanha, assunto, nomeCampanha, utmCampaign } = opts;
     if (!supabase) { alert('Supabase não configurado.'); return; }
     const pautaA = history.find(p => p.id === proposta.pautaId);
     const frameImages = allFrameImages[proposta.pautaId] ?? {};
@@ -350,9 +391,11 @@ function AppInner() {
       const gifshot = await loadGifshot();
       const { resolveCanvasSize } = await import('./utils/composeFrame');
       const [rawW, rawH] = resolveCanvasSize(pautaA.aspectRatio);
-      const scale = 600 / Math.max(rawW, rawH);
-      const gifWidth = Math.round(rawW * scale);
-      const gifHeight = Math.round(rawH * scale);
+      // Sem downscale artificial — usa a resolução nativa do frame (já limitada a 1200px no
+      // lado maior por resolveCanvasSize). O cap fixo de 600px daqui cortava 25-50% da
+      // resolução do GIF final sem necessidade real de economia de tamanho de arquivo.
+      const gifWidth = rawW;
+      const gifHeight = rawH;
 
       const gifDataUrl: string = await new Promise((resolve, reject) => {
         gifshot.createGIF({
@@ -361,7 +404,11 @@ function AppInner() {
           interval: 0.7,
           numFrames: framesBase64.length,
           frameDuration: 1,
-          sampleInterval: 10,
+          // sampleInterval baixo = amostragem densa de pixels ao treinar a paleta NeuQuant.
+          // Com 10 (default do gifshot), highlights pequenos/brilhantes ficam sub-representados
+          // na paleta e o quantizador "estoura" essas regiões pra branco puro, criando feixes/
+          // riscos de luz no GIF final — mesmo quando o frame original (PNG do PiApp) está limpo.
+          sampleInterval: 1,
           numWorkers: 2,
         }, (obj: any) => {
           if (obj.error) reject(new Error(obj.error));
@@ -383,7 +430,7 @@ function AppInner() {
       const resp = await fetch('/api/teste-ab-enviar-insider', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ propostaId: proposta.id, gifUrlVarianteA: urlData.publicUrl, destinoMarca, linkCampanha, assunto, nomeCampanha }),
+        body: JSON.stringify({ propostaId: proposta.id, gifUrlVarianteA: urlData.publicUrl, destinoMarca, linkCampanha, assunto, nomeCampanha, utmCampaign }),
       });
       const resData = await resp.json();
       if (resData.status === 'success') {
@@ -431,9 +478,11 @@ function AppInner() {
       const gifshot = await loadGifshot();
       const { resolveCanvasSize } = await import('./utils/composeFrame');
       const [rawW, rawH] = resolveCanvasSize(pauta.aspectRatio);
-      const scale = 600 / Math.max(rawW, rawH);
-      const gifWidth = Math.round(rawW * scale);
-      const gifHeight = Math.round(rawH * scale);
+      // Sem downscale artificial — usa a resolução nativa do frame (já limitada a 1200px no
+      // lado maior por resolveCanvasSize). O cap fixo de 600px daqui cortava 25-50% da
+      // resolução do GIF final sem necessidade real de economia de tamanho de arquivo.
+      const gifWidth = rawW;
+      const gifHeight = rawH;
 
       // gifshot processa via Web Workers e, se algo travar internamente ali, o callback nunca
       // é chamado — sem esse timeout o botão fica girando pra sempre sem feedback nenhum.
@@ -445,7 +494,9 @@ function AppInner() {
             interval: 0.7,
             numFrames: framesBase64.length,
             frameDuration: 1,
-            sampleInterval: 10,
+            // Ver comentário equivalente em handleEnviarInsider: amostragem densa evita que o
+            // NeuQuant estoure highlights em feixes de luz brancos no GIF final.
+            sampleInterval: 1,
             numWorkers: 2,
           }, (obj: any) => {
             if (obj.error) reject(new Error(obj.error));
@@ -464,6 +515,102 @@ function AppInner() {
       alert('Erro ao baixar o GIF: ' + (err.message ?? 'erro desconhecido'));
     } finally {
       setBaixandoGifId(null);
+    }
+  };
+
+  // Envia uma pauta do histórico direto pra Insider como campanha ÚNICA — só o conteúdo do
+  // GIF dessa pauta, sem comparação A/B nenhuma. Mesma técnica de composição (gifshot → Storage)
+  // usada em handleEnviarInsider/handleDownloadGifAgente; separada por marca de destino porque
+  // cada conta Insider tem chave própria (INSIDER_API_KEY_<MARCA>).
+  const [enviandoInsiderPautaId, setEnviandoInsiderPautaId] = useState<string | null>(null);
+  const handleEnviarInsiderPauta = async (
+    pauta: PautaGerada,
+    opts: { destinoMarca: ContaInsider; linkCampanha?: string; assunto?: string; nomeCampanha?: string; utmCampaign?: string },
+  ) => {
+    const { destinoMarca, linkCampanha, assunto, nomeCampanha, utmCampaign } = opts;
+    if (!supabase) { alert('Supabase não configurado.'); return; }
+    const frameImages = allFrameImages[pauta.id] ?? {};
+    const keys = Object.keys(frameImages).sort();
+    if (keys.length < 2) {
+      alert('Os frames dessa pauta ainda não estão prontos — aguarde a composição terminar.');
+      return;
+    }
+
+    setEnviandoInsiderPautaId(pauta.id);
+    try {
+      const toBase64 = async (src: string): Promise<string> => {
+        if (src.startsWith('data:')) return src;
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      };
+      const framesBase64 = await Promise.all(keys.map(k => toBase64(frameImages[k])));
+
+      const gifshot = await loadGifshot();
+      const { resolveCanvasSize } = await import('./utils/composeFrame');
+      const [rawW, rawH] = resolveCanvasSize(pauta.aspectRatio);
+      // Sem downscale artificial — usa a resolução nativa do frame (já limitada a 1200px no
+      // lado maior por resolveCanvasSize). O cap fixo de 600px daqui cortava 25-50% da
+      // resolução do GIF final sem necessidade real de economia de tamanho de arquivo.
+      const gifWidth = rawW;
+      const gifHeight = rawH;
+
+      const gifDataUrl: string = await Promise.race([
+        new Promise<string>((resolve, reject) => {
+          gifshot.createGIF({
+            images: framesBase64,
+            gifWidth, gifHeight,
+            interval: 0.7,
+            numFrames: framesBase64.length,
+            frameDuration: 1,
+            // Ver comentário equivalente em handleEnviarInsider: amostragem densa evita que o
+            // NeuQuant estoure highlights em feixes de luz brancos no GIF final.
+            sampleInterval: 1,
+            numWorkers: 2,
+          }, (obj: any) => {
+            if (obj.error) reject(new Error(obj.error));
+            else resolve(obj.image);
+          });
+        }),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Tempo esgotado gerando o GIF — tenta de novo.')), 25000)),
+      ]);
+
+      const base64Data = gifDataUrl.split(',')[1];
+      const binaryStr = atob(base64Data);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      const path = `insider-gifs/pauta-${pauta.id}.gif`;
+      const { error: upErr } = await supabase.storage
+        .from('campaign-images')
+        .upload(path, bytes, { contentType: 'image/gif', upsert: true });
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage.from('campaign-images').getPublicUrl(path);
+
+      const resp = await fetch('/api/pauta-enviar-insider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pautaId: pauta.id, gifUrl: urlData.publicUrl, destinoMarca, linkCampanha, assunto, nomeCampanha, utmCampaign }),
+      });
+      const resData = await resp.json();
+      if (resData.status === 'success') {
+        const novoEnvio: PautaEnvioInsider = { marca: destinoMarca, insiderCampaignId: resData.insiderCampaignId, gifUrl: urlData.publicUrl, enviadoEm: new Date().toISOString() };
+        setPautaInsiderEnvios(prev => ({
+          ...prev,
+          [pauta.id]: [...(prev[pauta.id] ?? []).filter(e => e.marca !== destinoMarca), novoEnvio],
+        }));
+      } else {
+        alert(resData.error || 'Falha ao enviar pra Insider.');
+      }
+    } catch (err: any) {
+      console.warn('[pauta-enviar-insider] Erro:', err);
+      alert('Erro ao enviar pra Insider: ' + (err.message ?? 'erro desconhecido'));
+    } finally {
+      setEnviandoInsiderPautaId(null);
     }
   };
 
@@ -518,11 +665,14 @@ function AppInner() {
           // "frames/{pautaId}/..." é a versão COMPOSTA (com headline/subheadline/CTA já
           // desenhados via /api/save-frame) — é essa que deve ser exibida. "{marca}/{pautaId}/..."
           // é só a imagem crua do PiApp, sem texto; usada como fallback se a composta não existir.
-          const composedUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pauta.id}/${safeFrame}.png`;
+          // A composta é salva em .webp desde out/2026; pautas anteriores só têm a .png.
+          const composedBase = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pauta.id}/${safeFrame}`;
           const rawUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${safeFrame}.png`;
           try {
-            const composedResp = await fetch(composedUrl, { method: 'HEAD' });
-            if (composedResp.ok) return [frameName, composedUrl] as const;
+            for (const composedUrl of [`${composedBase}.webp`, `${composedBase}.png`]) {
+              const composedResp = await fetch(composedUrl, { method: 'HEAD' });
+              if (composedResp.ok) return [frameName, composedUrl] as const;
+            }
             const rawResp = await fetch(rawUrl, { method: 'HEAD' });
             return rawResp.ok ? [frameName, rawUrl] as const : null;
           } catch {
@@ -584,53 +734,38 @@ function AppInner() {
     }
   };
 
-  // Enviar formulário Modo A ao backend Express
-  const handleFormASubmit = async (inputA: InputModoA) => {
-    setLoading(true);
-    try {
-      const response = await fetch("/api/generate-pauta", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "A", input: inputA, aspectRatio, direcionamentoIA, tipoGeracao }),
-      });
-      const resData = await response.json();
-      if (resData.status === "success" && Array.isArray(resData.data)) {
-        // Concatenar novas propostas no topo do histórico
-        const updated = [...resData.data, ...history];
-        saveHistory(updated);
-
-        // Abre o popup com a nova pauta imediatamente
-        if (resData.data[0]) {
-          setActivePreviewPauta(resData.data[0]);
-        }
-
-        setDirecionamentoIA('');
-        // Redireciona para o histórico recém gerado
-        setMainTab('historico');
-      } else {
-        alert(resData.error || "Erro de geração no servidor.");
-      }
-    } catch (err) {
-      console.error("[FormA] Erro completo:", err);
-      alert("Houve uma falha de rede ao conectar com a IA do robô de email CRM.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Enviar formulário Modo B ao backend Express
+  // Enviar formulário do briefing co-pilot ao backend Express
   const handleFormBSubmit = async (inputB: InputModoB) => {
     setLoading(true);
     try {
       const response = await fetch("/api/generate-pauta", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "B", input: inputB, aspectRatio, direcionamentoIA, tipoGeracao, referenciasImagem }),
+        // A IA recebe o texto sem marcadores de destaque (*, ^, ~) — eles são só de layout.
+        body: JSON.stringify({
+          modo: "B",
+          input: {
+            ...inputB,
+            boxHeadlineBanner: removerDestaque(inputB.boxHeadlineBanner),
+            boxSubtituloEmail: removerDestaque(inputB.boxSubtituloEmail),
+          },
+          aspectRatio, direcionamentoIA, tipoGeracao, referenciasImagem,
+        }),
       });
       const resData = await response.json();
       if (resData.status === "success" && Array.isArray(resData.data)) {
+        // Se a IA manteve o texto do usuário, devolve a versão com destaque pra copy.
+        const comDestaque = (daIA: string, doUsuario?: string) =>
+          temDestaque(doUsuario) && (daIA ?? '').trim().toLowerCase() === removerDestaque(doUsuario).trim().toLowerCase()
+            ? doUsuario!
+            : daIA;
         const pautasComInput = resData.data.map((p: any) => ({
           ...p,
+          copy: p.copy && {
+            ...p.copy,
+            headlineBanner: comDestaque(p.copy.headlineBanner, inputB.boxHeadlineBanner),
+            subHeadlineBanner: comDestaque(p.copy.subHeadlineBanner, inputB.boxSubtituloEmail),
+          },
           inputOriginal: {
             headline: inputB.boxHeadlineBanner || '',
             subheadline: inputB.boxSubtituloEmail || '',
@@ -645,6 +780,7 @@ function AppInner() {
             corBotaoEscolhida: (inputB as any).corBotaoEscolhida || '',
             corTextoBotao: (inputB as any).corTextoBotao || '#FFFFFF',
             fonteBotao: (inputB as any).fonteBotao || '',
+            corDestaque: inputB.corDestaque || '',
             estiloDesign: (inputB as any).estiloDesign || '',
           },
         }));
@@ -781,7 +917,6 @@ function AppInner() {
   const handleRefazerPauta = (pauta: PautaGerada) => {
     const inputOriginal = (pauta as any).inputOriginal ?? {};
     setCurrentBrand(pauta.marca);
-    setCurrentMode('B');
     setEditInputPreload({
       marca: pauta.marca,
       boxTituloEmail: pauta.copy.assunto,
@@ -799,6 +934,7 @@ function AppInner() {
       corBotaoEscolhida: inputOriginal.corBotaoEscolhida || '',
       corTextoBotao: inputOriginal.corTextoBotao || '#FFFFFF',
       fonteBotao: inputOriginal.fonteBotao || '',
+      corDestaque: inputOriginal.corDestaque || '',
       estiloDesign: inputOriginal.estiloDesign || '',
     } as any);
     setDirecionamentoIA(inputOriginal.direcionamento || '');
@@ -1022,12 +1158,25 @@ function AppInner() {
             }`}
           >
             <Bot className="w-4 h-4 text-indigo-450" />
-            Modo C: Agente Inteligente
+            Agente Inteligente
             {agenteRascunho.length > 0 && (
               <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
                 {agenteRascunho.length}
               </span>
             )}
+          </button>
+
+          <button
+            id="tab-btn-editor-gif"
+            onClick={() => { setMainTab('editor-gif'); setModoDVisitado(true); }}
+            className={`flex-1 sm:flex-initial py-3 px-5 rounded-xl text-xs sm:text-sm font-bold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer relative ${
+              mainTab === 'editor-gif'
+                ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shadow-lg'
+                : 'text-[var(--shell-text-muted)] hover:text-[var(--shell-text)] hover:bg-[var(--shell-panel)]/50'
+            }`}
+          >
+            <ImagePlus className="w-4 h-4 text-indigo-450" />
+            Editor de GIF Externo
           </button>
         </div>
 
@@ -1080,85 +1229,47 @@ function AppInner() {
               </div>
             </div>
 
-            {/* Grid dos Formulários separados por marca no modo A e B */}
+            {/* Grid dos Formulários separados por marca */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-              {/* Coluna Seletor de Modo Operacional por Marca */}
+              {/* Coluna de contexto do Fluxo Operacional por Marca */}
               <div className="lg:col-span-5 flex flex-col gap-6">
 
-                {/* Seletor de Modo Operacional com estilo adaptativo */}
+                {/* Fluxo Operacional único: Briefing Co-Pilot */}
                 <div className="bg-[var(--shell-panel-soft)] rounded-3xl p-5 border border-[var(--shell-border)] flex flex-col gap-4">
                   <div className="flex flex-col gap-1 text-left">
                     <span className="text-[10px] uppercase font-bold tracking-widest text-[#AA834B]">
                       Criação de {currentBrand}
                     </span>
                     <h3 className="text-sm font-black text-[var(--shell-text)]">
-                      Escolha o Fluxo Operacional
+                      Fluxo Operacional
                     </h3>
                   </div>
 
-                  <div className="flex flex-col gap-3">
-                    <button
-                      id="tab-modo-a-local"
-                      onClick={() => { setCurrentMode('A'); setEditInputPreload(null); }}
-                      className={`p-4 rounded-2xl text-left border flex flex-col justify-between transition-all duration-300 relative cursor-pointer ${
-                        currentMode === 'A'
-                          ? currentBrand === 'Apice'
-                            ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
-                            : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-[var(--shell-bg)]/40 border-[var(--shell-border)] hover:bg-[var(--shell-panel)]/50'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start w-full">
-                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'A' ? (isLight ? 'bg-indigo-600/20 text-indigo-500' : currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300') : 'bg-[var(--shell-panel)] text-[var(--shell-text-muted)]'} mb-3`}>
-                          <Sparkles className="w-4 h-4" />
-                        </div>
-                        {currentMode === 'A' && (
-                          <span className={`w-2 h-2 rounded-full ${currentBrand === 'Apice' ? 'bg-[#688D65]' : 'bg-[#BF0F26]'}`}></span>
-                        )}
+                  <div
+                    className={`p-4 rounded-2xl text-left border flex flex-col justify-between ${
+                      currentBrand === 'Apice'
+                        ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
+                        : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start w-full">
+                      <div className={`p-1.5 rounded-lg w-fit ${isLight ? 'bg-indigo-600/20 text-indigo-500' : currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300'} mb-3`}>
+                        <Sliders className="w-4 h-4" />
                       </div>
-                      <div>
-                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'A' ? 'text-[var(--shell-text)] font-extrabold' : 'text-[var(--shell-text-muted)]'}`}>
-                          Modo A: Descoberta Livre
-                        </h4>
-                        <p className="text-[10px] text-[var(--shell-text-muted)] leading-normal mt-1">
-                          A IA analisa o histórico de hits de {currentBrand} e propõe propostas sob medida do zero de alto desempenho.
-                        </p>
-                      </div>
-                    </button>
-
-                    <button
-                      id="tab-modo-b-local"
-                      onClick={() => setCurrentMode('B')}
-                      className={`p-4 rounded-2xl text-left border flex flex-col justify-between transition-all duration-300 relative cursor-pointer ${
-                        currentMode === 'B'
-                          ? currentBrand === 'Apice'
-                            ? 'bg-[#688D65]/10 border-[#688D65]/40 shadow-lg'
-                            : 'bg-[#BF0F26]/10 border-[#BF0F26]/40 shadow-lg'
-                          : 'bg-[var(--shell-bg)]/40 border-[var(--shell-border)] hover:bg-[var(--shell-panel)]/50'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start w-full">
-                        <div className={`p-1.5 rounded-lg w-fit ${currentMode === 'B' ? (isLight ? 'bg-indigo-600/20 text-indigo-500' : currentBrand === 'Apice' ? 'bg-[#688D65]/20 text-emerald-300' : 'bg-[#BF0F26]/20 text-rose-300') : 'bg-[var(--shell-panel)] text-[var(--shell-text-muted)]'} mb-3`}>
-                          <Sliders className="w-4 h-4" />
-                        </div>
-                        {currentMode === 'B' && (
-                          <span className={`w-2 h-2 rounded-full ${currentBrand === 'Apice' ? 'bg-[#688D65]' : 'bg-[#BF0F26]'}`}></span>
-                        )}
-                      </div>
-                      <div>
-                        <h4 className={`text-xs font-bold uppercase tracking-wider ${currentMode === 'B' ? 'text-[var(--shell-text)]' : 'text-[var(--shell-text-muted)]'}`}>
-                          Modo B: Briefing Co-Pilot
-                        </h4>
-                        <p className="text-[10px] text-[var(--shell-text-muted)] leading-normal mt-1">
-                          Escreva suas ideias parciais e a inteligência calibra, ajusta e expande seu briefing seguindo o playbook de {currentBrand}.
-                        </p>
-                      </div>
-                    </button>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--shell-text)] font-extrabold">
+                        Briefing Co-Pilot
+                      </h4>
+                      <p className="text-[10px] text-[var(--shell-text-muted)] leading-normal mt-1">
+                        Escreva suas ideias parciais e a inteligência calibra, ajusta e expande seu briefing seguindo o playbook de {currentBrand}.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                {/* Perfil tático consolidado focado na marca selecionada para o Modo A e B */}
+                {/* Perfil tático consolidado focado na marca selecionada */}
                 <div className="bg-[var(--shell-panel-soft)] border border-[var(--shell-border)] p-5 rounded-3xl flex flex-col gap-3 text-left">
                   <h4 className="text-xs uppercase font-extrabold tracking-widest text-[#AA834B]">
                     Acordo tático de {currentBrand}
@@ -1188,41 +1299,25 @@ function AppInner() {
 
               </div>
 
-              {/* Coluna do Formulário renderizado de forma adaptada */}
+              {/* Coluna do Formulário */}
               <div className="lg:col-span-7 w-full flex flex-col">
-                {currentMode === 'A' ? (
-                  <FormModoA
-                    brand={currentBrand}
-                    onSubmit={handleFormASubmit}
-                    loading={loading}
-                    aspectRatio={aspectRatio}
-                    onAspectRatioChange={setAspectRatio}
-                    imageModel={imageModel}
-                    onImageModelChange={setImageModel}
-                    direcionamentoIA={direcionamentoIA}
-                    onDirecionamentoChange={setDirecionamentoIA}
-                    tipoGeracao={tipoGeracao}
-                    onTipoGeracaoChange={setTipoGeracao}
-                  />
-                ) : (
-                  <FormModoB
-                    brand={currentBrand}
-                    onSubmit={handleFormBSubmit}
-                    loading={loading}
-                    key={editInputPreload ? JSON.stringify(editInputPreload) : 'new'}
-                    preload={editInputPreload}
-                    aspectRatio={aspectRatio}
-                    onAspectRatioChange={setAspectRatio}
-                    imageModel={imageModel}
-                    onImageModelChange={setImageModel}
-                    direcionamentoIA={direcionamentoIA}
-                    onDirecionamentoChange={setDirecionamentoIA}
-                    tipoGeracao={tipoGeracao}
-                    onTipoGeracaoChange={setTipoGeracao}
-                    referenciasImagem={referenciasImagem}
-                    onReferenciasImagemChange={setReferenciasImagem}
-                  />
-                )}
+                <FormModoB
+                  brand={currentBrand}
+                  onSubmit={handleFormBSubmit}
+                  loading={loading}
+                  key={editInputPreload ? JSON.stringify(editInputPreload) : 'new'}
+                  preload={editInputPreload}
+                  aspectRatio={aspectRatio}
+                  onAspectRatioChange={setAspectRatio}
+                  imageModel={imageModel}
+                  onImageModelChange={setImageModel}
+                  direcionamentoIA={direcionamentoIA}
+                  onDirecionamentoChange={setDirecionamentoIA}
+                  tipoGeracao={tipoGeracao}
+                  onTipoGeracaoChange={setTipoGeracao}
+                  referenciasImagem={referenciasImagem}
+                  onReferenciasImagemChange={setReferenciasImagem}
+                />
               </div>
 
             </div>
@@ -1305,20 +1400,31 @@ function AppInner() {
             )}
 
           </div>
-        ) : (
+        ) : mainTab === 'agente' ? (
           <ModoCPanel
             agentePautas={agentePautas}
             allFrameImages={allFrameImages}
             onOpenPautaDetail={(id) => setGalleryOpenPautaId(id)}
+            onEditarCopyA={(pauta) => openPreview(pauta, 'edit')}
             testesAb={testesAb}
             onAceitarAb={handleAceitarAb}
             onRejeitarAb={handleRejeitarAb}
+            onSelecionarVarianteBManual={handleSelecionarVarianteBManual}
             regenerandoAbId={regenerandoAbId}
             onEnviarInsider={handleEnviarInsider}
             enviandoInsiderId={enviandoInsiderId}
             onDownloadGif={handleDownloadGifAgente}
             baixandoGifId={baixandoGifId}
           />
+        ) : null}
+
+        {/* Modo D fica sempre montado (só escondido via CSS) depois da primeira visita — trocar
+            de aba não pode derrubar uma edição de IA em andamento (polling em memória seria
+            perdido se o componente desmontasse, e o usuário voltaria pro passo de Fonte do zero). */}
+        {modoDVisitado && (
+          <div className={mainTab === 'editor-gif' ? undefined : 'hidden'}>
+            <ModoDPanel />
+          </div>
         )}
         </>
         )}
@@ -1383,6 +1489,9 @@ function AppInner() {
               onFinishedGenerating={(pautaId: string) => {
                 generatingPautasRef.current.delete(pautaId);
               }}
+              onEnviarInsider={handleEnviarInsiderPauta}
+              enviandoInsiderId={enviandoInsiderPautaId}
+              insiderEnvios={pautaInsiderEnvios[galleryOpenPauta.id] ?? []}
             />
           </div>
         </div>

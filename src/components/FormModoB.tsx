@@ -1,11 +1,13 @@
 import React, { useState, useRef } from "react";
 import { Brand, InputModoB } from "../types";
-import { Sparkles, Trash2, ShieldAlert, Eye, RefreshCw, ImagePlus, X } from "lucide-react";
+import { Sparkles, Trash2, ShieldAlert, Eye, RefreshCw } from "lucide-react";
 import AspectRatioSelector from "./AspectRatioSelector";
 import ImageModelSelector from "./ImageModelSelector";
 import DirecionamentoIAField from "./DirecionamentoIAField";
 import TipoGeracaoSelector from "./TipoGeracaoSelector";
 import { TituloFontColorFields, SubtituloFontColorFields, BotaoFontColorFields } from "./EstiloTextoFields";
+import ReferenciasImagemField from "./ReferenciasImagemField";
+import { BarraDestaque } from "./TextoDestaque";
 
 interface FormModoBProps {
   brand: Brand;
@@ -50,6 +52,9 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
   const [corBotaoEscolhida, setCorBotaoEscolhida] = useState(preload?.corBotaoEscolhida ?? '');
   const [corTextoBotao, setCorTextoBotao] = useState(preload?.corTextoBotao ?? '#FFFFFF');
   const [fonteBotao, setFonteBotao] = useState(preload?.fonteBotao ?? '');
+  const [corDestaque, setCorDestaque] = useState(preload?.corDestaque ?? '');
+  const headlineInputRef = useRef<HTMLInputElement>(null);
+  const subheadlineInputRef = useRef<HTMLInputElement>(null);
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
   const [direcionamentoError, setDirecionamentoError] = useState<string>('');
@@ -87,6 +92,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       corBotaoEscolhida,
       corTextoBotao,
       fonteBotao,
+      corDestaque,
       estiloDesign,
       aspectRatio: customW && customH ? `custom_${customW}x${customH}` : aspectRatio,
       quantidadeFrames: quantidadeCustom ? parseInt(quantidadeCustom) : quantidadeFrames,
@@ -134,7 +140,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
     <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-6 shadow-md border border-slate-100 flex flex-col gap-6">
       <div className="border-b border-slate-100 pb-4 mb-2">
         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <span>Modo B: Geração Co-Pilot / Briefing Parcial</span>
+          <span>Briefing Co-Pilot</span>
           <span className="text-xs font-normal text-indigo-500 bg-indigo-50 px-2.5 py-0.5 rounded-full">Manual + Refinamento</span>
         </h3>
         <p className="text-slate-500 text-xs mt-1">
@@ -157,91 +163,7 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
       />
 
       {/* Campo de Referência Visual */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-semibold text-slate-700">
-            Referência Visual
-            <span className="text-xs text-slate-400 font-normal ml-1">
-              (Opcional — até 4 imagens)
-            </span>
-          </label>
-          {referenciasImagem.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onReferenciasImagemChange([])}
-              className="text-xs text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
-            >
-              ✕ Limpar todas
-            </button>
-          )}
-        </div>
-
-        {/* Grid de referências */}
-        <div className="grid grid-cols-4 gap-2 max-w-xs">
-          {Array.from({ length: 4 }).map((_, i) => {
-            const src = referenciasImagem[i];
-            return (
-              <div key={i} className="relative">
-                {src ? (
-                  <div className="relative rounded-xl overflow-hidden border-2 border-emerald-400 aspect-square">
-                    <img src={src} alt={`Ref ${i + 1}`} className="w-full h-full object-cover" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updated = [...referenciasImagem];
-                        updated.splice(i, 1);
-                        onReferenciasImagemChange(updated);
-                      }}
-                      className="absolute top-1 right-1 bg-black/60 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs transition-colors cursor-pointer"
-                    >
-                      ✕
-                    </button>
-                    <span className="absolute bottom-1 left-1 bg-black/50 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                      REF {i + 1}
-                    </span>
-                  </div>
-                ) : referenciasImagem.length === i ? (
-                  <label className="flex flex-col items-center justify-center w-full aspect-square rounded-xl border-2 border-dashed border-slate-200 hover:border-slate-400 bg-slate-50 hover:bg-slate-100 transition-all cursor-pointer gap-1">
-                    <span className="text-slate-400 text-xl">+</span>
-                    <span className="text-[10px] text-slate-400 font-medium">Adicionar</span>
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? []) as File[];
-                        if (files.length === 0) return;
-                        const remainingSlots = 4 - referenciasImagem.length;
-                        const filesToAdd = files.slice(0, remainingSlots);
-                        Promise.all(
-                          filesToAdd.map((file) => new Promise<string>((resolve, reject) => {
-                            const reader = new FileReader();
-                            reader.onload = (ev) => resolve(ev.target?.result as string);
-                            reader.onerror = reject;
-                            reader.readAsDataURL(file);
-                          }))
-                        ).then((results) => {
-                          onReferenciasImagemChange([...referenciasImagem, ...results]);
-                        });
-                        e.target.value = '';
-                      }}
-                    />
-                  </label>
-                ) : (
-                  <div className="w-full aspect-square rounded-xl border-2 border-dashed border-slate-100 bg-slate-50 flex items-center justify-center">
-                    <span className="text-slate-200 text-xl">{i + 1}</span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <p className="text-[10px] text-slate-400">
-          Adicione até 4 imagens de referência. A IA usará o estilo visual de todas elas.
-        </p>
-      </div>
+      <ReferenciasImagemField value={referenciasImagem} onChange={onReferenciasImagemChange} />
 
       <div className="flex flex-col gap-5">
         {/* Box 1: Título do email (Assunto) */}
@@ -312,11 +234,19 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           </div>
           <input
             id="box-headline-banner"
+            ref={headlineInputRef}
             type="text"
             value={boxHeadlineBanner}
             onChange={(e) => setBoxHeadlineBanner(e.target.value)}
             placeholder="Ex: ESTOURE O BALÃO, ABRA O PRESENTE, PUXE O ADESIVO"
             className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 transition-all"
+          />
+          <BarraDestaque
+            inputRef={headlineInputRef}
+            valor={boxHeadlineBanner}
+            onChange={setBoxHeadlineBanner}
+            corDestaque={corDestaque}
+            onCorDestaqueChange={setCorDestaque}
           />
           <div className="text-[10px] text-slate-400">
             Texto principal em destaque no topo do banner. Use verbo de ação da mecânica em caixa alta.
@@ -344,11 +274,18 @@ export default function FormModoB({ brand, onSubmit, loading, preload, aspectRat
           </div>
           <input
             id="box-subtitulo"
+            ref={subheadlineInputRef}
             type="text"
             value={boxSubtituloEmail}
             onChange={(e) => setBoxSubtituloEmail(e.target.value)}
             placeholder="Ex: Seu brinde especial te espera — apenas hoje"
             className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 transition-all"
+          />
+          <BarraDestaque
+            inputRef={subheadlineInputRef}
+            valor={boxSubtituloEmail}
+            onChange={setBoxSubtituloEmail}
+            corDestaque={corDestaque}
           />
         </div>
 

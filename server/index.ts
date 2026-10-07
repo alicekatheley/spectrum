@@ -15,6 +15,7 @@ import {
 } from "./data.ts";
 import {
   getBrandDna, buildImagePrompt, uploadReferenceToPiApp, generateImageViaPiApp,
+  iniciarGeracaoImagemViaPiApp, verificarJobImagemViaPiApp,
 } from "./piapp.ts";
 import { validateSubjectModoB, sanitizeAssunto, sanitizeBannerText, risksUnique } from "./validators.ts";
 import { aiProxyConfigurado } from "./ai-proxy.ts";
@@ -1031,7 +1032,9 @@ app.post("/api/save-frame", async (req, res) => {
     const base64Data = imageDataUrl.split(',')[1];
     const mimeType = imageDataUrl.split(';')[0].split(':')[1] || 'image/png';
     const buffer = Buffer.from(base64Data, 'base64');
-    const fileName = `frames/${pautaId}/${frameName}.png`;
+    // O front manda WebP (composeFrame); frames antigos continuam em .png no bucket.
+    const ext = mimeType === 'image/webp' ? 'webp' : 'png';
+    const fileName = `frames/${pautaId}/${frameName}.${ext}`;
 
     const { error } = await supabase
       .storage
@@ -1053,6 +1056,138 @@ app.post("/api/save-frame", async (req, res) => {
 
   } catch (err: any) {
     console.error('[save-frame] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Modo D (Editor de GIF Externo) — busca um GIF hospedado fora do nosso Storage (histórico da
+// Insider, quase sempre sem CORS liberado) pra decodificar os frames no navegador. Sem esse
+// proxy, o fetch() client-side falha silenciosamente pra ~269 dos ~270 GIFs do histórico, que só
+// têm insider_original_url (CDN externo), não storage_url.
+app.get("/api/gif-proxy", async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (typeof url !== 'string' || !url.startsWith('https://')) {
+      return res.status(400).json({ error: "Parâmetro 'url' precisa ser uma URL https." });
+    }
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: `Falha ao buscar a URL de origem: ${upstream.status}` });
+    }
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength && Number(contentLength) > 20 * 1024 * 1024) {
+      return res.status(413).json({ error: "Arquivo maior que 20MB." });
+    }
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.byteLength > 20 * 1024 * 1024) {
+      return res.status(413).json({ error: "Arquivo maior que 20MB." });
+    }
+    res.set('Content-Type', upstream.headers.get('content-type') ?? 'image/gif');
+    res.send(buffer);
+  } catch (err: any) {
+    console.error('[gif-proxy] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Modo D — edita um frame externo (upload ou histórico) com uma instrução livre em texto,
+// via PiApp (mesmo mecanismo de "edit" já usado em /api/generate-image, mas sem a
+// dependência de marca/BRAND_DNA — o GIF de origem não é necessariamente de Apice/Barbours).
+// Prompt brand-agnostic pro edit de um frame externo — texto, cor OU troca de item/produto,
+// tudo pela mesma instrução livre (o GIF de origem já vem com o texto "queimado" no pixel, então
+// não existe overlay de texto separado como no Modo A/B/C: a mudança precisa acontecer na própria
+// imagem). Quando há fotos de referência de produto, elas vêm ANTES da imagem a editar na lista
+// de reference_image_urls — o texto precisa numerar nessa mesma ordem.
+function buildEditPromptExterno(instrucao: string, productRefCount: number, hasFrameReference: boolean): string {
+  const refNote = productRefCount > 0
+    ? ` ${productRefCount} real product reference photo(s) are attached BEFORE the main image — when the instruction asks to replace/swap a product or item, extract ONLY the product itself from the reference photo(s) (same color, shape, texture, proportions, branding/logo). Completely ignore the reference photo's own background, lighting and setting — never let them bleed into the result. If the instruction ALSO asks for other changes (background color, text, etc.) besides the product swap, apply those too, following the instruction — the "ignore the reference photo's background" rule only stops the reference photo's OWN incidental background from leaking in, it does not block a background change the instruction explicitly asks for. The replacement product must occupy the EXACT SAME position, scale, rotation and crop framing as the original item it replaces — do not recenter, resize, rotate or reposition it, even if the reference photo shows it at a different angle or size.`
+    : '';
+  // Cada frame do GIF é editado numa chamada de IA independente — sem isso, o layout (zoom,
+  // posição do texto, posição do produto) tende a "andar" de frame pra frame, quebrando a
+  // continuidade da animação. Quando o front já editou um frame antes deste no mesmo lote, ele
+  // manda o resultado como referência extra só pra travar layout/posição — não pro conteúdo.
+  const frameRefNote = hasFrameReference
+    ? ` Another reference image is attached right before the main image (after any product reference photos) — this is the ALREADY-EDITED version of a DIFFERENT frame from the SAME animated GIF, already showing the requested changes applied. Use it ONLY to match this frame's camera framing, zoom, crop, and — if you are changing text — the exact text position, size, font and style: copy those exactly from this reference. Do NOT copy its specific content if it differs from what belongs in this frame (e.g. a different pose/state of an animated element) — only its layout, framing and text style must match, not its content.`
+    : '';
+  const refNoteFull = `${refNote}${frameRefNote}`;
+  const targetLabel = hasFrameReference
+    ? ' The LAST attached image is the one being edited; every other attached image is a reference only, not the target of the edit.'
+    : (productRefCount > 0 ? ' The LAST attached image is the one being edited; the ones before it are product references only, not the target of the edit.' : '');
+  return `Edit the attached reference image exactly as instructed below. This includes changing text, colors, or swapping a specific item/product when requested — apply the change directly to the image pixels.${refNoteFull}${targetLabel}
+
+CRITICAL — PIXEL-LEVEL CONSISTENCY: this image is one frame of an animated GIF made of several independently-edited frames — even a small shift in position, scale or crop becomes a visible jump/flicker when played back against the other frames. So:
+- Camera framing, zoom, crop and composition must stay EXACTLY as in the original image — never re-crop, re-zoom, re-center or change perspective, even slightly.
+- Any text you are asked to change must keep the EXACT SAME position, size, font, weight, color, alignment and line-wrapping box as the original text — change ONLY the wording, nothing about its placement or style.
+- Every object you are NOT asked to change must stay at the EXACT SAME position, scale and orientation as in the original image — this includes the item being swapped, which occupies the same spot as what it replaces (see above).
+- Preserve everything else — background, lighting, all other objects — pixel-for-pixel except for the specific change requested.
+
+Instruction: "${instrucao.trim()}". Ultra-detailed quality, no added watermarks.`;
+}
+
+// Duas rotas ("iniciar" + "status") em vez de uma só bloqueante: o PiApp pode levar até ~150s
+// pra terminar um edit, e uma única requisição HTTP tão longa estourava o timeout do gateway do
+// GoDeploy — que devolve uma página de erro HTML, não JSON, quebrando o `resp.json()` do front
+// com "Unexpected token '<'". Com isso, cada chamada do navegador é rápida; quem espera o job
+// terminar é o cliente, via polling em `/status`.
+app.post("/api/editar-frame-externo/iniciar", async (req, res) => {
+  try {
+    if (!PIAPP_API_KEY) {
+      return res.status(500).json({ error: "PIAPP_API_KEY não configurada no servidor." });
+    }
+    const {
+      imageDataUrl, instrucao, aspectRatio: rawRatio, imageModel: rawModel,
+      referenciasImagem: rawRefImages, frameReferencia,
+    } = req.body;
+    if (typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:')) {
+      return res.status(400).json({ error: "imageDataUrl é obrigatório (data URL)." });
+    }
+    if (typeof instrucao !== 'string' || !instrucao.trim()) {
+      return res.status(400).json({ error: "instrucao é obrigatória." });
+    }
+
+    const aspectRatio = VALID_IMAGE_RATIOS.includes(rawRatio) ? rawRatio : '1:1';
+    let imageModel = VALID_IMAGE_MODELS.has(rawModel) ? rawModel : DEFAULT_IMAGE_MODEL;
+
+    const productRefInputs: string[] = Array.isArray(rawRefImages) ? rawRefImages.slice(0, 4) : [];
+    const productRefUrls: string[] = [];
+    for (const img of productRefInputs) {
+      if (typeof img === 'string' && img.startsWith('data:')) {
+        productRefUrls.push(await uploadReferenceToPiApp(img));
+      }
+    }
+    const frameRefUrls: string[] = [];
+    if (typeof frameReferencia === 'string' && frameReferencia.startsWith('data:')) {
+      frameRefUrls.push(await uploadReferenceToPiApp(frameReferencia));
+    }
+    const refUrl = await uploadReferenceToPiApp(imageDataUrl);
+    // Sempre há ao menos a própria imagem como referência — força o modelo de edição, nunca o
+    // de texto-pra-imagem do zero, senão o resultado ignora o frame original inteiro.
+    if (imageModel === 'wavespeed-gpt-image-2-t2i') {
+      imageModel = 'wavespeed-gpt-image-2-edit';
+    }
+
+    const prompt = buildEditPromptExterno(instrucao, productRefUrls.length, frameRefUrls.length > 0);
+    const jobId = await iniciarGeracaoImagemViaPiApp(prompt, aspectRatio, imageModel, [...productRefUrls, ...frameRefUrls, refUrl]);
+    res.json({ jobId });
+  } catch (err: any) {
+    console.error('[editar-frame-externo/iniciar] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/editar-frame-externo/status", async (req, res) => {
+  try {
+    if (!PIAPP_API_KEY) {
+      return res.status(500).json({ error: "PIAPP_API_KEY não configurada no servidor." });
+    }
+    const jobId = req.query.jobId;
+    if (typeof jobId !== 'string' || !jobId) {
+      return res.status(400).json({ error: "jobId é obrigatório." });
+    }
+    const result = await verificarJobImagemViaPiApp(jobId);
+    res.json(result);
+  } catch (err: any) {
+    console.error('[editar-frame-externo/status] Erro:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

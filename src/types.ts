@@ -192,6 +192,7 @@ export interface InputModoB {
   corBotaoEscolhida?: string;
   corTextoBotao?: string;
   fonteBotao?: string;
+  corDestaque?: string;
   quantidadeFrames?: number;
   estiloDesign?: string;
 }
@@ -219,6 +220,12 @@ export interface PautaVisual {
   quantidadeFrames?: number;
   posicaoCta: string;
   tipografia: string;
+  // Modo C: ids do brief sorteado pelo agente (worker.ts → sortearBriefCriativo). É o que a
+  // próxima rodada lê pra não repetir universo/estilo/fundo.
+  briefCriativo?: {
+    universo: string; estilo: string; fundo: string; composicao: string;
+    recompensa: string; headline: string; urgencia: string;
+  };
 }
 
 export interface PautaOperacional {
@@ -266,6 +273,16 @@ export interface PautaGerada {
   // URLs públicas dos frames gerados automaticamente pelo Agente de GIF (modo 'C'), já
   // prontas pra exibição — não dependem do usuário clicar em "gerar imagem".
   frameUrls?: Record<string, string>;
+  // Envios diretos pra Insider como campanha única (só o GIF desta pauta, sem A/B) — uma
+  // linha por conta de destino, já que a mesma pauta pode virar campanha em várias marcas.
+  insiderEnvios?: PautaEnvioInsider[];
+}
+
+export interface PautaEnvioInsider {
+  marca: ContaInsider;
+  insiderCampaignId: string;
+  gifUrl?: string | null;
+  enviadoEm: string;
 }
 
 export interface TesteAbProposta {

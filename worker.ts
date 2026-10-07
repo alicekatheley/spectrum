@@ -75,7 +75,7 @@ const hardcodedDisparos = [
 
 const DEFAULT_MECANICAS = ['Abra o presente','Abra a caixa','Abra a carta','Puxe o Adesivo','Corte o fio','Jogo da Velha','Rasgue o papel','Puxe o post-it','Estoure o balão','Puxe o cupom'];
 
-async function callGemini(prompt: string, systemPrompt: string, token: string): Promise<string> {
+async function callGemini(prompt: string, systemPrompt: string, token: string, temperature = 0.7): Promise<string> {
   const res = await fetch('https://ai-proxy.gogroupbr.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -88,7 +88,7 @@ async function callGemini(prompt: string, systemPrompt: string, token: string): 
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7,
+      temperature,
     })
   });
   if (!res.ok) {
@@ -564,6 +564,37 @@ function resolveImageModel(requestedModel: string, hasReference: boolean): strin
   return requestedModel;
 }
 
+// Prompt brand-agnostic pro edit de um frame externo (Modo D) — texto, cor OU troca de
+// item/produto, tudo pela mesma instrução livre (o GIF de origem já vem com o texto "queimado"
+// no pixel, então não existe overlay de texto separado como no Modo A/B/C: a mudança precisa
+// acontecer na própria imagem). Quando há fotos de referência de produto, elas vêm ANTES da
+// imagem a editar na lista de reference_image_urls — o texto precisa numerar nessa mesma ordem.
+function buildEditPromptExterno(instrucao: string, productRefCount: number, hasFrameReference: boolean): string {
+  const refNote = productRefCount > 0
+    ? ` ${productRefCount} real product reference photo(s) are attached BEFORE the main image — when the instruction asks to replace/swap a product or item, extract ONLY the product itself from the reference photo(s) (same color, shape, texture, proportions, branding/logo). Completely ignore the reference photo's own background, lighting and setting — never let them bleed into the result. If the instruction ALSO asks for other changes (background color, text, etc.) besides the product swap, apply those too, following the instruction — the "ignore the reference photo's background" rule only stops the reference photo's OWN incidental background from leaking in, it does not block a background change the instruction explicitly asks for. The replacement product must occupy the EXACT SAME position, scale, rotation and crop framing as the original item it replaces — do not recenter, resize, rotate or reposition it, even if the reference photo shows it at a different angle or size.`
+    : '';
+  // Cada frame do GIF é editado numa chamada de IA independente — sem isso, o layout (zoom,
+  // posição do texto, posição do produto) tende a "andar" de frame pra frame, quebrando a
+  // continuidade da animação. Quando o front já editou um frame antes deste no mesmo lote, ele
+  // manda o resultado como referência extra só pra travar layout/posição — não pro conteúdo.
+  const frameRefNote = hasFrameReference
+    ? ` Another reference image is attached right before the main image (after any product reference photos) — this is the ALREADY-EDITED version of a DIFFERENT frame from the SAME animated GIF, already showing the requested changes applied. Use it ONLY to match this frame's camera framing, zoom, crop, and — if you are changing text — the exact text position, size, font and style: copy those exactly from this reference. Do NOT copy its specific content if it differs from what belongs in this frame (e.g. a different pose/state of an animated element) — only its layout, framing and text style must match, not its content.`
+    : '';
+  const refNoteFull = `${refNote}${frameRefNote}`;
+  const targetLabel = hasFrameReference
+    ? ' The LAST attached image is the one being edited; every other attached image is a reference only, not the target of the edit.'
+    : (productRefCount > 0 ? ' The LAST attached image is the one being edited; the ones before it are product references only, not the target of the edit.' : '');
+  return `Edit the attached reference image exactly as instructed below. This includes changing text, colors, or swapping a specific item/product when requested — apply the change directly to the image pixels.${refNoteFull}${targetLabel}
+
+CRITICAL — PIXEL-LEVEL CONSISTENCY: this image is one frame of an animated GIF made of several independently-edited frames — even a small shift in position, scale or crop becomes a visible jump/flicker when played back against the other frames. So:
+- Camera framing, zoom, crop and composition must stay EXACTLY as in the original image — never re-crop, re-zoom, re-center or change perspective, even slightly.
+- Any text you are asked to change must keep the EXACT SAME position, size, font, weight, color, alignment and line-wrapping box as the original text — change ONLY the wording, nothing about its placement or style.
+- Every object you are NOT asked to change must stay at the EXACT SAME position, scale and orientation as in the original image — this includes the item being swapped, which occupies the same spot as what it replaces (see above).
+- Preserve everything else — background, lighting, all other objects — pixel-for-pixel except for the specific change requested.
+
+Instruction: "${instrucao.trim()}". Ultra-detailed quality, no added watermarks.`;
+}
+
 async function generateImage(prompt: string, aspectRatio: string, model: string, apiKey: string, refUrls?: string[]) {
   const genArgs: any = { prompt, model, aspect_ratio: aspectRatio, quality: 'standard' };
   if (refUrls?.length) genArgs.reference_image_urls = refUrls;
@@ -598,6 +629,40 @@ async function generateImage(prompt: string, aspectRatio: string, model: string,
   throw new Error('Timeout after 150s');
 }
 
+// Versão "dispare e consulte depois" de generateImage — existe pro Modo D (editar frame externo)
+// porque bloquear uma única requisição HTTP por até 150s pra um edit demorado do PiApp estourava
+// o timeout do gateway do GoDeploy, que devolve uma página de erro HTML (não JSON) — o front
+// então quebrava tentando fazer JSON.parse nela. Com isso, cada requisição do navegador fica
+// rápida (só dispara ou só consulta status uma vez); quem espera é o cliente, com polling.
+async function iniciarGeracaoImagem(prompt: string, aspectRatio: string, model: string, apiKey: string, refUrls?: string[]): Promise<string> {
+  const genArgs: any = { prompt, model, aspect_ratio: aspectRatio, quality: 'standard' };
+  if (refUrls?.length) genArgs.reference_image_urls = refUrls;
+  const genResp = await callPiApp('tools/call', { name: 'generate_image', arguments: genArgs }, apiKey);
+  const jobId = JSON.parse(genResp.result?.content?.[0]?.text ?? '{}').job_id;
+  if (!jobId) throw new Error('No job_id from PiApp');
+  return jobId;
+}
+
+type JobImagemStatus = { done: false } | { done: true; imageBytes: string; mimeType: string };
+
+async function verificarJobImagem(jobId: string, apiKey: string): Promise<JobImagemStatus> {
+  const check = await callPiApp('tools/call', { name: 'check_jobs', arguments: { job_ids: [jobId] } }, apiKey);
+  const checkData = JSON.parse(check.result?.content?.[0]?.text ?? '{}');
+  if (!checkData.all_done) return { done: false };
+  const job = checkData.jobs?.[0];
+  if (!job || job.status === 'error') throw new Error(job?.error ?? 'Generation failed');
+  const imgResp = await fetch(job.output_url);
+  const buffer = await imgResp.arrayBuffer();
+  const uint8Array = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < uint8Array.length; i += chunkSize) {
+    binary += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize));
+  }
+  const imageBytes = btoa(binary);
+  return { done: true, imageBytes, mimeType: imgResp.headers.get('content-type') ?? 'image/png' };
+}
+
 async function supabaseUpload(bucket: string, path: string, data: Uint8Array, mimeType: string, supabaseKey: string) {
   return fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
     method: 'POST',
@@ -615,12 +680,12 @@ const FRAME_STATE_HINTS: Record<string, string> = {
 const NAMED_FRAME_NUMBERS: Record<string, number> = { inicial: 1, intermediario: 2, final: 3 };
 
 function buildFramePrompt({
-  frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa,
+  frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, composicao, mecanica, recompensa,
   headline, subheadline, direcionamento, aspectRatio, frameRefCount = 0, productRefCount = 0, totalFrames,
   ajusteRegeneracao,
 }: {
   frameName?: string; frameDescription: string; marca: string; brandDna: any;
-  estiloIlustracao?: string; paleta?: { cores?: string[]; fundo?: string }; mecanica?: string; recompensa?: string;
+  estiloIlustracao?: string; paleta?: { cores?: string[]; fundo?: string }; composicao?: string; mecanica?: string; recompensa?: string;
   headline?: string; subheadline?: string; direcionamento?: string; aspectRatio: string; frameRefCount?: number;
   productRefCount?: number; totalFrames?: number; ajusteRegeneracao?: string;
 }): string {
@@ -643,7 +708,9 @@ function buildFramePrompt({
   // faz cada geração "reforçar" brilho/uniformidade em cima da anterior, e o resultado vai
   // clareando/embranquecendo cumulativamente a cada frame. Frames 2+ devem só COPIAR a
   // exposição do frame mestre, nunca reaplicar a regra de brilho independentemente.
-  const lightingRule = `Lighting: soft, natural studio light, perfectly even across the whole frame — a plain, clean gradient or solid background with NO brightness falloff toward any edge (top, bottom, or sides must be exactly as exposed as the center, no darker and no brighter). No visible light rays, sunburst, lens flare, glow bursts, halo, bloom, backlight glare, or radiating beams of light anywhere in the image; no washed-out or overexposed patches. Keep the lighting flat, simple and photographic, not stylized.`;
+  // Sem "photographic, not stylized" no fim: isso puxava todo estilo (flat, papercraft,
+  // line-art) pro mesmo render 3D fotográfico. O estilo agora vem inteiro do conceito.
+  const lightingRule = `Lighting: soft and even across the whole frame — a solid, flat background color with NO brightness falloff toward any edge (top, bottom, or sides must be exactly as exposed as the center, no darker and no brighter). No visible light rays, sunburst, lens flare, glow bursts, halo, bloom, backlight glare, or radiating beams of light anywhere in the image; no washed-out or overexposed patches. Render faithfully in the illustration style stated above.`;
   const cameraLockRule = `Camera and lighting stay fixed across frames: same zoom, framing, crop and light setup. Only the hero element's state/position changes (per the scene below), and only as a small continuous step from the previous frame — never a jump. Any OTHER object mentioned in the scene (secondary props, reward items, background elements) must stay at the EXACT SAME position and scale as in the reference frame — zero drift. Reproduce the master frame's exact exposure, brightness and contrast — do NOT re-apply or increase brightness/evenness independently; copy it as-is, even if it looks slightly uneven. The camera and lighting themselves never change.`;
 
   // As imagens de referência são anexadas NESTA ORDEM EXATA (não pode divergir do texto,
@@ -688,14 +755,17 @@ function buildFramePrompt({
     refOrderBlock,
     `${estiloIlustracao || brandDna.style} illustration for ${marca} email banner.`,
     isFirstFrame
-      ? `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene (full establishing description — defines the fixed layout every later frame must match): ${frameDescription}.${rewardPhrase}`
-      : `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. ONLY THIS CHANGES vs the reference frame: ${frameDescription}.${rewardPhrase} Everything not mentioned here (background, secondary props, reward items not yet revealed) must remain pixel-identical to the reference image — do not re-imagine or reposition it.`,
+      ? `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. Scene (full establishing description — defines the fixed layout every later frame must match): ${frameDescription}.${composicao ? ` Composition: ${composicao}.` : ''}${rewardPhrase}`
+      : `Hero: ${mecanica || 'mechanic'}${frameState ? `, ${frameState}` : ''}. ONLY THIS CHANGES vs the reference frame: ${frameDescription}. The change must be clearly visible even at thumbnail size — a real step in the action, not a subtle nudge.${rewardPhrase} Everything not mentioned here (background, secondary props, reward items not yet revealed) must remain pixel-identical to the reference image — do not re-imagine or reposition it.`,
     // O conceito pode propor seu próprio fundo (paleta.fundo, ex: o Agente do Modo C) — nesse
     // caso ele tem prioridade sobre o fallback genérico da marca, senão todo conceito cai no
     // mesmo "Background: ..." fixo e o resultado converge pro mesmo tom (bege/off-white).
     `Palette: ${paletaCores}.${direcionamento ? '' : ` Background: ${paleta?.fundo?.trim() || brandDna.backgrounds}.`} ${brandDna.prohibitedColors}`,
     consistencyBlock,
-    `ZONES: TOP 30% empty. MIDDLE 50% hero. BOTTOM 20% empty. ABSOLUTELY NO TEXT of any kind anywhere in the image — no letters, words, numbers, or symbols, even if they relate to this campaign. This is a pure background/product illustration; all copy is added separately afterward. 4K. Ratio: ${aspectRatio}.`
+    // A headline/sub e o botão são desenhados por cima (composeFrame: texto até 32% da altura,
+    // botão a partir de ~87%). No teste, a composição "close" pôs o herói em 20–37% da altura e
+    // o texto ia cobrir justamente a revelação — por isso a zona é repetida como proibição.
+    `LAYOUT (MANDATORY, every frame): the TOP 32% of the image is plain background only — no object, prop, hand, shadow or part of the hero may enter it, because the headline is placed there. The BOTTOM 16% is plain background only (a button goes there). The whole scene sits between 32% and 84% of the image height. ABSOLUTELY NO TEXT of any kind anywhere in the image — no letters, words, numbers, or symbols, even if they relate to this campaign. This is a pure background/product illustration; all copy is added separately afterward. 4K. Ratio: ${aspectRatio}.`
   ].filter(Boolean).join('\n\n');
 }
 
@@ -769,6 +839,248 @@ const AGENTE_PLAYBOOK: Record<string, string> = {
   Barbours: 'Tom direto e elegante, estilo push-notification. Assunto: 20-45 caracteres.',
 };
 
+// ─── Repertório criativo do agente (anti-repetição) ─────────────────────────
+// POR QUE EXISTE: deixado solto, o modelo convergia pra um único conceito — caixa 3D com
+// faixa/lingueta, fundo azul-marinho, "UM BRINDE SURPRESA ... ATÉ 23H59" — e o backlog de
+// revisão virou 40 variações da mesma peça. Pedir "seja criativo" no prompt não resolve:
+// LLM repete o que está nos exemplos do próprio prompt. O que resolve é tirar a decisão
+// criativa do modelo: o código SORTEIA um brief (universo + estilo de render + fundo +
+// composição + recompensa + formato de headline + urgência), excluindo o que saiu nas
+// últimas pautas, e o modelo só executa esse brief. O brief sorteado fica salvo em
+// visual.briefCriativo, que é o que a exclusão lê na rodada seguinte.
+//
+// Os eixos foram destilados das peças antigas que funcionaram (Espelho Mágico, Puxe o
+// Cupom, Quebre o Gelo, Puxe o Adesivo, Finalize o Jogo, Alerta Presente, Balão Premiado):
+// cada uma tem um UNIVERSO próprio (não "uma caixa com outra coisa pra puxar"), um estilo
+// de render diferente e um fundo chapado de cor única.
+type OpcaoBrief = { id: string; descricao: string };
+type UniversoBrief = OpcaoBrief & { mecanica: string; revelacao: string };
+
+const REPERTORIO_REFERENCIAS = `- "Espelho Mágico": espelho vintage ornamentado sobre pedestal, o prêmio aparece DESFOCADO no reflexo e a mecânica é desembaçar. Colagem (objeto fotográfico recortado) sobre verde chapado com grão. Headline em arco, serifada.
+- "Puxe o Cupom": mão puxando um cupom de uma fenda de máquina. Ilustração flat vetorial sobre malva chapado com grão. Headline serifada dourada, CTA preto logo abaixo.
+- "Quebre o Gelo": produto congelado dentro de um bloco de gelo, martelo entrando pela lateral. Foto realista sobre ciano chapado. Headline é expressão idiomática de duplo sentido.
+- "Puxe o Adesivo": um único selo circular dourado com texto em círculo, sobre off-white. Design gráfico minimalista, muito respiro. Recompensa em combo (3 cupons + cashback).
+- "Finalize o Jogo": tabuleiro isométrico com casas de desconto crescente, dados e peão. Monocromático rosa-pink. Mecânica de progressão/jogo.
+- "Alerta Presente": caixa de presente clássica fotografada sobre branco puro. Headline de alerta em arco.
+- "Balão Premiado": máquina de causa e efeito em 3D (polias, tesoura, balão, prego em mola) sobre cinza claro. Mecânica: cortar o fio dispara a reação em cadeia.`;
+
+const UNIVERSOS_BRIEF: UniversoBrief[] = [
+  { id: 'espelho-embacado', descricao: 'espelho mágico embaçado', mecanica: 'Desembace o espelho', revelacao: 'a névoa se dissipa e o prêmio aparece refletido' },
+  { id: 'fenda-cupom', descricao: 'máquina com fenda de onde sai um ticket', mecanica: 'Puxe o ticket', revelacao: 'o ticket sai inteiro da fenda, brilhando' },
+  { id: 'bloco-gelo', descricao: 'prêmio congelado dentro de um bloco de gelo', mecanica: 'Quebre o gelo', revelacao: 'o gelo racha e o prêmio fica livre' },
+  { id: 'selo-circular', descricao: 'selo/adesivo circular grande colado numa superfície', mecanica: 'Descole o selo', revelacao: 'o selo levanta revelando o prêmio por baixo' },
+  { id: 'tabuleiro', descricao: 'jogo de tabuleiro com peão e dados', mecanica: 'Avance as casas', revelacao: 'o peão chega à última casa, a do prêmio' },
+  { id: 'causa-efeito', descricao: 'máquina de causa e efeito (polias, rampas, bolinhas)', mecanica: 'Corte o fio', revelacao: 'a reação em cadeia termina liberando o prêmio' },
+  { id: 'cofre', descricao: 'cofre antigo com dial de segredo', mecanica: 'Gire o segredo', revelacao: 'a porta do cofre abre e o prêmio aparece dentro' },
+  { id: 'garra', descricao: 'máquina de garra de fliperama', mecanica: 'Acione a garra', revelacao: 'a garra sobe segurando o prêmio' },
+  { id: 'gumball', descricao: 'máquina de bolinhas de vidro com manivela', mecanica: 'Gire a manivela', revelacao: 'uma cápsula cai na saída e se abre com o prêmio' },
+  { id: 'pinhata', descricao: 'piñata colorida pendurada', mecanica: 'Estoure a piñata', revelacao: 'a piñata se abre e o prêmio cai no centro' },
+  { id: 'raspadinha', descricao: 'cartela de raspadinha com moeda', mecanica: 'Raspe a cartela', revelacao: 'a camada prateada sai e revela um símbolo dourado' },
+  { id: 'cortina', descricao: 'mini palco de teatro com cortina de veludo fechada', mecanica: 'Abra a cortina', revelacao: 'a cortina abre e o prêmio está no holofote do palco' },
+  { id: 'lupa', descricao: 'lupa sobre uma superfície com um detalhe escondido', mecanica: 'Passe a lupa', revelacao: 'sob a lente, o prêmio escondido fica nítido e grande' },
+  { id: 'ampulheta', descricao: 'ampulheta grande com areia colorida', mecanica: 'Vire a ampulheta', revelacao: 'a areia escorre e descobre o prêmio no fundo' },
+  { id: 'fechadura', descricao: 'porta pequena com fechadura e chave antiga', mecanica: 'Gire a chave', revelacao: 'a portinha abre mostrando o prêmio lá dentro' },
+  { id: 'lacre-cera', descricao: 'carta com lacre de cera', mecanica: 'Rompa o lacre', revelacao: 'o lacre parte e a carta se desdobra com o prêmio' },
+  { id: 'bolha', descricao: 'bolha de sabão gigante com o prêmio flutuando dentro', mecanica: 'Estoure a bolha', revelacao: 'a bolha estoura em gotas e o prêmio cai em primeiro plano' },
+  { id: 'quebra-cabeca', descricao: 'quebra-cabeça quase completo com uma peça faltando', mecanica: 'Encaixe a última peça', revelacao: 'a peça encaixa e a imagem completa mostra o prêmio' },
+  { id: 'interruptor', descricao: 'cena escura com um interruptor de luz', mecanica: 'Acenda a luz', revelacao: 'a luz acende e o prêmio estava ali o tempo todo' },
+  { id: 'vending', descricao: 'máquina de venda automática retrô', mecanica: 'Aperte o botão', revelacao: 'o prêmio cai na bandeja de saída' },
+  { id: 'cartas', descricao: 'três cartas viradas para baixo sobre uma mesa', mecanica: 'Vire a carta', revelacao: 'a carta do meio vira e é a premiada' },
+  { id: 'elevador', descricao: 'porta de elevador fechada com botão iluminado', mecanica: 'Chame o elevador', revelacao: 'as portas abrem e o prêmio está dentro' },
+  { id: 'broto', descricao: 'vaso de terra com um broto e um regador', mecanica: 'Regue a planta', revelacao: 'a planta cresce e desabrocha com o prêmio no centro' },
+  { id: 'domino', descricao: 'fileira sinuosa de peças de dominó', mecanica: 'Empurre o primeiro dominó', revelacao: 'a última peça cai e revela o prêmio' },
+  { id: 'globo-neve', descricao: 'globo de neve com uma forma escondida pela neve', mecanica: 'Sacuda o globo', revelacao: 'a neve assenta e o prêmio aparece dentro do globo' },
+  { id: 'carimbo', descricao: 'passe/cartão de fidelidade com espaços vazios e um carimbo', mecanica: 'Carimbe o passe', revelacao: 'o último carimbo completa o cartão e libera o prêmio' },
+  { id: 'pescaria', descricao: 'pescaria de festa com peixinhos e vara com anzol', mecanica: 'Fisgue o prêmio', revelacao: 'a vara sobe com o prêmio preso no anzol' },
+  { id: 'foguete', descricao: 'foguete de brinquedo numa plataforma com pavio', mecanica: 'Acenda o pavio', revelacao: 'o foguete decola e o prêmio fica na plataforma, iluminado' },
+];
+
+// Objetos que saturaram o backlog de revisão — ficam proibidos até o backlog renovar.
+const TERMOS_SATURADOS = ['lingueta', 'faixa', 'cinta', 'rotulo', 'tampa', 'luva', 'capa', 'bilhete'];
+
+const ESTILOS_BRIEF: OpcaoBrief[] = [
+  { id: 'flat-grao', descricao: 'Flat 2D vector illustration with a subtle risograph grain texture, bold simple shapes, limited palette, no gradients, no 3D' },
+  { id: 'foto-still', descricao: 'Photorealistic still-life product photography, crisp studio shot, real materials and textures' },
+  { id: 'colagem', descricao: 'Mixed-media collage: a photographic cut-out object placed on a flat solid-color set with paper grain, subtle cut-paper edges' },
+  { id: 'clay-3d', descricao: 'Soft 3D render with matte clay / plastic-toy materials, rounded chunky shapes, playful and tactile' },
+  { id: 'isometrico', descricao: 'Isometric 3D illustration, clean geometry, tonal monochrome palette built from the background color' },
+  { id: 'grafico-minimal', descricao: 'Minimal graphic design: one bold flat object on a plain background, a lot of negative space, poster-like' },
+  { id: 'papercraft', descricao: 'Layered papercraft diorama, paper cut-outs with soft real shadows between the layers' },
+  { id: 'line-art', descricao: 'Editorial hand-drawn ink line art with flat color fills, slightly imperfect lines' },
+  { id: 'retro-print', descricao: 'Retro 1960s-70s print illustration, halftone dots, warm offset-print colors, slight misregistration' },
+];
+
+const COMPOSICOES_BRIEF: OpcaoBrief[] = [
+  { id: 'lateral', descricao: 'o herói entra pela lateral direita e é cortado pela borda do quadro' },
+  { id: 'diagonal', descricao: 'o herói ocupa uma diagonal, do canto inferior esquerdo até o centro-direita' },
+  { id: 'flat-lay', descricao: 'vista de cima (flat lay), elementos espalhados em grade solta' },
+  { id: 'pedestal', descricao: 'herói pequeno sobre um pedestal/plataforma, com muito respiro ao redor' },
+  { id: 'close', descricao: 'close no detalhe da interação (mão, dedo ou ferramenta agindo sobre o objeto), com a cena inteira contida da metade do quadro pra baixo' },
+  { id: 'dialogo', descricao: 'dois elementos em diálogo: a ferramenta de um lado, o alvo do outro' },
+  { id: 'central', descricao: 'herói grande, simétrico, levemente abaixo do centro' },
+];
+
+const FUNDOS_BRIEF: Record<string, OpcaoBrief[]> = {
+  Apice: [
+    { id: 'verde-floresta', descricao: 'verde-floresta #688D65 chapado com grão sutil' },
+    { id: 'aqua', descricao: 'aqua #AAD4C7 chapado com grão sutil' },
+    { id: 'magenta', descricao: 'magenta #D553A5 chapado' },
+    { id: 'malva', descricao: 'malva #B57BA6 chapado com grão sutil' },
+    { id: 'terracota', descricao: 'terracota #C8745A chapado' },
+    { id: 'salvia', descricao: 'verde-sálvia claro #C9D8C0 chapado' },
+    { id: 'manteiga', descricao: 'amarelo-manteiga #F2E3A6 chapado' },
+    { id: 'verde-profundo', descricao: 'verde profundo #3E5A3B chapado' },
+    { id: 'off-white', descricao: 'off-white #F4F1E5 chapado' },
+  ],
+  Barbours: [
+    { id: 'blush', descricao: 'rosa blush #FFCCD5 chapado com grão sutil' },
+    { id: 'merlot', descricao: 'merlot #4F080E chapado' },
+    { id: 'rubi', descricao: 'vermelho rubi #BF0F26 chapado' },
+    { id: 'dourado', descricao: 'dourado fosco #AA834B chapado' },
+    { id: 'pink', descricao: 'pink vibrante #FF4FA3 chapado' },
+    { id: 'nude', descricao: 'nude #E8C4B0 chapado com grão sutil' },
+    { id: 'cinza-claro', descricao: 'cinza claro #EDEDED chapado' },
+    { id: 'branco', descricao: 'branco puro, sem textura' },
+    { id: 'off-white', descricao: 'off-white #E7E3D8 chapado' },
+  ],
+};
+
+const RECOMPENSAS_BRIEF: OpcaoBrief[] = [
+  { id: 'brinde-unico', descricao: '1 brinde surpresa no carrinho' },
+  { id: 'tres-brindes-cupom', descricao: '(3) brindes + cupom extra em todo o site' },
+  { id: 'maior-cupom', descricao: 'o maior cupom do ano, revelado só na interação' },
+  { id: 'combo-cashback', descricao: 'combo inédito: cupons acumulados + cashback' },
+  { id: 'progressivo', descricao: 'desconto progressivo: quanto mais avança, maior o cupom' },
+  { id: 'frete-brinde', descricao: 'frete liberado + brinde' },
+  { id: 'kit-misterioso', descricao: 'kit misterioso de brindes' },
+  { id: 'cupom-dobro', descricao: 'cupom em dobro por tempo limitado' },
+];
+
+const HEADLINES_BRIEF: OpcaoBrief[] = [
+  { id: 'verbo-objeto', descricao: 'verbo de ação + objeto do universo (ex. de forma, não de conteúdo: "VERBO O OBJETO")' },
+  { id: 'titulo-narrativo', descricao: 'título de conceito, como o nome de uma atração, usando o nome da marca (ex. de forma: "O ___ da {marca}"). O único nome próprio permitido é "{marca}"' },
+  { id: 'duplo-sentido', descricao: 'expressão idiomática de duplo sentido que conversa com o universo' },
+  { id: 'alerta', descricao: 'chamada de alerta/anúncio curta, tom de notificação' },
+  { id: 'desafio', descricao: 'desafio ou instrução de jogo (ex. de forma: "Termine o ___")' },
+  { id: 'rotulo-premio', descricao: 'o universo + adjetivo de prêmio (ex. de forma: "___ premiado")' },
+];
+
+// Só urgências de TEMPO RELATIVO: "enquanto durar o estoque de brindes" saía combinada com
+// recompensa de cupom ("cupom em dobro enquanto durar o estoque de brindes"), e "até domingo"
+// virava "alerta de domingo" num disparo que o playbook agenda pra quarta.
+const URGENCIAS_BRIEF = ['até 23h59', 'somente até 00h', 'só hoje', 'nas próximas horas', 'até amanhã de manhã', 'nas próximas 24 horas'];
+
+type BriefCriativo = {
+  universo: UniversoBrief; estilo: OpcaoBrief; fundo: OpcaoBrief; composicao: OpcaoBrief;
+  recompensa: OpcaoBrief; headline: OpcaoBrief; urgencia: string;
+};
+
+// Sorteia evitando os ids usados nas últimas `janela` pautas. Se a exclusão esvaziar o eixo
+// (histórico maior que o repertório), cai no eixo inteiro — repetir é melhor que travar.
+function sortearEvitando<T>(opcoes: T[], idDe: (o: T) => string, usados: string[], janela: number): T {
+  const recentes = new Set(usados.slice(0, janela));
+  const livres = opcoes.filter((o) => !recentes.has(idDe(o)));
+  const pool = livres.length > 0 ? livres : opcoes;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function sortearBriefCriativo(marca: string, recentes: any[]): BriefCriativo {
+  const briefs = recentes.map((r) => r?.visual?.briefCriativo).filter(Boolean);
+  const usados = (eixo: string) => briefs.map((b: any) => String(b?.[eixo] ?? ''));
+  const fundos = FUNDOS_BRIEF[marca] ?? FUNDOS_BRIEF.Apice;
+  return {
+    universo: sortearEvitando(UNIVERSOS_BRIEF, (o) => o.id, usados('universo'), 20),
+    estilo: sortearEvitando(ESTILOS_BRIEF, (o) => o.id, usados('estilo'), 4),
+    fundo: sortearEvitando(fundos, (o) => o.id, usados('fundo'), 5),
+    composicao: sortearEvitando(COMPOSICOES_BRIEF, (o) => o.id, usados('composicao'), 3),
+    recompensa: sortearEvitando(RECOMPENSAS_BRIEF, (o) => o.id, usados('recompensa'), 3),
+    headline: sortearEvitando(HEADLINES_BRIEF, (o) => o.id, usados('headline'), 2),
+    urgencia: sortearEvitando(URGENCIAS_BRIEF, (o) => o, usados('urgencia'), 2),
+  };
+}
+
+// Só os ids vão pro banco: é o que a exclusão da próxima rodada compara.
+function briefParaRegistro(b: BriefCriativo) {
+  return {
+    universo: b.universo.id, estilo: b.estilo.id, fundo: b.fundo.id, composicao: b.composicao.id,
+    recompensa: b.recompensa.id, headline: b.headline.id, urgencia: b.urgencia,
+  };
+}
+
+// Cores que a marca proíbe (BRAND_DNA.prohibitedColors), em termos que o modelo usa na paleta e
+// na descrição dos frames. No teste, a Ápice saiu com "azul-petróleo" — o prompt da imagem
+// levava a proibição, mas a descrição da cena pedia o azul explicitamente e ganhava.
+const CORES_PROIBIDAS: Record<string, string[]> = {
+  Apice: ['azul', 'blue', 'neon', 'petroleo', 'turquesa', 'ciano', 'cyan', 'marinho', 'navy', 'cobalto'],
+  Barbours: ['azul', 'blue', 'verde', 'green', 'laranja', 'orange', 'amarelo', 'yellow', 'petroleo', 'turquesa', 'ciano', 'cyan', 'marinho', 'navy', 'cobalto'],
+};
+
+// Hex azul frio (matiz 180°–260°, saturado) — pega "#1E3A8A" quando o nome da cor não vem junto.
+function hexEhAzulFrio(hex: string): boolean {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (d < 0.15 || max !== b) return false;
+  const h = (60 * ((r - g) / d + 4) + 360) % 360;
+  return h >= 180 && h <= 260;
+}
+
+function coresProibidasUsadas(concept: any, marca: string): string[] {
+  const termos = CORES_PROIBIDAS[marca] ?? [];
+  const cores: string[] = Array.isArray(concept?.visual?.paletaRecomendada?.cores) ? concept.visual.paletaRecomendada.cores.map(String) : [];
+  const frames: string[] = Array.isArray(concept?.visual?.frames) ? concept.visual.frames.map(String) : [];
+  const texto = ` ${normalizarTexto([...cores, ...frames].join(' '))} `;
+  const achados = termos.filter((t) => texto.includes(` ${t}`));
+  for (const c of cores) for (const hex of c.match(/#[0-9a-f]{6}/gi) ?? []) if (hexEhAzulFrio(hex)) achados.push(hex);
+  return [...new Set(achados)];
+}
+
+// Dia/horário do playbook (CLAUDE.md → "Two Brands, Two Playbooks"). O modelo inventava
+// ("quinta 19h30") porque o prompt do agente nunca passou essa regra.
+const AGENDA_PLAYBOOK: Record<string, { dia: string; horario: string }> = {
+  Apice: { dia: 'Quarta-feira', horario: '8h30 às 9h30' },
+  Barbours: { dia: 'Quarta-feira ou domingo', horario: '9h às 11h' },
+};
+
+const normalizarTexto = (s: unknown) =>
+  String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Rede de segurança depois da geração: o brief já força variedade, mas o modelo às vezes
+// "volta pra casa" (reescreve a mecânica como lingueta, copia uma headline recente).
+function motivoRepeticao(concept: any, recentes: any[], marca?: string): string | null {
+  if (marca) {
+    const proibidas = coresProibidasUsadas(concept, marca);
+    if (proibidas.length) return `usou cor proibida para a marca (${proibidas.join(', ')})`;
+  }
+  const headline = normalizarTexto(concept?.copy?.headlineBanner);
+  const mecanica = normalizarTexto(concept?.operacional?.mecanicaEscolhida);
+  const sub = normalizarTexto(concept?.copy?.subHeadlineBanner);
+  const saturado = TERMOS_SATURADOS.find((t) => ` ${headline} ${mecanica} `.includes(` ${t} `));
+  if (saturado) return `usou o objeto saturado "${saturado}"`;
+  for (const r of recentes) {
+    if (headline && headline === normalizarTexto(r?.copy?.headlineBanner)) return `repetiu a headline "${concept.copy.headlineBanner}" de uma pauta recente`;
+    if (mecanica && mecanica === normalizarTexto(r?.operacional?.mecanicaEscolhida)) return `repetiu a mecânica "${concept.operacional.mecanicaEscolhida}" de uma pauta recente`;
+    if (sub && sub === normalizarTexto(r?.copy?.subHeadlineBanner)) return 'repetiu literalmente o sub-headline de uma pauta recente';
+  }
+  return null;
+}
+
+async function loadConceitosRecentes(key: string): Promise<any[]> {
+  try {
+    // Todas as pautas do agente, não só as avaliadas: o backlog "aguardando revisão" é
+    // justamente onde a repetição aparece, e ele nunca entrava no feedback.
+    return await supabaseRestGet(
+      `pautas_geradas?select=copy,visual,operacional&modo=eq.C&order=data_criacao.desc&limit=30`,
+      key,
+    );
+  } catch (err: any) {
+    console.error('[agente-gif] Falha ao carregar conceitos recentes:', err.message);
+    return [];
+  }
+}
+
 async function supabaseRestGet(path: string, key: string): Promise<any> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
@@ -835,9 +1147,9 @@ function amostra<T>(arr: T[], max: number): T[] {
 
 async function generateGifAgentConcept(params: {
   marca: string; conteudosAprendizado: any[]; feedbackAprovados: any[]; feedbackRejeitados: any[];
-  motivoRejeicaoAnterior?: string; token: string;
+  brief: BriefCriativo; conceitosRecentes: any[]; motivoRejeicaoAnterior?: string; token: string;
 }): Promise<any> {
-  const { marca, conteudosAprendizado, feedbackAprovados, feedbackRejeitados, motivoRejeicaoAnterior, token } = params;
+  const { marca, conteudosAprendizado, feedbackAprovados, feedbackRejeitados, brief, conceitosRecentes, motivoRejeicaoAnterior, token } = params;
   const gifs = amostra(conteudosAprendizado, 15);
   const gifsBlock = gifs.length > 0
     ? gifs.map((c: any, i: number) => `${i + 1}. [${c.marca}] "${c.nome_design}" — ${c.mecanica_texto} | Composição: ${c.composicao_texto}`).join('\n')
@@ -848,31 +1160,64 @@ async function generateGifAgentConcept(params: {
   const reprovadosBlock = feedbackRejeitados.length > 0
     ? feedbackRejeitados.map((f: any, i: number) => `${i + 1}. REPROVADO: "${f.recomendacao_estruturada?.operacional?.mecanicaEscolhida ?? '?'}"${f.feedback_usuario ? ` — motivo: ${f.feedback_usuario}` : ''}`).join('\n')
     : 'Nenhum conceito reprovado ainda.';
+  // O backlog recente inteiro (avaliado ou não) — é a lista do que NÃO pode sair de novo.
+  const recentesBlock = conceitosRecentes.length > 0
+    ? conceitosRecentes.slice(0, 20).map((r: any, i: number) =>
+        `${i + 1}. "${r?.copy?.headlineBanner ?? ''}" / "${r?.copy?.subHeadlineBanner ?? ''}" | mecânica: ${r?.operacional?.mecanicaEscolhida ?? '?'} | fundo: ${r?.visual?.paletaRecomendada?.fundo ?? '?'}`).join('\n')
+    : 'Nenhuma pauta recente.';
 
-  const systemPrompt = `Você é o Agente Autônomo de Criação de GIFs de CRM, propondo sozinho (sem humano no momento da criação) UM conceito de GIF com mecânica e racional NOVOS — nunca repita literalmente uma mecânica já vista no grounding ou já avaliada abaixo. REGRAS INVIOLÁVEIS: sem CAPS LOCK no assunto, sem %, OFF, GRÁTIS, R$, no máximo 2 emojis. Pré-header SEMPRE "Mas, vou precisar cancelar em breve". ${AGENTE_PLAYBOOK[marca] ?? ''}
+  const systemPrompt = `Você é o Agente Autônomo de Criação de GIFs de CRM. Você recebe um BRIEF CRIATIVO já decidido (universo, estilo, fundo, composição, recompensa, formato de headline) e executa esse brief em UM conceito de GIF completo. Você não escolhe outro universo nem outro estilo: o brief existe exatamente porque, deixado livre, o agente sempre voltava pra mesma peça (caixa 3D com faixa/lingueta, fundo azul-marinho, "brinde surpresa até 23h59").
 
-⚠️ CONCEITO GENÉRICO, NÃO NICHADO (REGRA CRÍTICA): este conteúdo pode acabar sendo usado por QUALQUER marca do grupo (cosméticos, moda, casa, o que for), não só a marca informada acima. NUNCA mencione ou implique um produto/categoria específica (nada de cabelo, perfume, maquiagem, skincare etc.) — a mecânica, o objeto do GIF e o racional têm que funcionar igual bem pra qualquer produto físico genérico embrulhado/escondido/lacrado. Bons exemplos de mecânica genérica: "deslize a gaveta", "erga a tampa", "gire o rótulo", "desamarre o laço", "descole o adesivo", "abra a caixa". Evite objetos/termos ligados a um nicho (ex: pente, xampu, batom, perfume) — prefira objetos neutros (caixa, envelope, gaveta, embalagem, laço, adesivo, tampa).
+REGRAS INVIOLÁVEIS: sem CAPS LOCK no assunto, sem %, OFF, GRÁTIS, R$ em nenhum campo de copy, no máximo 2 emojis. Pré-header SEMPRE "Mas, vou precisar cancelar em breve". ${AGENTE_PLAYBOOK[marca] ?? ''}
 
-REGRAS DE COPY (OBRIGATÓRIO PREENCHER TODOS — nunca deixe vazio):
-- headlineBanner: headline do banner, baseada no verbo de ação da mecânica escolhida, em destaque (ex: "ABRA A CAIXA", "PUXE O ADESIVO").
-- subHeadlineBanner: expõe a recompensa concreta + um prazo/urgência, em UMA frase corrida, SEM travessão (—) nem hífen duplo (--) separando as duas ideias — use vírgula ou reestruture a frase (ex: "seu brinde te espera, válido até 23h59" e NÃO "seu brinde te espera — válido até 23h59"). Travessão no meio da frase é um tique de texto gerado por IA e não pode aparecer aqui.
-- ctaBotao: verbo único no imperativo correspondente à mecânica (ex: "ABRIR", "PUXAR").
-- assunto: dentro do limite de caracteres, coerente com a mecânica, também sem travessão.
-Um conceito sem headlineBanner, subHeadlineBanner ou ctaBotao preenchidos é considerado INVÁLIDO — sempre preencha os quatro campos de copy com texto real, nunca com string vazia.
+⚠️ CONCEITO GENÉRICO, NÃO NICHADO: o conteúdo pode ser usado por qualquer marca do grupo. O UNIVERSO pode ser qualquer coisa (espelho, gelo, cofre, tabuleiro...), mas o PRÊMIO revelado é sempre genérico (embrulho, cupom, cápsula, brilho, pacote) — nunca um produto de nicho (cabelo, perfume, maquiagem, skincare).
 
-REGRA DE FUNDO/BACKGROUND (visual.paletaRecomendada.fundo): varie o fundo entre os conceitos gerados — não repita "off-white"/"bege" por padrão. Escolha um fundo que tenha harmonia com a paleta de cores da marca (tons vivos, saturados ou escuros também valem, contanto que combinem com o objeto herói e mantenham boa legibilidade), e descreva-o em 1 frase objetiva (cor + textura/gradiente, ex: "verde-floresta profundo com leve gradiente" ou "rosa blush pastel liso"). O bege claro só deve aparecer ocasionalmente, nunca como escolha padrão.`;
+PROIBIDO (saturado no backlog): ${TERMOS_SATURADOS.join(', ')}, caixa com faixa, e qualquer headline no molde "PUXE A ___ / UM BRINDE SURPRESA ... ATÉ 23H59".
 
-  const userPrompt = `GIFs analisados que já funcionaram (grounding — de qualquer marca do grupo, use só como entendimento de padrão de mecânica/composição, NÃO copie o produto ou nicho deles):
+REGRAS DE COPY (preencha todos com texto real, nunca string vazia):
+- headlineBanner: siga o FORMATO DE HEADLINE do brief. Curta (até 5 palavras).
+- subHeadlineBanner: expõe a recompensa do brief + a urgência do brief, em UMA frase corrida, sem travessão (—) nem hífen duplo. Não comece com "Um brinde surpresa" nem "Seu brinde".
+- ctaBotao: 1 ou 2 palavras no imperativo, ligadas à mecânica do universo.
+- assunto: dentro do limite de caracteres, desperta curiosidade sobre o universo, sem travessão.
+- Nenhum campo de copy cita dia da semana (o dia do disparo é definido depois, pelo playbook).
+
+NOMES PRÓPRIOS: o único nome próprio permitido em qualquer campo é "${marca}". Nunca invente nomes de personagem, lugar ou pessoa.
+
+CORES: a paleta (visual.paletaRecomendada.cores, em HEX) e a descrição dos frames só usam tons que harmonizem com o FUNDO do brief. ${BRAND_DNA[marca]?.prohibitedColors ?? ''} Nunca cite essas cores proibidas, nem como detalhe.
+
+Retorne visual.paletaRecomendada.fundo exatamente com o FUNDO do brief, visual.estiloIlustracao exatamente com o ESTILO do brief e operacional.mecanicaEscolhida exatamente com a MECÂNICA do brief (só o verbo + objeto, ex. "${brief.universo.mecanica}").`;
+
+  const userPrompt = `=== BRIEF CRIATIVO DESTA RODADA (obrigatório) ===
+UNIVERSO: ${brief.universo.descricao}
+MECÂNICA: ${brief.universo.mecanica} — ${brief.universo.revelacao}
+ESTILO DE RENDER: ${brief.estilo.descricao}
+FUNDO: ${brief.fundo.descricao}
+COMPOSIÇÃO: ${brief.composicao.descricao}
+RECOMPENSA: ${brief.recompensa.descricao}
+FORMATO DE HEADLINE: ${brief.headline.descricao.replace(/\{marca\}/g, marca)}
+URGÊNCIA: ${brief.urgencia}
+
+=== RÉGUA DE VARIEDADE: peças antigas que funcionaram ===
+Cada uma é um universo diferente, com estilo e fundo próprios. É esse nível de diferença entre peças que se espera — não copie nenhuma.
+${REPERTORIO_REFERENCIAS}
+
+=== PAUTAS RECENTES DO AGENTE (não repita headline, sub-headline, mecânica nem fundo) ===
+${recentesBlock}
+
+GIFs analisados que já funcionaram (grounding de padrão de mecânica/composição, NÃO copie produto ou nicho):
 ${gifsBlock}
 
-Conceitos já avaliados por humanos neste programa do agente — aprovados (reforce o padrão, sem repetir a mecânica):
+Conceitos já avaliados por humanos — aprovados (entenda o porquê, sem repetir a mecânica):
 ${aprovadosBlock}
 
 Reprovados (NÃO proponha de novo, evite o motivo apontado):
 ${reprovadosBlock}
-${motivoRejeicaoAnterior ? `\nEsta é uma regeneração imediata: o conceito anterior desta mesma rodada foi reprovado com o motivo "${motivoRejeicaoAnterior}". Gere um conceito claramente diferente que evite esse problema.\n` : ''}
-Gere 1 conceito de GIF GENÉRICO (sem nicho de produto) com EXATAMENTE 3 frames (inicial, intermediário, final), formato 1:1, com racional de por que essa mecânica nova deve funcionar. Em "previsao.casesReferencia" cite o(s) "nome_design" do grounding que mais inspiraram o conceito.
-CONTINUIDADE VISUAL (ESCOPO DECRESCENTE — OBRIGATÓRIO): frames[0] é a ÚNICA descrição completa da cena (objeto herói + props secundários + cor + posição + fundo). frames[1] e frames[2] descrevem SOMENTE o delta do objeto principal, sem redescrever o que já foi estabelecido no frame 1.
+${motivoRejeicaoAnterior ? `\nEsta é uma regeneração imediata: o conceito anterior foi reprovado com o motivo "${motivoRejeicaoAnterior}". Gere um conceito claramente diferente que evite esse problema.\n` : ''}
+Gere 1 conceito de GIF executando o brief, com EXATAMENTE 3 frames (inicial, intermediário, final), formato 1:1, e um racional (justificativaMecanica) que explique por que ESTE universo gera clique — o gatilho psicológico específico dele (curiosidade, conclusão, sorte, recompensa por esforço...), não um texto genérico sobre "interatividade". Em "previsao.casesReferencia" cite o(s) "nome_design" do grounding que mais se aproximam.
+CONTINUIDADE VISUAL (OBRIGATÓRIO): frames[0] é a ÚNICA descrição completa da cena (objeto herói + props + cor + posição + fundo + composição do brief). frames[1] e frames[2] descrevem SOMENTE o delta do herói, sem redescrever o resto. Os frames são imagem pura: nenhum texto, número ou símbolo desenhado na cena.
+ESPAÇO DO TEXTO (OBRIGATÓRIO): headline, sub-headline e botão são aplicados por cima da imagem, no terço de cima e no rodapé. Em frames[0], diga explicitamente que toda a cena (herói, props, sombras) fica entre um terço e quatro quintos da altura, com o topo e o rodapé só de fundo liso.
+MOVIMENTO (OBRIGATÓRIO): frames[1] mostra uma mudança claramente visível em relação a frames[0] — o objeto já está pelo menos na metade da ação (meio aberto, meio caído, meio girado). Nunca um ajuste sutil que deixe os dois frames quase iguais.
+SUSPENSE (OBRIGATÓRIO): o prêmio NÃO aparece nos frames[0] e [1], nem parcialmente: ele surge só em frames[2]. A revelação é mostrada pelo próprio objeto (abre, cai, acende, sai), nunca com raios de luz, explosão de brilho, halo ou raios gráficos ao redor.
 Retorne APENAS um array JSON com 1 item, sem markdown, nesta estrutura exata:
 [{
   "copy": { "assunto": "", "preHeader": "Mas, vou precisar cancelar em breve", "headlineBanner": "", "subHeadlineBanner": "", "ctaBotao": "" },
@@ -882,7 +1227,7 @@ Retorne APENAS um array JSON com 1 item, sem markdown, nesta estrutura exata:
   "riscos": []
 }]`;
 
-  const text = await callGemini(userPrompt, systemPrompt, token);
+  const text = await callGemini(userPrompt, systemPrompt, token, 1);
   const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
@@ -894,6 +1239,9 @@ Retorne APENAS um array JSON com 1 item, sem markdown, nesta estrutura exata:
 // type "experiment" exige EXATAMENTE 2 variações (isso é o A/B nativo da Insider) — cada uma
 // é um email completo (subject/pre_header/html), sempre criado como Draft (agendar é manual
 // no painel). html precisa vir em base64. Rate limit: 1 req/s.
+// UTM vai dentro de cada variação como { utm: { source, medium, campaign } } — regra do time:
+// source e medium são sempre "insider"/"newsletter", campaign é o nome da campanha (ver
+// insiderUtm()).
 // Contas da Insider com acesso configurado. O conteúdo do agente não é amarrado a nenhuma
 // marca (v1: mecânicas genéricas) — qualquer pauta pode ser enviada pra qualquer conta aqui.
 const CONTAS_INSIDER = ['Apice', 'Barbours', 'Rituaria', 'Lescent', 'Kokeshi', 'Gocase'] as const;
@@ -1786,20 +2134,49 @@ function buildInsiderVariationHtml(params: { imageUrl: string; linkUrl?: string;
   return html;
 }
 
+// UTM da campanha: regra fixa do time — origem e mídia nunca mudam, só a campanha varia por
+// envio. Vai dentro de cada variação (não no nível da campanha), como o endpoint espera.
+function insiderUtm(campaign: string): { source: string; medium: string; campaign: string } {
+  return { source: 'insider', medium: 'newsletter', campaign };
+}
+
 async function createInsiderExperimentCampaign(params: {
   apiKey: string; name: string; tags: string[]; variationA: { subject: string; preHeader: string; html: string };
-  variationB: { subject: string; preHeader: string; html: string };
+  variationB: { subject: string; preHeader: string; html: string }; utmCampaign: string;
 }): Promise<{ id: string; message: string }> {
-  const { apiKey, name, tags, variationA, variationB } = params;
+  const { apiKey, name, tags, variationA, variationB, utmCampaign } = params;
   const toB64 = (s: string) => btoa(unescape(encodeURIComponent(s)));
+  const utm = insiderUtm(utmCampaign);
   const res = await fetch('https://mail.useinsider.com/content/v1/campaign/create', {
     method: 'POST',
     headers: { 'X-INS-AUTH-KEY': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name, tags, type: 'experiment',
       variations: [
-        { subject: variationA.subject, pre_header: variationA.preHeader, html: toB64(variationA.html) },
-        { subject: variationB.subject, pre_header: variationB.preHeader, html: toB64(variationB.html) },
+        { subject: variationA.subject, pre_header: variationA.preHeader, html: toB64(variationA.html), utm },
+        { subject: variationB.subject, pre_header: variationB.preHeader, html: toB64(variationB.html), utm },
+      ],
+    }),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error ?? `Insider retornou ${res.status}`);
+  return { id: String(data.id ?? ''), message: data.message ?? '' };
+}
+
+async function createInsiderSingleCampaign(params: {
+  apiKey: string; name: string; tags: string[]; variation: { subject: string; preHeader: string; html: string };
+  utmCampaign: string;
+}): Promise<{ id: string; message: string }> {
+  const { apiKey, name, tags, variation, utmCampaign } = params;
+  const toB64 = (s: string) => btoa(unescape(encodeURIComponent(s)));
+  const utm = insiderUtm(utmCampaign);
+  const res = await fetch('https://mail.useinsider.com/content/v1/campaign/create', {
+    method: 'POST',
+    headers: { 'X-INS-AUTH-KEY': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name, tags, type: 'single',
+      variations: [
+        { subject: variation.subject, pre_header: variation.preHeader, html: toB64(variation.html), utm },
       ],
     }),
   });
@@ -1832,12 +2209,12 @@ Escolha exatamente um "id" da lista e escreva o racional da comparação. Retorn
 // Gera e salva os 3 frames em sequência (frame 1 = master, referência visual dos frames 2 e 3).
 async function generateGifFramesForAgente(params: {
   marca: string; pautaId: string; brandDna: any; aspectRatio: string;
-  estiloIlustracao?: string; paleta?: any; mecanica?: string; recompensa?: string;
+  estiloIlustracao?: string; paleta?: any; composicao?: string; mecanica?: string; recompensa?: string;
   frameInicial: string; frameIntermediario: string; frameFinal: string;
   piappApiKey: string; supabaseServiceKey: string;
 }): Promise<Record<string, string> | undefined> {
   const {
-    marca, pautaId, brandDna, aspectRatio, estiloIlustracao, paleta, mecanica, recompensa,
+    marca, pautaId, brandDna, aspectRatio, estiloIlustracao, paleta, composicao, mecanica, recompensa,
     frameInicial, frameIntermediario, frameFinal, piappApiKey, supabaseServiceKey,
   } = params;
   const frames = [
@@ -1854,17 +2231,28 @@ async function generateGifFramesForAgente(params: {
   // certo, em vez de "sem nada".
   for (const { frameName, frameDescription } of frames) {
     const prompt = buildFramePrompt({
-      frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, mecanica, recompensa,
+      frameName, frameDescription, marca, brandDna, estiloIlustracao, paleta, composicao, mecanica, recompensa,
       aspectRatio, frameRefCount: masterFrameRefUrl ? 1 : 0, productRefCount: 0, totalFrames: frames.length,
     });
     // t2i não aceita imagem de referência — trocar pra edit a partir do frame que usa o
     // frame-mestre como referência (frames 2+).
     const imageModel = resolveImageModel('wavespeed-gpt-image-2-t2i', !!masterFrameRefUrl);
     try {
-      const result = await generateImage(
-        prompt, aspectRatio, imageModel, piappApiKey,
-        masterFrameRefUrl ? [masterFrameRefUrl] : undefined,
-      );
+      // 1 nova tentativa por frame: no teste, o frame FINAL falhou no PiApp e a pauta foi salva
+      // sem a revelação — um GIF sem desfecho, que é pior que um frame a mais de espera.
+      let result: { imageBytes: string; mimeType: string } | undefined;
+      for (let tentativa = 1; tentativa <= 2 && !result; tentativa++) {
+        try {
+          result = await generateImage(
+            prompt, aspectRatio, imageModel, piappApiKey,
+            masterFrameRefUrl ? [masterFrameRefUrl] : undefined,
+          );
+        } catch (err: any) {
+          if (tentativa === 2) throw err;
+          console.warn(`[agente-gif] Frame "${frameName}" falhou (${err.message}), tentando de novo.`);
+        }
+      }
+      if (!result) throw new Error('sem resultado');
       frameResults.push({ frameName, ...result });
       if (!masterFrameRefUrl) {
         try {
@@ -1904,16 +2292,31 @@ async function generateGifFramesForAgente(params: {
 async function runAgenteGifPipeline(env: Env, motivoRejeicaoAnterior?: string): Promise<any | null> {
   try {
     const marca = Math.random() < 0.5 ? 'Apice' : 'Barbours';
-    const [conteudosAprendizado, feedback] = await Promise.all([
+    const [conteudosAprendizado, feedback, conceitosRecentes] = await Promise.all([
       loadConteudosGifAprendizado(env.SUPABASE_KEY),
       getFeedbackAgenteGif(env.SUPABASE_KEY),
+      loadConceitosRecentes(env.SUPABASE_KEY),
     ]);
 
-    const concept = await generateGifAgentConcept({
-      marca, conteudosAprendizado,
-      feedbackAprovados: feedback.aprovados, feedbackRejeitados: feedback.reprovados,
-      motivoRejeicaoAnterior, token: env.GOGROUP_TOKEN,
-    });
+    // Até 2 tentativas: se a primeira sair repetida (objeto saturado, headline ou mecânica
+    // idêntica a uma pauta recente), sorteia outro brief e gera de novo com o motivo explícito.
+    let brief = sortearBriefCriativo(marca, conceitosRecentes);
+    let concept: any = null;
+    let motivo = motivoRejeicaoAnterior;
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      concept = await generateGifAgentConcept({
+        marca, conteudosAprendizado,
+        feedbackAprovados: feedback.aprovados, feedbackRejeitados: feedback.reprovados,
+        brief, conceitosRecentes, motivoRejeicaoAnterior: motivo, token: env.GOGROUP_TOKEN,
+      });
+      const repeticao = motivoRepeticao(concept, conceitosRecentes, marca);
+      if (!repeticao) break;
+      console.warn(`[agente-gif] Conceito repetido (${repeticao}), tentativa ${tentativa + 1}.`);
+      if (tentativa === 0) {
+        brief = sortearBriefCriativo(marca, [{ visual: { briefCriativo: briefParaRegistro(brief) } }, ...conceitosRecentes]);
+        motivo = `o conceito anterior ${repeticao}`;
+      }
+    }
 
     const copyCompleta = !!(
       concept?.copy?.assunto?.trim() &&
@@ -1935,6 +2338,19 @@ async function runAgenteGifPipeline(env: Env, motivoRejeicaoAnterior?: string): 
 
     const pauta = normalizePauta(concept, marca, 'C', 'imagem', 0, 3, '1:1');
     pauta.id = `pauta-agente-${Date.now()}`;
+    // Fundo e estilo vêm do brief, não do texto do modelo: é o modelo "reinterpretando" o
+    // fundo que fazia tudo convergir pro mesmo azul-marinho.
+    pauta.visual.paletaRecomendada.fundo = brief.fundo.descricao;
+    pauta.visual.estiloIlustracao = brief.estilo.descricao;
+    pauta.visual.briefCriativo = briefParaRegistro(brief);
+    // Mecânica curta vinda do brief: o modelo devolvia uma frase inteira ("Acender o pavio para
+    // disparar a decolagem..."), que poluía o card e nunca batia na checagem de repetição.
+    pauta.operacional.mecanicaEscolhida = brief.universo.mecanica;
+    const agenda = AGENDA_PLAYBOOK[marca];
+    if (agenda) {
+      pauta.operacional.diaRecomendado = agenda.dia;
+      pauta.operacional.horarioRecomendado = agenda.horario;
+    }
 
     const brandDna = BRAND_DNA[marca];
     const frames: string[] = pauta.visual?.frames ?? [];
@@ -1945,6 +2361,7 @@ async function runAgenteGifPipeline(env: Env, motivoRejeicaoAnterior?: string): 
           marca, pautaId: pauta.id, brandDna, aspectRatio: '1:1',
           estiloIlustracao: pauta.visual?.estiloIlustracao,
           paleta: pauta.visual?.paletaRecomendada,
+          composicao: brief.composicao.descricao,
           mecanica: pauta.operacional?.mecanicaEscolhida,
           recompensa: pauta.operacional?.recompensaEscolhida,
           frameInicial: frames[0], frameIntermediario: frames[1] ?? frames[0], frameFinal: frames[frames.length - 1] ?? frames[0],
@@ -2423,9 +2840,92 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const binaryStr = atob(base64Data);
         const bytes = new Uint8Array(binaryStr.length);
         for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-        const res = await supabaseUpload('campaign-images', `frames/${pautaId}/${frameName}.png`, bytes, mimeType, SUPABASE_KEY);
+        // O front manda WebP (composeFrame); frames antigos continuam em .png no bucket.
+        const ext = mimeType === 'image/webp' ? 'webp' : 'png';
+        const res = await supabaseUpload('campaign-images', `frames/${pautaId}/${frameName}.${ext}`, bytes, mimeType, SUPABASE_KEY);
         if (!res.ok) return json({ error: 'upload falhou' }, 500);
-        return json({ publicUrl: `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pautaId}/${frameName}.png` });
+        return json({ publicUrl: `${SUPABASE_URL}/storage/v1/object/public/campaign-images/frames/${pautaId}/${frameName}.${ext}` });
+      } catch (err: any) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    // Modo D (Editor de GIF Externo) — busca um GIF hospedado fora do nosso Storage (histórico da
+    // Insider, quase sempre sem CORS liberado) pra decodificar os frames no navegador. Sem esse
+    // proxy, o fetch() client-side falha silenciosamente pra ~269 dos ~270 GIFs do histórico, que
+    // só têm insider_original_url (CDN externo), não storage_url.
+    if (url.pathname === '/api/gif-proxy' && request.method === 'GET') {
+      try {
+        const targetUrl = url.searchParams.get('url');
+        if (!targetUrl || !targetUrl.startsWith('https://')) {
+          return json({ error: "Parâmetro 'url' precisa ser uma URL https." }, 400);
+        }
+        const upstream = await fetch(targetUrl);
+        if (!upstream.ok) return json({ error: `Falha ao buscar a URL de origem: ${upstream.status}` }, 502);
+        const contentLength = upstream.headers.get('content-length');
+        if (contentLength && Number(contentLength) > 20 * 1024 * 1024) {
+          return json({ error: 'Arquivo maior que 20MB.' }, 413);
+        }
+        const buffer = await upstream.arrayBuffer();
+        if (buffer.byteLength > 20 * 1024 * 1024) return json({ error: 'Arquivo maior que 20MB.' }, 413);
+        return new Response(buffer, {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': upstream.headers.get('content-type') ?? 'image/gif' },
+        });
+      } catch (err: any) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    // Modo D — edita um frame externo (upload ou histórico) com uma instrução livre em texto,
+    // via PiApp (mesmo mecanismo de "edit" já usado em /api/generate-image, mas sem a
+    // dependência de marca/BRAND_DNA — o GIF de origem não é necessariamente de Apice/Barbours).
+    // Duas rotas ("iniciar" + "status") em vez de uma só bloqueante — ver nota em
+    // iniciarGeracaoImagem acima.
+    if (url.pathname === '/api/editar-frame-externo/iniciar' && request.method === 'POST') {
+      try {
+        if (!PIAPP_API_KEY) return json({ error: 'PIAPP_API_KEY não configurada no servidor.' }, 500);
+        const {
+          imageDataUrl, instrucao, aspectRatio: rawRatio = '1:1',
+          imageModel: rawModel = 'wavespeed-gpt-image-2-t2i',
+          referenciasImagem: rawRefImages, frameReferencia,
+        } = await request.json() as any;
+        if (typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:')) {
+          return json({ error: 'imageDataUrl é obrigatório (data URL).' }, 400);
+        }
+        if (typeof instrucao !== 'string' || !instrucao.trim()) {
+          return json({ error: 'instrucao é obrigatória.' }, 400);
+        }
+
+        const productRefInputs: string[] = Array.isArray(rawRefImages) ? rawRefImages.slice(0, 4) : [];
+        const productRefUrls: string[] = [];
+        for (const img of productRefInputs) {
+          if (typeof img === 'string' && img.startsWith('data:')) {
+            productRefUrls.push(await uploadReferenceToPiApp(img, PIAPP_API_KEY));
+          }
+        }
+        const frameRefUrls: string[] = [];
+        if (typeof frameReferencia === 'string' && frameReferencia.startsWith('data:')) {
+          frameRefUrls.push(await uploadReferenceToPiApp(frameReferencia, PIAPP_API_KEY));
+        }
+        const refUrl = await uploadReferenceToPiApp(imageDataUrl, PIAPP_API_KEY);
+        const imageModel = resolveImageModel(rawModel, true);
+        const prompt = buildEditPromptExterno(instrucao, productRefUrls.length, frameRefUrls.length > 0);
+
+        const jobId = await iniciarGeracaoImagem(prompt, rawRatio, imageModel, PIAPP_API_KEY, [...productRefUrls, ...frameRefUrls, refUrl]);
+        return json({ jobId });
+      } catch (err: any) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    if (url.pathname === '/api/editar-frame-externo/status' && request.method === 'GET') {
+      try {
+        if (!PIAPP_API_KEY) return json({ error: 'PIAPP_API_KEY não configurada no servidor.' }, 500);
+        const jobId = url.searchParams.get('jobId');
+        if (!jobId) return json({ error: 'jobId é obrigatório.' }, 400);
+        const result = await verificarJobImagem(jobId, PIAPP_API_KEY);
+        return json(result);
       } catch (err: any) {
         return json({ error: err.message }, 500);
       }
@@ -2585,7 +3085,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
       try {
         const {
           propostaId, gifUrlVarianteA, destinoMarca: rawDestino,
-          linkCampanha, assunto: assuntoOverride, nomeCampanha: nomeCampanhaOverride,
+          linkCampanha, assunto: assuntoOverride, nomeCampanha: nomeCampanhaOverride, utmCampaign: utmCampaignOverride,
         } = await request.json() as any;
         if (!propostaId || !gifUrlVarianteA) {
           return json({ error: 'propostaId e gifUrlVarianteA são obrigatórios.' }, 400);
@@ -2631,6 +3131,11 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
         const nomeAuto = sanitizarNomeCampanha(`agente ${destinoMarca} ${pauta.operacional?.mecanicaEscolhida ?? 'teste'}`);
         const nomeCampanha = nomeDigitado.length >= 5 ? nomeDigitado : (nomeAuto.length >= 5 ? nomeAuto : `agente ${destinoMarca} teste ab`);
 
+        // UTM Campaign: campo próprio, mas por padrão segue o nome da campanha (mesma
+        // sanitização) se quem enviar deixar em branco.
+        const utmDigitado = typeof utmCampaignOverride === 'string' ? sanitizarNomeCampanha(utmCampaignOverride) : '';
+        const utmCampaign = utmDigitado.length > 0 ? utmDigitado : nomeCampanha;
+
         const assuntoFinal = (typeof assuntoOverride === 'string' && assuntoOverride.trim())
           ? assuntoOverride.trim()
           : (copy.assunto ?? nomeCampanha);
@@ -2641,6 +3146,7 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
           tags: ['agente-gif'],
           variationA: { subject: assuntoFinal, preHeader: copy.preHeader ?? '', html: htmlA },
           variationB: { subject: assuntoFinal, preHeader: copy.preHeader ?? '', html: htmlB },
+          utmCampaign,
         });
 
         // Um envio por (proposta, marca de destino) — permite a mesma comparação ser mandada
@@ -2659,6 +3165,84 @@ Retorne array JSON com 1 pauta e esta estrutura exata:
           }),
         });
         if (!envioRes.ok) console.error('[teste-ab-enviar-insider] Falha ao salvar envio:', await envioRes.text());
+
+        return json({ status: 'success', insiderCampaignId: criada.id });
+      } catch (err: any) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    // Envia uma pauta (card do GIF no histórico) direto pra Insider como campanha única —
+    // sem comparação A/B, é só o conteúdo dessa pauta mesmo. O GIF já vem pronto (mesma técnica
+    // de composição via gifshot/Storage usada no download do GIF e no Passo 3 do Modo C).
+    if (url.pathname === '/api/pauta-enviar-insider' && request.method === 'POST') {
+      try {
+        const {
+          pautaId, gifUrl, destinoMarca: rawDestino,
+          linkCampanha, assunto: assuntoOverride, nomeCampanha: nomeCampanhaOverride, utmCampaign: utmCampaignOverride,
+        } = await request.json() as any;
+        if (!pautaId || !gifUrl) {
+          return json({ error: 'pautaId e gifUrl são obrigatórios.' }, 400);
+        }
+        if (!(CONTAS_INSIDER as readonly string[]).includes(rawDestino)) {
+          return json({ error: 'destinoMarca inválida.' }, 400);
+        }
+        const destinoMarca: ContaInsider = rawDestino;
+
+        const apiKey = getInsiderApiKey(destinoMarca, env);
+        if (!apiKey) {
+          return json({ error: `Chave da Insider para ${destinoMarca} não configurada (INSIDER_API_KEY_${destinoMarca.toUpperCase()}).` }, 400);
+        }
+
+        const pautaRows = await supabaseRestGet(`pautas_geradas?id=eq.${pautaId}&select=*`, SUPABASE_KEY);
+        const pauta = Array.isArray(pautaRows) ? pautaRows[0] : null;
+        if (!pauta) return json({ error: 'Pauta não encontrada.' }, 404);
+
+        const copy = pauta.copy ?? {};
+        const html = buildInsiderVariationHtml({ imageUrl: gifUrl, linkUrl: linkCampanha, marca: destinoMarca });
+
+        // Nome da campanha: regra da Insider exige alfanumérico com -_{espaço}, 5-40 caracteres —
+        // sanitiza tanto o valor digitado pelo usuário quanto o fallback automático da mesma forma.
+        const sanitizarNomeCampanha = (raw: string) => raw
+          .normalize('NFD').replace(/[̀-ͯ]/g, '')
+          .replace(/[^a-zA-Z0-9 _-]/g, '').trim().slice(0, 40);
+        const nomeDigitado = typeof nomeCampanhaOverride === 'string' ? sanitizarNomeCampanha(nomeCampanhaOverride) : '';
+        const nomeAuto = sanitizarNomeCampanha(`pauta ${destinoMarca} ${pauta.operacional?.mecanicaEscolhida ?? 'gif'}`);
+        const nomeCampanha = nomeDigitado.length >= 5 ? nomeDigitado : (nomeAuto.length >= 5 ? nomeAuto : `pauta ${destinoMarca} gif`);
+
+        // UTM Campaign: campo próprio, mas por padrão segue o nome da campanha (mesma
+        // sanitização) se quem enviar deixar em branco.
+        const utmDigitado = typeof utmCampaignOverride === 'string' ? sanitizarNomeCampanha(utmCampaignOverride) : '';
+        const utmCampaign = utmDigitado.length > 0 ? utmDigitado : nomeCampanha;
+
+        const assuntoFinal = (typeof assuntoOverride === 'string' && assuntoOverride.trim())
+          ? assuntoOverride.trim()
+          : (copy.assunto ?? nomeCampanha);
+
+        const criada = await createInsiderSingleCampaign({
+          apiKey,
+          name: nomeCampanha,
+          tags: ['agente-gif', 'campanha-unica'],
+          variation: { subject: assuntoFinal, preHeader: copy.preHeader ?? '', html },
+          utmCampaign,
+        });
+
+        // Um envio por (pauta, marca de destino) — permite a mesma pauta virar campanha em
+        // várias contas Insider em vez de travar na primeira marca que recebeu o envio.
+        const envioRes = await fetch(`${SUPABASE_URL}/rest/v1/pauta_envios_insider?on_conflict=pauta_id,marca`, {
+          method: 'POST',
+          headers: {
+            apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=representation',
+          },
+          body: JSON.stringify({
+            pauta_id: pautaId,
+            marca: destinoMarca,
+            insider_campaign_id: criada.id,
+            gif_url: gifUrl,
+          }),
+        });
+        if (!envioRes.ok) console.error('[pauta-enviar-insider] Falha ao salvar envio:', await envioRes.text());
 
         return json({ status: 'success', insiderCampaignId: criada.id });
       } catch (err: any) {

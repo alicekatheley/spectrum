@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { PautaGerada, TesteAbProposta } from "../types";
 import GifViewer from "./GifViewer";
-import { FlaskConical, ThumbsUp, RefreshCw } from "lucide-react";
+import BuscarVarianteBModal from "./BuscarVarianteBModal";
+import { ConteudoGifBusca } from "../lib/conteudos-service";
+import { FlaskConical, ThumbsUp, RefreshCw, PenLine, Download, Loader2, Search } from "lucide-react";
 
 interface TesteAbCardProps {
   proposta: TesteAbProposta;
@@ -9,11 +11,18 @@ interface TesteAbCardProps {
   frameImagesA: Record<string, string>;
   onAceitar?: (proposta: TesteAbProposta) => void;
   onRejeitar?: (proposta: TesteAbProposta) => void;
+  onSelecionarVarianteBManual?: (proposta: TesteAbProposta, conteudo: ConteudoGifBusca) => void;
+  onEditarCopyA?: (pauta: PautaGerada) => void;
+  onDownloadGifA?: (pauta: PautaGerada) => void;
+  baixandoGifA?: boolean;
   regenerando?: boolean;
   key?: string | number;
 }
 
-export default function TesteAbCard({ proposta, pautaA, frameImagesA, onAceitar, onRejeitar, regenerando }: TesteAbCardProps) {
+export default function TesteAbCard({
+  proposta, pautaA, frameImagesA, onAceitar, onRejeitar, onSelecionarVarianteBManual, onEditarCopyA, onDownloadGifA, baixandoGifA, regenerando,
+}: TesteAbCardProps) {
+  const [buscaAberta, setBuscaAberta] = useState(false);
   // storage_url é raro no banco (só 1 de ~270 GIFs) — a maioria só tem insider_original_url.
   // Sem esse fallback a Variante B ficaria "indisponível" quase sempre.
   const varianteBUrl = proposta.conteudoVarianteB?.storageUrl || proposta.conteudoVarianteB?.insiderOriginalUrl;
@@ -51,6 +60,33 @@ export default function TesteAbCard({ proposta, pautaA, frameImagesA, onAceitar,
           <p className="text-xs text-slate-600">
             Mecânica: <strong>{pautaA?.operacional?.mecanicaEscolhida ?? '—'}</strong>
           </p>
+          {pautaA && onEditarCopyA && (
+            <button
+              type="button"
+              onClick={() => onEditarCopyA(pautaA)}
+              className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-3 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all self-start"
+              title="Editar título, subtítulo e botão e redesenhar a arte já gerada, sem chamar a IA de imagem de novo"
+            >
+              <PenLine className="w-3.5 h-3.5 shrink-0" />
+              Reajustar Copy
+            </button>
+          )}
+          {pautaA && onDownloadGifA && (
+            <button
+              type="button"
+              onClick={() => onDownloadGifA(pautaA)}
+              disabled={baixandoGifA}
+              className="bg-white hover:bg-slate-50 disabled:opacity-50 border border-slate-200 hover:border-slate-300 text-slate-600 shadow-sm px-3 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all self-start"
+              title="Baixar o GIF animado dessa variante"
+            >
+              {baixandoGifA ? (
+                <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5 shrink-0" />
+              )}
+              {baixandoGifA ? 'Baixando...' : 'Baixar GIF'}
+            </button>
+          )}
         </div>
 
         <div className="flex flex-col gap-2">
@@ -103,7 +139,29 @@ export default function TesteAbCard({ proposta, pautaA, frameImagesA, onAceitar,
             <RefreshCw className={`w-3.5 h-3.5 ${regenerando ? 'animate-spin' : ''}`} />
             {regenerando ? 'Buscando novo conteúdo...' : 'Não faz sentido — buscar outro'}
           </button>
+          {onSelecionarVarianteBManual && (
+            <button
+              type="button"
+              onClick={() => setBuscaAberta(true)}
+              disabled={regenerando}
+              className="bg-white hover:bg-indigo-50 disabled:opacity-50 border border-slate-200 hover:border-indigo-200 text-slate-500 hover:text-indigo-600 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="Escolher manualmente qual GIF do histórico usar como Variante B"
+            >
+              <Search className="w-3.5 h-3.5" />
+              Buscar Manualmente
+            </button>
+          )}
         </div>
+      )}
+
+      {buscaAberta && (
+        <BuscarVarianteBModal
+          onClose={() => setBuscaAberta(false)}
+          onSelecionar={(conteudo) => {
+            onSelecionarVarianteBManual?.(proposta, conteudo);
+            setBuscaAberta(false);
+          }}
+        />
       )}
     </div>
   );
