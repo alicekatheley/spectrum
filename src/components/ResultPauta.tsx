@@ -6,6 +6,7 @@ import { getFramesExcluidosGif } from "./SeletorFramesGif";
 import { TextoDestaque } from "./TextoDestaque";
 import { removerDestaque } from "../utils/destaque";
 import { loadGifshot } from "../utils/loadGifshot";
+import { triggerDownload } from "../utils/downloadGif";
 import {
   Copy, Check, Eye, EyeOff, Calendar, Clock, BarChart3,
   HelpCircle, AlertTriangle, Sparkles, ThumbsUp, XOctagon, RefreshCw, RotateCcw, Download, Image, Repeat, PenLine,
@@ -477,18 +478,12 @@ export default function ResultPauta({
         numWorkers: 2,
       }, (obj: any) => {
         if (!obj.error) {
-          const link = document.createElement('a');
-          link.download = `${pauta.marca}-gif-animado.gif`;
-          link.href = obj.image;
-          link.click();
+          triggerDownload(obj.image, `${pauta.marca}-gif-animado.gif`);
         } else {
           console.error('[downloadGifAnimado] gifshot error:', obj.error);
           // Fallback: baixar frames individuais
           framesBase64.forEach((src, i) => {
-            const link = document.createElement('a');
-            link.download = `${pauta.marca}-frame-${i + 1}.${src.startsWith('data:image/webp') ? 'webp' : 'png'}`;
-            link.href = src;
-            link.click();
+            triggerDownload(src, `${pauta.marca}-frame-${i + 1}.${src.startsWith('data:image/webp') ? 'webp' : 'png'}`);
           });
         }
       });

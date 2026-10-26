@@ -1,5 +1,32 @@
 import { loadGifshot } from "./loadGifshot";
 
+// Dispara o download de um data URL (ou Blob) como arquivo. Data URLs grandes num <a download>
+// solto falham em silêncio no Chrome (GIF de 1200px passa fácil de alguns MB), e alguns
+// navegadores ignoram o click() em âncora fora do DOM — por isso converte pra Blob + object URL
+// e anexa o link antes de clicar.
+export function triggerDownload(data: string | Blob, filename: string): void {
+  let blob: Blob;
+  if (typeof data === "string") {
+    const [header, base64] = data.split(",");
+    const mime = header.match(/data:([^;]+)/)?.[1] ?? "application/octet-stream";
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    blob = new Blob([bytes], { type: mime });
+  } else {
+    blob = data;
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export interface EncodeAndDownloadGifOptions {
   gifWidth: number;
   gifHeight: number;
@@ -39,18 +66,12 @@ export async function encodeAndDownloadGif(frames: string[], opts: EncodeAndDown
       numWorkers: 2,
     }, (obj: any) => {
       if (!obj.error) {
-        const link = document.createElement("a");
-        link.download = filename;
-        link.href = obj.image;
-        link.click();
+        triggerDownload(obj.image, filename);
         resolve();
       } else {
         console.error("[encodeAndDownloadGif] gifshot error:", obj.error);
         framesBase64.forEach((src, i) => {
-          const link = document.createElement("a");
-          link.download = filename.replace(/\.gif$/i, "") + `-frame-${i + 1}.${src.startsWith("data:image/webp") ? "webp" : "png"}`;
-          link.href = src;
-          link.click();
+          triggerDownload(src, filename.replace(/\.gif$/i, "") + `-frame-${i + 1}.${src.startsWith("data:image/webp") ? "webp" : "png"}`);
         });
         resolve();
       }

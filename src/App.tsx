@@ -19,7 +19,9 @@ import CalendarioWorkspace from "./components/calendario/CalendarioWorkspace";
 import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { Sparkles, Layers, BookOpen, Clock, Heart, Sliders, X, Bot, ImagePlus } from "lucide-react";
 import { loadGifshot } from "./utils/loadGifshot";
-import { removerDestaque, temDestaque } from "./utils/destaque";
+import { triggerDownload } from "./utils/downloadGif";
+import { removerDestaque, temDestaque, COR_DESTAQUE_PADRAO } from "./utils/destaque";
+import { inferirEstiloDesign, montarDirecionamentoDaPauta } from "./utils/refazerPauta";
 
 export default function App() {
   return (
@@ -506,10 +508,7 @@ function AppInner() {
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Tempo esgotado gerando o GIF — tenta de novo.')), 25000)),
       ]);
 
-      const link = document.createElement('a');
-      link.download = `agente-${pauta.marca}-${pauta.operacional?.mecanicaEscolhida ?? 'gif'}.gif`.replace(/\s+/g, '-');
-      link.href = gifDataUrl;
-      link.click();
+      triggerDownload(gifDataUrl, `agente-${pauta.marca}-${pauta.operacional?.mecanicaEscolhida ?? 'gif'}.gif`.replace(/\s+/g, '-'));
     } catch (err: any) {
       console.warn('[handleDownloadGifAgente] Erro:', err);
       alert('Erro ao baixar o GIF: ' + (err.message ?? 'erro desconhecido'));
@@ -914,8 +913,16 @@ function AppInner() {
 
   // Preenche o formulário do Modo B com tudo que foi usado pra gerar essa pauta
   // (copy + estilo visual), pra "refazer" sem redigitar do zero.
+  // Pautas do Agente (modo C) nascem no worker.ts e não têm inputOriginal: os campos são
+  // reconstruídos do conceito salvo (frames, brief, paleta) e dos mesmos defaults por marca
+  // que o composeFrame usa pra desenhar o texto delas — assim o painel abre 100% preenchido.
   const handleRefazerPauta = (pauta: PautaGerada) => {
     const inputOriginal = (pauta as any).inputOriginal ?? {};
+    const isApice = pauta.marca === 'Apice';
+    const visual = pauta.visual;
+    const frames = visual?.frames?.length
+      ? visual.frames
+      : [visual?.frameInicial, visual?.frameIntermediario, visual?.frameFinal].filter((f): f is string => !!f);
     setCurrentBrand(pauta.marca);
     setEditInputPreload({
       marca: pauta.marca,
@@ -925,19 +932,22 @@ function AppInner() {
       boxCta: inputOriginal.cta || pauta.copy.ctaBotao,
       boxMecanicaOuEstatico: pauta.operacional.mecanicaEscolhida,
       boxRecompensa: pauta.operacional.recompensaEscolhida,
-      estiloVisualTexto: inputOriginal.estiloVisualTexto || '',
-      fonteEscolhida: inputOriginal.fonteEscolhida || '',
+      estiloVisualTexto: inputOriginal.estiloVisualTexto || visual?.tipografia || '',
+      fonteEscolhida: inputOriginal.fonteEscolhida || (isApice ? 'Playfair Display' : 'Oswald'),
       estiloBotaoEscolhido: inputOriginal.estiloBotaoEscolhido || 'pill',
       corTextoPrincipal: inputOriginal.corTextoPrincipal || '#FFFFFF',
-      fonteSubtitulo: inputOriginal.fonteSubtitulo || '',
+      fonteSubtitulo: inputOriginal.fonteSubtitulo || (isApice ? 'Montserrat' : 'Inter'),
       corSubtitulo: inputOriginal.corSubtitulo || 'rgba(255,255,255,0.90)',
-      corBotaoEscolhida: inputOriginal.corBotaoEscolhida || '',
+      corBotaoEscolhida: inputOriginal.corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26'),
       corTextoBotao: inputOriginal.corTextoBotao || '#FFFFFF',
-      fonteBotao: inputOriginal.fonteBotao || '',
-      corDestaque: inputOriginal.corDestaque || '',
-      estiloDesign: inputOriginal.estiloDesign || '',
+      fonteBotao: inputOriginal.fonteBotao || inputOriginal.fonteSubtitulo || (isApice ? 'Montserrat' : 'Inter'),
+      corDestaque: inputOriginal.corDestaque || COR_DESTAQUE_PADRAO,
+      estiloDesign: inputOriginal.estiloDesign || inferirEstiloDesign(visual),
+      quantidadeFrames: inputOriginal.quantidadeFrames || visual?.quantidadeFrames || frames.length || 3,
     } as any);
-    setDirecionamentoIA(inputOriginal.direcionamento || '');
+    setDirecionamentoIA(inputOriginal.direcionamento || montarDirecionamentoDaPauta(pauta, frames));
+    setTipoGeracao(pauta.tipoGeracao || 'texto_imagem');
+    if (pauta.aspectRatio) setAspectRatio(pauta.aspectRatio);
     setMainTab('geracao');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
