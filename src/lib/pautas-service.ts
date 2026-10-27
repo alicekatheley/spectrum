@@ -21,6 +21,20 @@ function fromDb(row: Record<string, unknown>): PautaGerada {
   } as any;
 }
 
+// frame_urls só guarda URL pública. Um data URL (base64) de cada frame pesa MBs e, somado no
+// histórico, já gerou upserts de 18 MB que derrubaram o Supabase (27/10/2026).
+function semDataUrls(frameUrls: Record<string, string> | undefined): Record<string, string> | null {
+  if (!frameUrls) return null;
+  const limpas = Object.fromEntries(
+    Object.entries(frameUrls).filter(([, url]) => typeof url === 'string' && !url.startsWith('data:'))
+  );
+  return Object.keys(limpas).length > 0 ? limpas : null;
+}
+
+// Colunas lidas pelo front — explícitas pra uma coluna pesada nova não entrar no polling sem querer.
+const PAUTA_COLUNAS =
+  'id, marca, modo, tipo_geracao, copy, visual, operacional, previsao, riscos, status, data_criacao, input_original, aspect_ratio, frame_urls';
+
 // Maps a PautaGerada to a DB row (snake_case columns)
 function toDb(p: PautaGerada) {
   return {
@@ -37,7 +51,7 @@ function toDb(p: PautaGerada) {
     data_criacao: p.dataCriacao,
     input_original: (p as any).inputOriginal ?? null,
     aspect_ratio: (p as any).aspectRatio ?? null,
-    frame_urls: (p as any).frameUrls ?? null,
+    frame_urls: semDataUrls((p as any).frameUrls),
   };
 }
 
@@ -45,13 +59,38 @@ export async function getPautas(): Promise<PautaGerada[] | null> {
   if (!supabase) return null;
   const { data, error } = await supabase
     .from('pautas_geradas')
-    .select('*')
+    .select(PAUTA_COLUNAS)
     .order('data_criacao', { ascending: false });
   if (error) {
     console.warn('[Supabase] getPautas falhou:', error.message);
     return null;
   }
-  return (data as Record<string, unknown>[]).map(fromDb);
+  return (data as unknown as Record<string, unknown>[]).map(fromDb);
+}
+
+// Só os ids — usado pelo polling, que precisa descobrir pautas novas sem baixar o histórico todo.
+export async function getPautaIds(): Promise<string[] | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from('pautas_geradas').select('id');
+  if (error) {
+    console.warn('[Supabase] getPautaIds falhou:', error.message);
+    return null;
+  }
+  return (data as { id: string }[]).map((row) => row.id);
+}
+
+export async function getPautasPorIds(ids: string[]): Promise<PautaGerada[] | null> {
+  if (!supabase || ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('pautas_geradas')
+    .select(PAUTA_COLUNAS)
+    .in('id', ids)
+    .order('data_criacao', { ascending: false });
+  if (error) {
+    console.warn('[Supabase] getPautasPorIds falhou:', error.message);
+    return null;
+  }
+  return (data as unknown as Record<string, unknown>[]).map(fromDb);
 }
 
 export async function upsertPautas(pautas: PautaGerada[]): Promise<void> {

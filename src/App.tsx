@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Brand, ContaInsider, PautaGerada, PautaEnvioInsider, InputModoB, TesteAbProposta } from "./types";
 import { ConteudoGifBusca } from "./lib/conteudos-service";
-import { getPautas, upsertPautas, clearPautas, getPautaEnviosInsider } from "./lib/pautas-service";
+import { getPautas, getPautaIds, getPautasPorIds, upsertPautas, clearPautas, getPautaEnviosInsider } from "./lib/pautas-service";
 import { supabase, isEmailAllowed } from "./lib/supabase";
 import LoginPage from "./components/LoginPage";
 import Header from "./components/Header";
@@ -210,8 +210,9 @@ function AppInner() {
             tipoGeracao: (p.tipoGeracao ?? 'texto_imagem') as PautaGerada['tipoGeracao'],
           }));
           setHistory(local);
-          // Migra dados locais para o Supabase na primeira vez
-          if (local.length > 0) {
+          // Migra dados locais para o Supabase na primeira vez — só se o banco respondeu vazio.
+          // Com o Supabase fora (remote === null), reenviar o localStorage só piora a queda.
+          if (remote !== null && local.length > 0) {
             upsertPautas(local).catch(err =>
               console.warn("[Supabase] Migração inicial falhou:", err)
             );
@@ -227,9 +228,19 @@ function AppInner() {
   // Sem botão manual: o Agente de GIF roda no backend (cron) e escreve direto em pautas_geradas.
   // Esse polling é o único jeito do front descobrir pautas modo 'C' novas sem precisar recarregar
   // a página. Não reescreve o localStorage (fallback só é reconstruído num reload completo).
+  // Pergunta só os ids e baixa as pautas novas — o histórico inteiro por aba a cada 60s
+  // estourava statement timeout quando o banco estava pesado.
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    knownIdsRef.current = new Set(history.map(p => p.id));
+  }, [history]);
   useEffect(() => {
     const interval = setInterval(async () => {
-      const remote = await getPautas();
+      const ids = await getPautaIds();
+      if (!ids) return;
+      const novosIds = ids.filter(id => !knownIdsRef.current.has(id));
+      if (novosIds.length === 0) return;
+      const remote = await getPautasPorIds(novosIds);
       if (!remote) return;
       setHistory(prev => {
         const knownIds = new Set(prev.map(p => p.id));
@@ -650,15 +661,27 @@ function AppInner() {
     if (toReconstruct.length === 0) return;
 
     const reconstruct = async () => {
-      // Todas as pautas e todos os frames em paralelo — com dezenas de pautas x N frames cada,
-      // fazer isso em série (um HEAD request de cada vez) podia levar dezenas de segundos até
-      // chegar na pauta que o usuário está olhando.
+      // Em paralelo, mas no máximo LIMITE_HEADS por vez: em série levava dezenas de segundos, e
+      // tudo de uma vez disparava ~800 HEADs por carregamento contra o Storage (27/10/2026).
+      const LIMITE_HEADS = 6;
+      let ativos = 0;
+      const fila: (() => void)[] = [];
+      const comLimite = async <T,>(fn: () => Promise<T>): Promise<T> => {
+        if (ativos >= LIMITE_HEADS) await new Promise<void>(resolve => fila.push(resolve));
+        ativos++;
+        try {
+          return await fn();
+        } finally {
+          ativos--;
+          fila.shift()?.();
+        }
+      };
       const results = await Promise.all(toReconstruct.map(async (pauta) => {
         reconstructedRef.current.add(pauta.id);
         const safeMarca = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
         const frameKeys = getExpectedFrameKeys(pauta);
 
-        const frameResults = await Promise.all(frameKeys.map(async (frameName) => {
+        const frameResults = await Promise.all(frameKeys.map((frameName) => comLimite(async () => {
           // Preservar '_' — o backend salva como "frame_0.png", não "frame0.png"
           const safeFrame = frameName.replace(/[^a-z0-9_]/g, '');
           // "frames/{pautaId}/..." é a versão COMPOSTA (com headline/subheadline/CTA já
@@ -677,7 +700,7 @@ function AppInner() {
           } catch {
             return null;
           }
-        }));
+        })));
 
         const found: Record<string, string> = {};
         for (const entry of frameResults) {
@@ -725,8 +748,12 @@ function AppInner() {
     if (newHistory.length === 0) {
       clearPautas().catch(err => console.warn("[Supabase] clearPautas falhou:", err));
     } else {
+      // Só sobe o que mudou. Os handlers trocam o objeto da pauta alterada e mantêm a referência
+      // das demais — reenviar o histórico inteiro a cada clique derrubou o Supabase (27/10/2026).
+      const anterior = new Map(history.map(p => [p.id, p]));
+      const alteradas = newHistory.filter(p => anterior.get(p.id) !== p);
       try {
-        upsertPautas(newHistory).catch(err => console.warn("[Supabase] upsertPautas falhou:", err));
+        upsertPautas(alteradas).catch(err => console.warn("[Supabase] upsertPautas falhou:", err));
       } catch (err) {
         console.warn("[Supabase] upsertPautas erro síncrono:", err);
       }
@@ -994,6 +1021,7 @@ function AppInner() {
         try {
           const frameUrls = (pauta as any).frameUrls as Record<string, string>;
           const composed: Record<string, string> = {};
+          let algumFrameSalvo = false;
           const entradas = Object.entries(frameUrls).sort(([a], [b]) => a.localeCompare(b));
           for (const [frameName, rawUrl] of entradas) {
             const composedDataUrl = await composeFrame({
@@ -1018,9 +1046,13 @@ function AppInner() {
             } catch (err) {
               console.warn('[agente-gif] Falha ao salvar frame composto:', err);
             }
-            composed[frameName] = finalUrl ?? composedDataUrl;
+            // Se o upload falhou, mantém a URL crua no banco (o data URL fica só na tela). Assim a
+            // pauta segue "não composta" e é recomposta na próxima sessão, em vez de gravar MBs de base64.
+            composed[frameName] = finalUrl ?? rawUrl;
+            if (finalUrl) algumFrameSalvo = true;
             handleFrameGenerated(pauta.id, frameName, composedDataUrl, finalUrl);
           }
+          if (!algumFrameSalvo) continue;
           upsertPautas([{ ...pauta, frameUrls: composed } as PautaGerada]).catch((err) =>
             console.warn('[agente-gif] Falha ao persistir frames compostos:', err)
           );
