@@ -35,6 +35,43 @@ export function resolveSubheadlineSizePx(headlineSizePx: number, subheadlineSize
   return subheadlineSizePx ?? Math.round(headlineSizePx * 0.44);
 }
 
+// Luminância média (0–1, sRGB linearizado) da faixa onde vão headline e sub-headline: topo,
+// 3,5%–40% da altura, nos 88% centrais da largura. Amostra 1 a cada 4 pixels em cada eixo.
+// Devolve null se o canvas estiver "tainted" (imagem sem CORS) — aí fica o padrão branco.
+export function luminanciaZonaTexto(ctx: CanvasRenderingContext2D, width: number, height: number): number | null {
+  try {
+    const x0 = Math.round(width * 0.06);
+    const y0 = Math.round(height * 0.035);
+    const w = Math.round(width * 0.88);
+    const h = Math.round(height * 0.365);
+    const { data } = ctx.getImageData(x0, y0, w, h);
+    const lin = (c: number) => { const s = c / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+    let soma = 0;
+    let n = 0;
+    for (let y = 0; y < h; y += 4) {
+      for (let x = 0; x < w; x += 4) {
+        const i = (y * w + x) * 4;
+        soma += 0.2126 * lin(data[i]) + 0.7152 * lin(data[i + 1]) + 0.0722 * lin(data[i + 2]);
+        n++;
+      }
+    }
+    return n > 0 ? soma / n : null;
+  } catch {
+    return null;
+  }
+}
+
+// ~0,2 de luminância é onde o contraste com branco e com #1E1E1E se equilibra (~4:1 cada).
+const LIMIAR_FUNDO_CLARO = 0.2;
+
+export function corPeloFundo(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const lum = luminanciaZonaTexto(ctx, width, height);
+  if (lum == null) return null;
+  return lum > LIMIAR_FUNDO_CLARO
+    ? { texto: '#1E1E1E', subheadline: 'rgba(30,30,30,0.88)' }
+    : { texto: '#FFFFFF', subheadline: 'rgba(255,255,255,0.90)' };
+}
+
 export interface ComposeFrameOptions {
   imageDataUrl: string;
   headline: string;
@@ -239,8 +276,10 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
   const isApice = marca === 'Apice';
   const ev = opts.estiloVisual ?? {};
 
-  const corTexto = ev.corTexto ?? '#FFFFFF';
-  const corSubheadline = ev?.corSubheadline || opts.estiloVisual?.corSubheadline || 'rgba(255,255,255,0.90)';
+  // Sem cor escolhida, decide pelo fundo depois de desenhar a imagem (ver corPeloFundo). Antes
+  // o padrão fixo era branco, que some em fundo claro — os GIFs do Agente em off-white saíam sem texto.
+  let corTexto = ev.corTexto ?? '#FFFFFF';
+  let corSubheadline = ev?.corSubheadline || opts.estiloVisual?.corSubheadline || 'rgba(255,255,255,0.90)';
   const estiloBotao = ev.estiloBotao ?? 'pill';
   const corBotao = ev.corBotao ?? (isApice ? '#688D65' : '#BF0F26');
   const corTextoBotao = ev.corTextoBotao ?? '#FFFFFF';
@@ -287,8 +326,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // que o fundo como "vinheta" e clareava/escurecia faixas inteiras por engano).
       ctx.drawImage(img, 0, 0, WIDTH, HEIGHT);
 
-      // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem
-      // só da sombra (shadowColor/shadowBlur) aplicada em cada elemento abaixo.
+      // Sem overlay de escurecimento fixo pra "dar contraste" ao texto — a legibilidade vem da
+      // cor: sem escolha explícita, texto escuro sobre a faixa do topo clara e branco sobre escura.
+      const fundo = corPeloFundo(ctx, WIDTH, HEIGHT);
+      if (fundo && !ev.corTexto) corTexto = fundo.texto;
+      if (fundo && !ev.corSubheadline) corSubheadline = fundo.subheadline;
 
       // Texto rico: cada linha é uma lista de palavras, cada palavra uma lista de trechos com
       // estilo próprio (negrito/maior/cor — ver utils/destaque.ts). Sem marcadores, cai no mesmo

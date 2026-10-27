@@ -185,8 +185,14 @@ function AppInner() {
     if (withFrames.length === 0) return;
     setAllFrameImages(prev => {
       const next = { ...prev };
+      // O banco ganha de URL antiga guardada no localStorage (senão um redesenho feito em outro
+      // navegador nunca aparecia aqui); só um data URL local — frame recém-gerado, ainda não
+      // subido — continua tendo preferência.
       for (const p of withFrames) {
-        next[p.id] = { ...((p as any).frameUrls), ...(next[p.id] ?? {}) };
+        const local: Record<string, string> = next[p.id] ?? {};
+        const doBanco = (p as any).frameUrls as Record<string, string>;
+        const recentesLocais = Object.fromEntries(Object.entries(local).filter(([, v]) => v.startsWith('data:')));
+        next[p.id] = { ...local, ...doBanco, ...recentesLocais };
       }
       return next;
     });

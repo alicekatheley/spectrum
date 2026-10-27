@@ -159,6 +159,9 @@ function FontPickerDropdown({
   );
 }
 
+// '' na cor do título/subtítulo = automática: o composeFrame escolhe escuro ou branco pelo fundo.
+const COR_AUTOMATICA_SWATCH = 'linear-gradient(135deg, #FFFFFF 50%, #1E1E1E 50%)';
+
 function ColorSwatchPicker({
   label, value, options, customDefault, onChange,
 }: {
@@ -185,7 +188,7 @@ function ColorSwatchPicker({
           >
             <span
               className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block"
-              style={{ backgroundColor: swatch ?? optValue }}
+              style={{ background: swatch ?? optValue }}
             />
             {optLabel}
           </button>
@@ -215,8 +218,8 @@ export interface EstiloTextoValues {
 type Marca = 'Apice' | 'Barbours';
 
 export function TituloFontColorFields({
-  marca, values, onChange,
-}: { marca: Marca; values: Pick<EstiloTextoValues, 'fonteEscolhida' | 'corTextoPrincipal'>; onChange: (patch: Partial<EstiloTextoValues>) => void }) {
+  marca, values, onChange, permitirAutomatica = false,
+}: { marca: Marca; values: Pick<EstiloTextoValues, 'fonteEscolhida' | 'corTextoPrincipal'>; onChange: (patch: Partial<EstiloTextoValues>) => void; permitirAutomatica?: boolean }) {
   const brandColor = marca === 'Apice' ? '#688D65' : '#BF0F26';
   return (
     <>
@@ -226,6 +229,7 @@ export function TituloFontColorFields({
         value={values.corTextoPrincipal}
         customDefault="#FFFFFF"
         options={[
+          ...(permitirAutomatica ? [{ label: 'Automática', value: '', swatch: COR_AUTOMATICA_SWATCH }] : []),
           { label: 'Branco', value: '#FFFFFF' },
           { label: 'Preto', value: '#000000' },
           { label: 'Cor da marca', value: brandColor },
@@ -238,8 +242,8 @@ export function TituloFontColorFields({
 }
 
 export function SubtituloFontColorFields({
-  marca, values, onChange,
-}: { marca: Marca; values: Pick<EstiloTextoValues, 'fonteSubtitulo' | 'corSubtitulo'>; onChange: (patch: Partial<EstiloTextoValues>) => void }) {
+  marca, values, onChange, permitirAutomatica = false,
+}: { marca: Marca; values: Pick<EstiloTextoValues, 'fonteSubtitulo' | 'corSubtitulo'>; onChange: (patch: Partial<EstiloTextoValues>) => void; permitirAutomatica?: boolean }) {
   const brandColor = marca === 'Apice' ? '#688D65' : '#BF0F26';
   return (
     <>
@@ -249,6 +253,7 @@ export function SubtituloFontColorFields({
         value={values.corSubtitulo}
         customDefault="#FFFFFF"
         options={[
+          ...(permitirAutomatica ? [{ label: 'Automática', value: '', swatch: COR_AUTOMATICA_SWATCH }] : []),
           { label: 'Branco', value: 'rgba(255,255,255,0.90)', swatch: 'rgba(255,255,255,0.90)' },
           { label: 'Branco puro', value: '#FFFFFF' },
           { label: 'Preto', value: '#000000' },

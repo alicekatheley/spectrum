@@ -3,7 +3,8 @@ import { PautaGerada, PautaCopy } from "../types";
 import { X, Download, FileText, Check, Sparkles, Edit3, Clipboard, HelpCircle, AlertTriangle, RefreshCw, PenLine } from "lucide-react";
 import BannerSimulador from "./BannerSimulador";
 import { downloadFile, generatePautaBriefingText } from "../utils";
-import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont } from "../utils/composeFrame";
+import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont, corPeloFundo } from "../utils/composeFrame";
+import { resolverFramesCrus } from "../utils/framesCrus";
 import { TituloFontColorFields, SubtituloFontColorFields, BotaoFontColorFields } from "./EstiloTextoFields";
 import { TextoDestaque, BarraDestaque } from "./TextoDestaque";
 import { removerDestaque } from "../utils/destaque";
@@ -96,22 +97,41 @@ export default function PreviewModal({
   const previewScale = previewWidthPx / canvasWidthPx;
   const previewCssAspectRatio = pautaAspectRatio.includes(':') ? pautaAspectRatio.replace(':', '/') : `${canvasWidthPx} / ${canvasHeightPx}`;
 
-  const safeMarcaPreview = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
-  // Pautas do Agente (modo 'C') salvam os frames crus como inicial/intermediario/final, não
-  // frame_0/frame_1/frame_2 (convenção do Modo A/B) — mesmo bug do handleReajustarCopy: sem
-  // este mapeamento a prévia ao vivo tentava carregar um arquivo que não existe (404 silencioso,
-  // <img> nunca troca de src sozinha) e a camada de texto CSS ficava desenhando por cima do
-  // nada (ou da imagem já composta com texto, se ela for usada de fallback em outro lugar),
-  // duplicando o texto na tela.
-  const RAW_NAMES_AGENTE_PREVIEW = ['inicial', 'intermediario', 'final'];
-  const rawPreviewSrc = (() => {
+  // Imagem crua (sem texto) de cada frame — a prévia ao vivo desenha o texto em CSS por cima dela,
+  // e o "Redesenhar frames" compõe sobre ela. O mapeamento frame_N → arquivo depende do que existe
+  // no Storage (ver utils/framesCrus.ts); enquanto não resolve, a prévia mostra o frame composto.
+  const [framesCrus, setFramesCrus] = useState<Record<string, string> | null>(null);
+  const totalFramesVisual = pauta.visual?.frames?.length ?? 3;
+  useEffect(() => {
     const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
-    if (!SUPABASE_URL) return undefined;
-    const rawFileName = pauta.modo === 'C'
-      ? (RAW_NAMES_AGENTE_PREVIEW[activePreviewIndex] ?? `frame_${activePreviewIndex}`)
-      : `frame_${activePreviewIndex}`;
-    return `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarcaPreview}/${pauta.id}/${rawFileName}.png`;
-  })();
+    if (!SUPABASE_URL) return;
+    let ativo = true;
+    resolverFramesCrus(SUPABASE_URL, pauta, totalFramesVisual).then((mapa) => { if (ativo) setFramesCrus(mapa); });
+    return () => { ativo = false; };
+  }, [pauta.id, pauta.marca, pauta.modo, totalFramesVisual]);
+  const rawPreviewSrc = framesCrus?.[`frame_${activePreviewIndex}`];
+
+  // Cor automática do texto na prévia: a mesma regra do composeFrame (texto escuro em fundo claro),
+  // medida na imagem crua — senão a prévia mostraria branco e o frame final sairia escuro.
+  const [corAutoPrevia, setCorAutoPrevia] = useState<{ texto: string; subheadline: string } | null>(null);
+  useEffect(() => {
+    setCorAutoPrevia(null);
+    if (!rawPreviewSrc) return;
+    let ativo = true;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasWidthPx;
+      canvas.height = canvasHeightPx;
+      const ctx = canvas.getContext('2d');
+      if (!ctx || !ativo) return;
+      ctx.drawImage(img, 0, 0, canvasWidthPx, canvasHeightPx);
+      setCorAutoPrevia(corPeloFundo(ctx, canvasWidthPx, canvasHeightPx));
+    };
+    img.src = rawPreviewSrc;
+    return () => { ativo = false; };
+  }, [rawPreviewSrc, canvasWidthPx, canvasHeightPx]);
 
   useEffect(() => {
     setRawPreviewFailed(false);
@@ -249,7 +269,7 @@ export default function PreviewModal({
             estiloVisual = {
               ...estiloVisual,
               familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
-              corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
+              corTexto: inputOriginal?.corTextoPrincipal || estiloVisual?.corTexto,
               estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
               corBotao: inputOriginal?.corBotaoEscolhida || estiloVisual?.corBotao,
               corTextoBotao: inputOriginal?.corTextoBotao || estiloVisual?.corTextoBotao,
@@ -405,9 +425,10 @@ export default function PreviewModal({
   // Fonte/cor manuais do título, subtítulo e botão — '' = usa o padrão da marca (mesmo default
   // já aplicado no composeFrame quando esses campos não vêm preenchidos).
   const [fonteEscolhida, setFonteEscolhida] = useState(inputOriginalPos.fonteEscolhida ?? '');
-  const [corTextoPrincipal, setCorTextoPrincipal] = useState(inputOriginalPos.corTextoPrincipal ?? '#FFFFFF');
+  // Cor do título/subtítulo '' = automática pelo fundo (composeFrame/corPeloFundo).
+  const [corTextoPrincipal, setCorTextoPrincipal] = useState(inputOriginalPos.corTextoPrincipal ?? '');
   const [fonteSubtitulo, setFonteSubtitulo] = useState(inputOriginalPos.fonteSubtitulo ?? '');
-  const [corSubtitulo, setCorSubtitulo] = useState(inputOriginalPos.corSubtitulo ?? 'rgba(255,255,255,0.90)');
+  const [corSubtitulo, setCorSubtitulo] = useState(inputOriginalPos.corSubtitulo ?? '');
   const [corBotaoEscolhida, setCorBotaoEscolhida] = useState(inputOriginalPos.corBotaoEscolhida ?? '');
   const [corTextoBotao, setCorTextoBotao] = useState(inputOriginalPos.corTextoBotao ?? '#FFFFFF');
   const [fonteBotao, setFonteBotao] = useState(inputOriginalPos.fonteBotao ?? '');
@@ -417,9 +438,9 @@ export default function PreviewModal({
 
   const resetFonteCor = () => {
     setFonteEscolhida('');
-    setCorTextoPrincipal('#FFFFFF');
+    setCorTextoPrincipal('');
     setFonteSubtitulo('');
-    setCorSubtitulo('rgba(255,255,255,0.90)');
+    setCorSubtitulo('');
     setCorBotaoEscolhida('');
     setCorTextoBotao('#FFFFFF');
     setFonteBotao('');
@@ -494,7 +515,6 @@ export default function PreviewModal({
     setReajustandoCopy(true);
     try {
       const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
-      const safeMarca = pauta.marca.toLowerCase().replace(/[^a-z0-9]/g, '');
       const { composeFrame } = await import('../utils/composeFrame');
       const inputOriginal = (pauta as any).inputOriginal;
 
@@ -520,7 +540,7 @@ export default function PreviewModal({
         estiloVisual = {
           ...estiloVisual,
           familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
-          corTexto: corTextoPrincipal || estiloVisual?.corTexto || '#FFFFFF',
+          corTexto: corTextoPrincipal || estiloVisual?.corTexto,
           estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
           corBotao: corBotaoEscolhida || estiloVisual?.corBotao,
           corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
@@ -547,16 +567,15 @@ export default function PreviewModal({
         buttonFontSizePx: buttonFontSizePx ?? undefined,
       };
 
-      // Pautas do Agente (modo 'C') salvam os frames crus como inicial/intermediario/final,
-      // não frame_0/frame_1/frame_2 (convenção do Modo A/B) — sem este mapeamento o fetch da
-      // imagem crua sempre dava 404 pra pautas do agente e a recomposição falhava silenciosa.
-      const RAW_NAMES_AGENTE = ['inicial', 'intermediario', 'final'];
+      // Qual arquivo cru corresponde a cada frame depende do que existe no Storage — ver
+      // utils/framesCrus.ts (no Agente, frame_0 nem sempre é o "inicial").
+      const crus = framesCrus ?? await resolverFramesCrus(SUPABASE_URL, pauta, framesArray.length);
+      const novasUrls: Record<string, string> = {};
       let algumaFalha = false;
       for (const frameName of framesExistentes) {
         try {
-          const frameIndex = Number(frameName.replace('frame_', ''));
-          const rawFileName = pauta.modo === 'C' ? (RAW_NAMES_AGENTE[frameIndex] ?? frameName) : frameName;
-          const rawUrl = `${SUPABASE_URL}/storage/v1/object/public/campaign-images/${safeMarca}/${pauta.id}/${rawFileName}.png`;
+          const rawUrl = crus[frameName];
+          if (!rawUrl) throw new Error('imagem original não encontrada no Storage');
           const resp = await fetch(rawUrl);
           if (!resp.ok) throw new Error('imagem original não encontrada no Storage');
           const blob = await resp.blob();
@@ -590,6 +609,7 @@ export default function PreviewModal({
             }
           } catch { /* mantém a versão local mesmo se salvar falhar */ }
 
+          if (urlFinal) novasUrls[frameName] = urlFinal;
           onFrameGenerated(pauta.id, frameName, finalDataUrl, urlFinal);
         } catch (err: any) {
           algumaFalha = true;
@@ -602,6 +622,9 @@ export default function PreviewModal({
         onUpdatePauta({
           ...pauta,
           copy: editedCopy,
+          // Sem isto o redesenho só existia no localStorage de quem redesenhou: em outro
+          // navegador (ou numa janela anônima fechada) a pauta voltava aos frames antigos.
+          frameUrls: { ...((pauta as any).frameUrls ?? {}), ...novasUrls },
           inputOriginal: {
             ...inputOriginal,
             // A geração de frame prioriza inputOriginal.headline — manter em sincronia com a copy
@@ -808,7 +831,7 @@ export default function PreviewModal({
                   />
 
                   {/* Prévia ao vivo de posição/tamanho — só na aba de edição, some se a imagem crua não carregar */}
-                  {activeTab === 'edit' && !rawPreviewFailed && (
+                  {activeTab === 'edit' && rawPreviewSrc && !rawPreviewFailed && (
                     <div className="absolute inset-0 pointer-events-none select-none">
                       <div
                         className="absolute inset-x-0 flex justify-center px-[6%] text-center"
@@ -819,7 +842,7 @@ export default function PreviewModal({
                             fontSize: `${previewHeadlineSize * previewScale}px`,
                             fontFamily: previewHeadlineFont,
                             fontWeight: 900,
-                            color: corTextoPrincipal || '#FFFFFF',
+                            color: corTextoPrincipal || corAutoPrevia?.texto || '#FFFFFF',
                             lineHeight: 1.15,
                           }}
                         >
@@ -835,7 +858,7 @@ export default function PreviewModal({
                             fontSize: `${previewSubheadlineSize * previewScale}px`,
                             fontFamily: previewSubheadlineFont,
                             fontWeight: 600,
-                            color: corSubtitulo || 'rgba(255,255,255,0.90)',
+                            color: corSubtitulo || corAutoPrevia?.subheadline || 'rgba(255,255,255,0.90)',
                             lineHeight: 1.2,
                           }}
                         >
@@ -1161,6 +1184,7 @@ export default function PreviewModal({
                         <TituloFontColorFields
                           marca={pauta.marca as 'Apice' | 'Barbours'}
                           values={{ fonteEscolhida, corTextoPrincipal }}
+                          permitirAutomatica
                           onChange={(patch) => {
                             if (patch.fonteEscolhida !== undefined) setFonteEscolhida(patch.fonteEscolhida);
                             if (patch.corTextoPrincipal !== undefined) setCorTextoPrincipal(patch.corTextoPrincipal);
@@ -1173,6 +1197,7 @@ export default function PreviewModal({
                         <SubtituloFontColorFields
                           marca={pauta.marca as 'Apice' | 'Barbours'}
                           values={{ fonteSubtitulo, corSubtitulo }}
+                          permitirAutomatica
                           onChange={(patch) => {
                             if (patch.fonteSubtitulo !== undefined) setFonteSubtitulo(patch.fonteSubtitulo);
                             if (patch.corSubtitulo !== undefined) setCorSubtitulo(patch.corSubtitulo);
