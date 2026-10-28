@@ -66,10 +66,37 @@ const LIMIAR_FUNDO_CLARO = 0.2;
 
 export function corPeloFundo(ctx: CanvasRenderingContext2D, width: number, height: number) {
   const lum = luminanciaZonaTexto(ctx, width, height);
-  if (lum == null) return null;
+  return lum == null ? null : corPorLuminancia(lum);
+}
+
+function corPorLuminancia(lum: number) {
   return lum > LIMIAR_FUNDO_CLARO
     ? { texto: '#1E1E1E', subheadline: 'rgba(30,30,30,0.88)' }
     : { texto: '#FFFFFF', subheadline: 'rgba(255,255,255,0.90)' };
+}
+
+// Cor automática única para todos os frames de um GIF: mede a faixa do texto em cada imagem crua
+// e decide pela luminância média. Null se nenhuma imagem puder ser medida (aí cada frame decide).
+export async function corAutomaticaDosFrames(urls: string[], aspectRatio?: string) {
+  const [width, height] = resolveCanvasSize(aspectRatio);
+  const medidas = await Promise.all(urls.map((url) => new Promise<number | null>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(null);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(luminanciaZonaTexto(ctx, width, height));
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  })));
+  const validas = medidas.filter((m): m is number => m != null);
+  if (validas.length === 0) return null;
+  return corPorLuminancia(validas.reduce((a, b) => a + b, 0) / validas.length);
 }
 
 export interface ComposeFrameOptions {
@@ -265,7 +292,20 @@ export async function loadFont(familiaFonte: string, peso: string): Promise<stri
   return cached;
 }
 
+// Onde o texto realmente ficou no canvas, em % da altura / px de fonte — depois do encolhimento
+// automático e da quebra de linha. A prévia do editor mostra estes valores nos sliders.
+export interface LayoutTexto {
+  headlineTopPercent: number;
+  headlineSizePx: number;
+  subheadlineTopPercent: number;
+  subheadlineSizePx: number;
+}
+
 export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
+  return (await composeFrameDetalhado(opts)).dataUrl;
+}
+
+export async function composeFrameDetalhado(opts: ComposeFrameOptions): Promise<{ dataUrl: string; layout: LayoutTexto }> {
   const { imageDataUrl, cta, marca, aspectRatio } = opts;
   // Convenção visual do playbook: headline e sub-headline sempre em caixa alta no banner final
   // (mesmo padrão já aplicado via CSS em BannerSimulador/ResultPauta) — força aqui pq canvas
@@ -440,9 +480,11 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
       // 4. Headline
       const hY = desenhar(hLines, ZONA_TOP_PX, hSize, 1.18, familiaFonte, pesoFonte, corTexto);
 
-      // 5. Sub-headline — por padrão 12px abaixo da ÚLTIMA linha do headline,
-      // ou em posição própria se subheadlineTopPercent for definido manualmente.
-      const sTop = ev.subheadlineTopPercent != null ? HEIGHT * (ev.subheadlineTopPercent / 100) : hY + 12;
+      // 5. Sub-headline — por padrão 12px abaixo da ÚLTIMA linha do headline. Uma posição manual
+      // nunca sobe acima disso: ela foi escolhida para um headline de outro tamanho/comprimento, e
+      // quando o headline quebrava em mais linhas o sub-headline era desenhado por cima dele.
+      const sTopMin = hY + 12;
+      const sTop = ev.subheadlineTopPercent != null ? Math.max(HEIGHT * (ev.subheadlineTopPercent / 100), sTopMin) : sTopMin;
       desenhar(sLines, sTop, sSize, 1.25, familiaFonteSub, '600', corSubheadline);
 
       // 6. Botão CTA
@@ -488,7 +530,15 @@ export async function composeFrame(opts: ComposeFrameOptions): Promise<string> {
 
       // WebP em vez de PNG: o frame composto vai pro Storage via /api/save-frame e em PNG
       // cada um ocupava ~1,2 MB — o bucket estourou a cota de 1 GB do plano Free do Supabase.
-      resolve(canvas.toDataURL('image/webp', 0.9));
+      resolve({
+        dataUrl: canvas.toDataURL('image/webp', 0.9),
+        layout: {
+          headlineTopPercent: (ZONA_TOP_PX / HEIGHT) * 100,
+          headlineSizePx: hSize,
+          subheadlineTopPercent: (sTop / HEIGHT) * 100,
+          subheadlineSizePx: sSize,
+        },
+      });
     };
     img.onerror = () => reject(new Error('Falha ao carregar imagem'));
     img.src = imageDataUrl;

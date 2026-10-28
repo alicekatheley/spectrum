@@ -35,7 +35,11 @@ function semDataUrls(frameUrls: Record<string, string> | undefined): Record<stri
 const PAUTA_COLUNAS =
   'id, marca, modo, tipo_geracao, copy, visual, operacional, previsao, riscos, status, data_criacao, input_original, aspect_ratio, frame_urls';
 
-// Maps a PautaGerada to a DB row (snake_case columns)
+// Maps a PautaGerada to a DB row (snake_case columns). Sem frame_urls de propósito: o upsert só
+// atualiza as colunas que manda, e qualquer cópia velha da pauta em memória (outra aba, a tela
+// aberta antes de um redesenho) regravava os frames antigos por cima dos novos — o GIF passava a
+// misturar frames de gerações diferentes, com o título alternando entre branco e preto. Os frames
+// só são gravados por salvarFrameUrls, que mescla com o que já está no banco.
 function toDb(p: PautaGerada) {
   return {
     id: p.id,
@@ -51,8 +55,29 @@ function toDb(p: PautaGerada) {
     data_criacao: p.dataCriacao,
     input_original: (p as any).inputOriginal ?? null,
     aspect_ratio: (p as any).aspectRatio ?? null,
-    frame_urls: semDataUrls((p as any).frameUrls),
   };
+}
+
+// Grava URLs públicas de frames de uma pauta, mesclando com as que já estão no banco (lê e
+// regrava). Fila por pauta: os frames de um redesenho chegam quase juntos, e duas mesclas
+// simultâneas leriam o mesmo estado e uma apagaria a outra.
+const filaFrameUrls = new Map<string, Promise<void>>();
+export function salvarFrameUrls(pautaId: string, novas: Record<string, string>): Promise<void> {
+  const limpas = semDataUrls(novas);
+  if (!supabase || !limpas) return Promise.resolve();
+  const anterior = filaFrameUrls.get(pautaId) ?? Promise.resolve();
+  const proxima = anterior.then(async () => {
+    const { data, error: erroLeitura } = await supabase!
+      .from('pautas_geradas').select('frame_urls').eq('id', pautaId).maybeSingle();
+    if (erroLeitura) { console.warn('[Supabase] salvarFrameUrls (leitura) falhou:', erroLeitura.message); return; }
+    if (!data) return; // pauta ainda não existe no banco — o upsert dela vem antes
+    const atuais = ((data as { frame_urls: Record<string, string> | null }).frame_urls) ?? {};
+    const { error } = await supabase!
+      .from('pautas_geradas').update({ frame_urls: { ...atuais, ...limpas } }).eq('id', pautaId);
+    if (error) console.warn('[Supabase] salvarFrameUrls falhou:', error.message);
+  });
+  filaFrameUrls.set(pautaId, proxima.catch(() => {}));
+  return proxima;
 }
 
 export async function getPautas(): Promise<PautaGerada[] | null> {

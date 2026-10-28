@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Brand, ContaInsider, PautaGerada, PautaEnvioInsider, InputModoB, TesteAbProposta } from "./types";
 import { ConteudoGifBusca } from "./lib/conteudos-service";
-import { getPautas, getPautaIds, getPautasPorIds, upsertPautas, clearPautas, getPautaEnviosInsider } from "./lib/pautas-service";
+import { getPautas, getPautaIds, getPautasPorIds, upsertPautas, clearPautas, getPautaEnviosInsider, salvarFrameUrls } from "./lib/pautas-service";
 import { supabase, isEmailAllowed } from "./lib/supabase";
 import LoginPage from "./components/LoginPage";
 import Header from "./components/Header";
@@ -117,8 +117,12 @@ function AppInner() {
     } catch (err) {
       console.warn('[handleFrameGenerated] Falha ao salvar base64:', err);
     }
-    // Também salva URL pública se disponível (para reconstituição futura)
+    // Também salva URL pública se disponível — no banco (fonte de verdade, vale pra qualquer
+    // navegador) e no localStorage (fallback offline).
     if (publicUrl) {
+      salvarFrameUrls(pautaId, { [frameName]: publicUrl }).catch(err =>
+        console.warn('[handleFrameGenerated] Falha ao gravar frame_urls:', err)
+      );
       try {
         const stored = JSON.parse(localStorage.getItem('crm_frame_urls') || '{}');
         stored[pautaId] = stored[pautaId] ?? {};
@@ -185,14 +189,11 @@ function AppInner() {
     if (withFrames.length === 0) return;
     setAllFrameImages(prev => {
       const next = { ...prev };
-      // O banco ganha de URL antiga guardada no localStorage (senão um redesenho feito em outro
-      // navegador nunca aparecia aqui); só um data URL local — frame recém-gerado, ainda não
-      // subido — continua tendo preferência.
+      // O banco é a fonte de verdade de cada frame que ele tem (todo upload grava em frame_urls via
+      // handleFrameGenerated); o localStorage só completa frames que o banco não tem. Misturar as
+      // duas fontes fazia o GIF juntar frames de gerações diferentes — o título alternava de cor.
       for (const p of withFrames) {
-        const local: Record<string, string> = next[p.id] ?? {};
-        const doBanco = (p as any).frameUrls as Record<string, string>;
-        const recentesLocais = Object.fromEntries(Object.entries(local).filter(([, v]) => v.startsWith('data:')));
-        next[p.id] = { ...local, ...doBanco, ...recentesLocais };
+        next[p.id] = { ...(next[p.id] ?? {}), ...((p as any).frameUrls) };
       }
       return next;
     });
@@ -1022,13 +1023,14 @@ function AppInner() {
     pendentes.forEach((p) => composedAgentPautasRef.current.add(p.id));
 
     (async () => {
-      const { composeFrame } = await import('./utils/composeFrame');
+      const { composeFrame, corAutomaticaDosFrames } = await import('./utils/composeFrame');
       for (const pauta of pendentes) {
         try {
           const frameUrls = (pauta as any).frameUrls as Record<string, string>;
-          const composed: Record<string, string> = {};
-          let algumFrameSalvo = false;
           const entradas = Object.entries(frameUrls).sort(([a], [b]) => a.localeCompare(b));
+          // Uma cor só pro GIF inteiro — decidida frame a frame, o título alternava entre preto e
+          // branco quando o topo de um frame era claro e o de outro escuro.
+          const cor = await corAutomaticaDosFrames(entradas.map(([, url]) => url), pauta.aspectRatio || '1:1');
           for (const [frameName, rawUrl] of entradas) {
             const composedDataUrl = await composeFrame({
               imageDataUrl: rawUrl,
@@ -1037,6 +1039,7 @@ function AppInner() {
               cta: pauta.copy.ctaBotao,
               marca: pauta.marca,
               aspectRatio: pauta.aspectRatio || '1:1',
+              estiloVisual: cor ? { corTexto: cor.texto, corSubheadline: cor.subheadline } : undefined,
             });
             let finalUrl: string | undefined;
             try {
@@ -1052,16 +1055,10 @@ function AppInner() {
             } catch (err) {
               console.warn('[agente-gif] Falha ao salvar frame composto:', err);
             }
-            // Se o upload falhou, mantém a URL crua no banco (o data URL fica só na tela). Assim a
-            // pauta segue "não composta" e é recomposta na próxima sessão, em vez de gravar MBs de base64.
-            composed[frameName] = finalUrl ?? rawUrl;
-            if (finalUrl) algumFrameSalvo = true;
+            // handleFrameGenerated grava a URL composta em frame_urls. Se o upload falhou, o banco
+            // fica com a URL crua (o data URL só na tela) e a pauta é recomposta na próxima sessão.
             handleFrameGenerated(pauta.id, frameName, composedDataUrl, finalUrl);
           }
-          if (!algumFrameSalvo) continue;
-          upsertPautas([{ ...pauta, frameUrls: composed } as PautaGerada]).catch((err) =>
-            console.warn('[agente-gif] Falha ao persistir frames compostos:', err)
-          );
         } catch (err) {
           console.warn('[agente-gif] Falha ao compor texto sobre os frames desta pauta:', err);
         }

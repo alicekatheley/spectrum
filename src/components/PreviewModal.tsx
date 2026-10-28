@@ -3,7 +3,7 @@ import { PautaGerada, PautaCopy } from "../types";
 import { X, Download, FileText, Check, Sparkles, Edit3, Clipboard, HelpCircle, AlertTriangle, RefreshCw, PenLine } from "lucide-react";
 import BannerSimulador from "./BannerSimulador";
 import { downloadFile, generatePautaBriefingText } from "../utils";
-import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, loadFont, corPeloFundo } from "../utils/composeFrame";
+import { resolveCanvasSize, resolveHeadlineSizePx, resolveSubheadlineSizePx, composeFrameDetalhado, corAutomaticaDosFrames, type LayoutTexto } from "../utils/composeFrame";
 import { resolverFramesCrus } from "../utils/framesCrus";
 import { TituloFontColorFields, SubtituloFontColorFields, BotaoFontColorFields } from "./EstiloTextoFields";
 import { TextoDestaque, BarraDestaque } from "./TextoDestaque";
@@ -72,33 +72,20 @@ export default function PreviewModal({
   const [activePreviewIndex, setActivePreviewIndex] = useState(0);
   const autoGenStarted = useRef(false);
 
-  // Prévia ao vivo (aba de edição): imagem crua (sem texto) + camada de overlay posicionada
-  // via CSS, escalada pra bater com o tamanho real do canvas usado no composeFrame.
+  // Prévia ao vivo (aba de edição): o frame composto pelo composeFrame sobre a imagem crua — ver
+  // previewComposta mais abaixo. Se a imagem crua não carregar, mostra o frame já salvo.
   const [rawPreviewFailed, setRawPreviewFailed] = useState(false);
   const previewContainerRef = useRef<HTMLDivElement>(null);
-  const [previewWidthPx, setPreviewWidthPx] = useState(400);
-
-  useEffect(() => {
-    const el = previewContainerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (w) setPreviewWidthPx(w);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [activeTab]);
 
   // Usa o aspect ratio gravado nesta pauta (o que foi usado pra gerar as imagens dela),
   // não o seletor global — que pode ter mudado desde a geração e faria o recompose/GIF
   // usar dimensões diferentes das imagens já geradas, "achatando" o resultado.
   const pautaAspectRatio = (pauta as any).aspectRatio || aspectRatio;
   const [canvasWidthPx, canvasHeightPx] = resolveCanvasSize(pautaAspectRatio);
-  const previewScale = previewWidthPx / canvasWidthPx;
   const previewCssAspectRatio = pautaAspectRatio.includes(':') ? pautaAspectRatio.replace(':', '/') : `${canvasWidthPx} / ${canvasHeightPx}`;
 
-  // Imagem crua (sem texto) de cada frame — a prévia ao vivo desenha o texto em CSS por cima dela,
-  // e o "Redesenhar frames" compõe sobre ela. O mapeamento frame_N → arquivo depende do que existe
+  // Imagem crua (sem texto) de cada frame — a prévia ao vivo e o "Redesenhar frames" compõem o
+  // texto sobre ela. O mapeamento frame_N → arquivo depende do que existe
   // no Storage (ver utils/framesCrus.ts); enquanto não resolve, a prévia mostra o frame composto.
   const [framesCrus, setFramesCrus] = useState<Record<string, string> | null>(null);
   const totalFramesVisual = pauta.visual?.frames?.length ?? 3;
@@ -111,27 +98,16 @@ export default function PreviewModal({
   }, [pauta.id, pauta.marca, pauta.modo, totalFramesVisual]);
   const rawPreviewSrc = framesCrus?.[`frame_${activePreviewIndex}`];
 
-  // Cor automática do texto na prévia: a mesma regra do composeFrame (texto escuro em fundo claro),
-  // medida na imagem crua — senão a prévia mostraria branco e o frame final sairia escuro.
-  const [corAutoPrevia, setCorAutoPrevia] = useState<{ texto: string; subheadline: string } | null>(null);
+  // Cor automática (título/subtítulo sem cor escolhida) decidida uma vez para a pauta toda, a
+  // partir de todas as imagens cruas — por frame, o título alternava entre preto e branco no GIF.
+  const [corAutoPauta, setCorAutoPauta] = useState<{ texto: string; subheadline: string } | null>(null);
   useEffect(() => {
-    setCorAutoPrevia(null);
-    if (!rawPreviewSrc) return;
+    if (!framesCrus) return;
     let ativo = true;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvasWidthPx;
-      canvas.height = canvasHeightPx;
-      const ctx = canvas.getContext('2d');
-      if (!ctx || !ativo) return;
-      ctx.drawImage(img, 0, 0, canvasWidthPx, canvasHeightPx);
-      setCorAutoPrevia(corPeloFundo(ctx, canvasWidthPx, canvasHeightPx));
-    };
-    img.src = rawPreviewSrc;
+    corAutomaticaDosFrames(Object.values(framesCrus), pautaAspectRatio).then((cor) => { if (ativo) setCorAutoPauta(cor); });
     return () => { ativo = false; };
-  }, [rawPreviewSrc, canvasWidthPx, canvasHeightPx]);
+  }, [framesCrus, pautaAspectRatio]);
+
 
   useEffect(() => {
     setRawPreviewFailed(false);
@@ -171,17 +147,20 @@ export default function PreviewModal({
     }
   };
 
-  // A prévia anima só pelos frames que vão pro GIF, pra mostrar o resultado real.
+  // A prévia anima só pelos frames que vão pro GIF, pra mostrar o resultado real. Na aba de edição
+  // fica parada no frame escolhido (pelos pontinhos): a cada troca a prévia composta é refeita, e
+  // com a animação de 700 ms ela nunca terminava — a tela alternava com o frame salvo antigo, e o
+  // texto parecia sobreposto e trocando de cor enquanto se editava.
   useEffect(() => {
     const indices = framesNoGifKey ? framesNoGifKey.split(',').map(Number) : [];
     if (indices.length === 0) return;
     setActivePreviewIndex(prev => (indices.includes(prev) ? prev : indices[0]));
-    if (indices.length < 2) return;
+    if (indices.length < 2 || activeTab === 'edit') return;
     const iv = setInterval(() => {
       setActivePreviewIndex(prev => indices[(indices.indexOf(prev) + 1) % indices.length]);
     }, 700);
     return () => clearInterval(iv);
-  }, [framesNoGifKey]);
+  }, [framesNoGifKey, activeTab]);
 
   const isApice = pauta.marca === 'Apice';
 
@@ -446,43 +425,96 @@ export default function PreviewModal({
     setFonteBotao('');
   };
 
-  // Tamanhos/posição efetivos da prévia CSS (aba "Editar Copy") — usam os MESMOS defaults do
-  // composeFrame (canvas), em vez de valores fixos, senão a prévia mostra tamanho/posição
-  // diferentes do resultado real assim que o headline muda de tamanho.
-  const previewHeadlineSize = resolveHeadlineSizePx(headlineSizePx ?? undefined, inputOriginalPos.tamanhoHeadline);
-  const previewSubheadlineSize = resolveSubheadlineSizePx(previewHeadlineSize, subheadlineSizePx ?? undefined);
-  const previewHeadlineTopPercent = headlineTopPercent ?? 3.5;
-  // Réplica do cálculo padrão do composeFrame pra 1 linha de headline: sY = hY + 12 + sSize,
-  // onde hY = ZONA_TOP_PX + hSize. Aproximação (não simula quebra de linha), mas já acompanha
-  // o tamanho real do headline e a altura real do canvas — antes era um percentual fixo (14%)
-  // que só coincidia por acaso com proporções específicas.
-  const previewSubheadlineTopPercent = subheadlineTopPercent ?? (
-    ((previewHeadlineTopPercent / 100) * canvasHeightPx + previewHeadlineSize + 12) / canvasHeightPx * 100
-  );
+  // Estilo extraído por IA do texto livre de estilo/direcionamento da pauta — buscado uma vez e
+  // reaproveitado pela prévia e pelo "Redesenhar frames", pra os dois desenharem igual.
+  const estiloParseadoRef = useRef<{ pautaId: string; estilo: Promise<any> } | null>(null);
+  const obterEstiloParseado = (): Promise<any> => {
+    if (estiloParseadoRef.current?.pautaId === pauta.id) return estiloParseadoRef.current.estilo;
+    const io = (pauta as any).inputOriginal;
+    const textoParaParse = io?.estiloVisualTexto || io?.direcionamento;
+    const estilo = textoParaParse
+      ? fetch('/api/parse-estilo-visual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estiloVisualTexto: textoParaParse, marca: pauta.marca }),
+        }).then((r) => r.json()).catch(() => undefined)
+      : Promise.resolve(undefined);
+    estiloParseadoRef.current = { pautaId: pauta.id, estilo };
+    return estilo;
+  };
 
-  // Famílias de fonte usadas na prévia CSS — resolvidas pelo mesmo loadFont() do composeFrame,
-  // pra prévia bater com o resultado final em vez de cair no font-sans genérico do Tailwind.
-  const [previewHeadlineFont, setPreviewHeadlineFont] = useState('Georgia, serif');
-  const [previewSubheadlineFont, setPreviewSubheadlineFont] = useState('Georgia, serif');
-  const [previewButtonFont, setPreviewButtonFont] = useState('Georgia, serif');
+  // Mesma lógica de montagem de estiloVisual usada na geração original, mas com o estado editável
+  // dos pickers de fonte/cor e dos sliders desta aba.
+  const montarEstiloVisual = (estiloParseado: any) => {
+    const io = (pauta as any).inputOriginal;
+    let estiloVisual: any = {
+      ...estiloParseado,
+      familiaFonte: fonteEscolhida || estiloParseado?.familiaFonte,
+      corTexto: corTextoPrincipal || estiloParseado?.corTexto || corAutoPauta?.texto,
+      estiloBotao: (io?.estiloBotaoEscolhido || estiloParseado?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
+      corBotao: corBotaoEscolhida || estiloParseado?.corBotao || (pauta.marca === 'Apice' ? '#688D65' : '#BF0F26'),
+    };
+    return {
+      ...estiloVisual,
+      familiaFonteSubheadline: fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
+      corSubheadline: corSubtitulo || estiloVisual?.corSubheadline || corAutoPauta?.subheadline,
+      familiaFonteBotao: fonteBotao || estiloVisual?.familiaFonteBotao,
+      corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
+      corDestaque: corDestaque || undefined,
+      headlineTopPercent: headlineTopPercent ?? undefined,
+      headlineSizePx: headlineSizePx ?? undefined,
+      subheadlineTopPercent: subheadlineTopPercent ?? undefined,
+      subheadlineSizePx: subheadlineSizePx ?? undefined,
+      buttonTopPercent: buttonTopPercent ?? undefined,
+      buttonWidthPercent: buttonWidthPercent ?? undefined,
+      buttonHeightPercent: buttonHeightPercent ?? undefined,
+      buttonFontSizePx: buttonFontSizePx ?? undefined,
+    };
+  };
 
+  // Prévia ao vivo da aba de edição: o MESMO composeFrame do resultado final, sobre a imagem crua.
+  // Antes era uma camada de texto em CSS com contas próprias — supunha headline de 1 linha e não
+  // encolhia o texto como o canvas, então o sub-headline aparecia por cima do headline (e o slider
+  // de posição gravava esse valor errado, levando a sobreposição pro frame final).
+  const [previewComposta, setPreviewComposta] = useState<{ src: string; layout: LayoutTexto } | null>(null);
+  const previewSeqRef = useRef(0);
   useEffect(() => {
-    let cancelado = false;
-    const headlineRaw = fonteEscolhida || (isApice ? 'Playfair Display' : 'Oswald');
-    const subRaw = fonteSubtitulo || (isApice ? 'Montserrat' : 'Inter');
-    const btnRaw = fonteBotao || subRaw;
-    Promise.all([
-      loadFont(headlineRaw, '900'),
-      loadFont(subRaw, '600'),
-      loadFont(btnRaw, '800'),
-    ]).then(([h, s, b]) => {
-      if (cancelado) return;
-      setPreviewHeadlineFont(h);
-      setPreviewSubheadlineFont(s);
-      setPreviewButtonFont(b);
-    });
-    return () => { cancelado = true; };
-  }, [fonteEscolhida, fonteSubtitulo, fonteBotao, isApice]);
+    if (activeTab !== 'edit' || !rawPreviewSrc) return;
+    const seq = ++previewSeqRef.current;
+    const timer = setTimeout(async () => {
+      try {
+        const estiloVisual = montarEstiloVisual(await obterEstiloParseado());
+        const { dataUrl, layout } = await composeFrameDetalhado({
+          imageDataUrl: rawPreviewSrc,
+          headline: editedCopy.headlineBanner,
+          subheadline: editedCopy.subHeadlineBanner,
+          cta: editedCopy.ctaBotao,
+          marca: pauta.marca as 'Apice' | 'Barbours',
+          aspectRatio: pautaAspectRatio,
+          estiloVisual,
+        });
+        if (seq === previewSeqRef.current) setPreviewComposta({ src: dataUrl, layout });
+      } catch {
+        if (seq === previewSeqRef.current) setRawPreviewFailed(true);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeTab, rawPreviewSrc, pautaAspectRatio, corAutoPauta, editedCopy.headlineBanner, editedCopy.subHeadlineBanner, editedCopy.ctaBotao,
+    fonteEscolhida, corTextoPrincipal, fonteSubtitulo, corSubtitulo, corBotaoEscolhida, corTextoBotao, fonteBotao, corDestaque,
+    headlineTopPercent, headlineSizePx, subheadlineTopPercent, subheadlineSizePx,
+    buttonTopPercent, buttonWidthPercent, buttonHeightPercent, buttonFontSizePx,
+  ]);
+  // Ao trocar de frame, a prévia anterior fica na tela até a nova ficar pronta — zerar aqui fazia
+  // piscar o frame salvo (que pode ser de uma geração antiga, com outra cor de texto).
+
+  // Valores mostrados nos sliders: o escolhido, ou onde o composeFrame de fato desenhou.
+  const layoutPrevia = previewComposta?.layout;
+  const previewHeadlineTopPercent = headlineTopPercent ?? layoutPrevia?.headlineTopPercent ?? 3.5;
+  const previewHeadlineSize = headlineSizePx ?? layoutPrevia?.headlineSizePx ?? resolveHeadlineSizePx(undefined, inputOriginalPos.tamanhoHeadline);
+  const previewSubheadlineTopPercent = subheadlineTopPercent ?? layoutPrevia?.subheadlineTopPercent ?? 14;
+  const previewSubheadlineSize = subheadlineSizePx ?? layoutPrevia?.subheadlineSizePx ?? resolveSubheadlineSizePx(previewHeadlineSize);
 
   // Disparar atualização para o pai para que o BannerSimulador atualize ao digito
   const handleFieldChange = (key: keyof PautaCopy, value: string) => {
@@ -517,55 +549,7 @@ export default function PreviewModal({
       const SUPABASE_URL = ((import.meta as any).env?.VITE_SUPABASE_URL as string) || '';
       const { composeFrame } = await import('../utils/composeFrame');
       const inputOriginal = (pauta as any).inputOriginal;
-
-      // Mesma lógica de montagem de estiloVisual usada na geração original, mas usando o estado
-      // editável dos pickers de fonte/cor (inicializado a partir de inputOriginal, porém agora
-      // ajustável ao vivo nesta aba) em vez de ler inputOriginal direto.
-      const estiloTexto = inputOriginal?.estiloVisualTexto;
-      const direcionamento = inputOriginal?.direcionamento;
-      const textoParaParse = estiloTexto || direcionamento;
-
-      let estiloVisual: any = undefined;
-      if (textoParaParse) {
-        try {
-          const estiloRes = await fetch('/api/parse-estilo-visual', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ estiloVisualTexto: textoParaParse, marca: pauta.marca }),
-          });
-          estiloVisual = await estiloRes.json();
-        } catch { /* ignore, usa defaults */ }
-      }
-      if (fonteEscolhida || corBotaoEscolhida || fonteBotao || corTextoBotao) {
-        estiloVisual = {
-          ...estiloVisual,
-          familiaFonte: fonteEscolhida || estiloVisual?.familiaFonte,
-          corTexto: corTextoPrincipal || estiloVisual?.corTexto,
-          estiloBotao: (inputOriginal?.estiloBotaoEscolhido || estiloVisual?.estiloBotao || 'pill') as 'pill' | 'retangular' | 'outline',
-          corBotao: corBotaoEscolhida || estiloVisual?.corBotao,
-          corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
-          familiaFonteBotao: fonteBotao || estiloVisual?.familiaFonteBotao,
-        };
-      }
-      if (estiloVisual && !estiloVisual.corBotao) {
-        estiloVisual.corBotao = pauta.marca === 'Apice' ? '#688D65' : '#BF0F26';
-      }
-      const estiloVisualFinal = {
-        ...estiloVisual,
-        familiaFonteSubheadline: fonteSubtitulo || estiloVisual?.familiaFonteSubheadline,
-        corSubheadline: corSubtitulo || estiloVisual?.corSubheadline,
-        familiaFonteBotao: fonteBotao || estiloVisual?.familiaFonteBotao,
-        corTextoBotao: corTextoBotao || estiloVisual?.corTextoBotao,
-        corDestaque: corDestaque || undefined,
-        headlineTopPercent: headlineTopPercent ?? undefined,
-        headlineSizePx: headlineSizePx ?? undefined,
-        subheadlineTopPercent: subheadlineTopPercent ?? undefined,
-        subheadlineSizePx: subheadlineSizePx ?? undefined,
-        buttonTopPercent: buttonTopPercent ?? undefined,
-        buttonWidthPercent: buttonWidthPercent ?? undefined,
-        buttonHeightPercent: buttonHeightPercent ?? undefined,
-        buttonFontSizePx: buttonFontSizePx ?? undefined,
-      };
+      const estiloVisualFinal = montarEstiloVisual(await obterEstiloParseado());
 
       // Qual arquivo cru corresponde a cada frame depende do que existe no Storage — ver
       // utils/framesCrus.ts (no Agente, frame_0 nem sempre é o "inicial").
@@ -821,8 +805,8 @@ export default function PreviewModal({
                 >
                   <img
                     src={
-                      activeTab === 'edit' && rawPreviewSrc && !rawPreviewFailed
-                        ? rawPreviewSrc
+                      activeTab === 'edit' && previewComposta && !rawPreviewFailed
+                        ? previewComposta.src
                         : frameImages[`frame_${activePreviewIndex}`] ?? frameImages[Object.keys(frameImages).sort()[0]]
                     }
                     onError={() => setRawPreviewFailed(true)}
@@ -830,70 +814,6 @@ export default function PreviewModal({
                     className="w-full h-full object-cover rounded-2xl"
                   />
 
-                  {/* Prévia ao vivo de posição/tamanho — só na aba de edição, some se a imagem crua não carregar */}
-                  {activeTab === 'edit' && rawPreviewSrc && !rawPreviewFailed && (
-                    <div className="absolute inset-0 pointer-events-none select-none">
-                      <div
-                        className="absolute inset-x-0 flex justify-center px-[6%] text-center"
-                        style={{ top: `${previewHeadlineTopPercent}%` }}
-                      >
-                        <span
-                          style={{
-                            fontSize: `${previewHeadlineSize * previewScale}px`,
-                            fontFamily: previewHeadlineFont,
-                            fontWeight: 900,
-                            color: corTextoPrincipal || corAutoPrevia?.texto || '#FFFFFF',
-                            lineHeight: 1.15,
-                          }}
-                        >
-                          <TextoDestaque texto={(editedCopy.headlineBanner || 'HEADLINE').toUpperCase()} corDestaque={corDestaque} />
-                        </span>
-                      </div>
-                      <div
-                        className="absolute inset-x-0 flex justify-center px-[8%] text-center"
-                        style={{ top: `${previewSubheadlineTopPercent}%` }}
-                      >
-                        <span
-                          style={{
-                            fontSize: `${previewSubheadlineSize * previewScale}px`,
-                            fontFamily: previewSubheadlineFont,
-                            fontWeight: 600,
-                            color: corSubtitulo || corAutoPrevia?.subheadline || 'rgba(255,255,255,0.90)',
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          <TextoDestaque texto={(editedCopy.subHeadlineBanner || 'sub-headline').toUpperCase()} corDestaque={corDestaque} />
-                        </span>
-                      </div>
-                      <div
-                        className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center"
-                        style={{
-                          top: `${buttonTopPercent ?? 87.4}%`,
-                          width: `${buttonWidthPercent ?? 52}%`,
-                          height: `${buttonHeightPercent ?? 7.4}%`,
-                          borderRadius: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'retangular' ? '6px' : '999px',
-                          backgroundColor: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'outline'
-                            ? 'transparent'
-                            : (corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')),
-                          border: ((pauta as any).inputOriginal?.estiloBotaoEscolhido || 'pill') === 'outline'
-                            ? `2px solid ${corBotaoEscolhida || (isApice ? '#688D65' : '#BF0F26')}`
-                            : 'none',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: `${(buttonFontSizePx ?? 34) * previewScale}px`,
-                            fontFamily: previewButtonFont,
-                            fontWeight: 800,
-                            color: corTextoBotao || '#FFFFFF',
-                            textTransform: 'uppercase',
-                          }}
-                        >
-                          {editedCopy.ctaBotao || 'CTA'}
-                        </span>
-                      </div>
-                    </div>
-                  )}
 
                   {generatingFrame && (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-2xl">
